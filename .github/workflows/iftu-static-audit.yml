@@ -1,0 +1,122 @@
+name: IFTU static audit
+
+on:
+  push:
+    branches:
+      - research-iftu-static-audit
+
+permissions:
+  contents: read
+
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+
+jobs:
+  audit-365:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download and verify retail 3.65 PUP
+        shell: bash
+        run: |
+          set -euxo pipefail
+          url='https://web.archive.org/web/20180630222648id_/http://dus01.psp2.update.playstation.net/update/psp2/image/2017_0317/rel_0a0f2a9ae58968ac5d1d2127049c3cba/PSP2UPDAT.PUP'
+          curl -fL --retry 5 --retry-delay 2 "$url" -o PSP2UPDAT-365.PUP
+          echo '0a0f2a9ae58968ac5d1d2127049c3cba  PSP2UPDAT-365.PUP' | md5sum -c -
+          sha256sum PSP2UPDAT-365.PUP
+
+      - name: Install host prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb unzip p7zip-full binutils file
+
+      - name: Download current Vita3K Linux build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 5 --retry-delay 2 \
+            https://github.com/Vita3K/Vita3K/releases/download/continuous/ubuntu-latest.zip \
+            -o vita3k.zip
+          unzip -q vita3k.zip -d vita3k-bin
+          find vita3k-bin -maxdepth 3 -type f -printf '%p\n'
+          exe="$(find vita3k-bin -type f -name 'Vita3K' -o -name 'vita3k' | head -n1)"
+          test -n "$exe"
+          chmod +x "$exe"
+          printf '%s\n' "$exe" > vita3k-exe.txt
+
+      - name: Install 3.65 into isolated Vita3K filesystem
+        shell: bash
+        run: |
+          set -euxo pipefail
+          exe="$(cat vita3k-exe.txt)"
+          mkdir -p isolated-home isolated-config
+          export HOME="$PWD/isolated-home"
+          export QT_QPA_PLATFORM=offscreen
+          set +e
+          xvfb-run -a "$exe" --firmware "$PWD/PSP2UPDAT-365.PUP" --config-location "$PWD/isolated-config" >vita3k-install.log 2>&1
+          rc=$?
+          set -e
+          cat vita3k-install.log
+          echo "vita3k rc=$rc"
+          find "$PWD" "$HOME" -type f \( -iname '*lowio*' -o -iname '*sceLowio*' \) -print | tee lowio-paths.txt
+          test -s lowio-paths.txt
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '2.7'
+
+      - name: Decrypt only SceLowio SELF to ELF
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m pip install 'pycryptodome<3.10' enum34
+          git clone --depth 1 https://github.com/RealYoti/sceutils.git sceutils-audit
+          cp sceutils-audit/keys_external.py sceutils-audit/keys.py
+          raw="$(head -n1 lowio-paths.txt)"
+          echo "raw SceLowio: $raw"
+          file "$raw"
+          sha256sum "$raw"
+          python sceutils-audit/self2elf.py -i "$raw" -o SceLowio-365.elf
+          file SceLowio-365.elf
+          sha256sum SceLowio-365.elf
+          readelf -h -l SceLowio-365.elf
+
+      - uses: actions/checkout@v7
+        with:
+          repository: vitasdk/vdpm
+          path: vdpm
+
+      - name: Bootstrap VitaSDK disassembly tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          bash vdpm/bootstrap-vitasdk.sh
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+          find "$VITASDK/bin" -maxdepth 1 -type f -printf '%f\n' | sort | grep -E 'vita|arm-vita' | head -n 120
+
+      - name: Emit textual SceLowio audit evidence
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo '=== ELF SECTIONS ==='
+          arm-vita-eabi-readelf -SW SceLowio-365.elf
+          echo '=== ELF SYMBOLS ==='
+          arm-vita-eabi-readelf -sW SceLowio-365.elf | head -n 200
+          echo '=== CANDIDATE TOOL HELP ==='
+          for t in vita-elf-info vita-nid-check vita-elf-create; do
+            if command -v "$t" >/dev/null 2>&1; then
+              echo "--- $t ---"
+              "$t" --help 2>&1 | head -n 120 || true
+            fi
+          done
+          echo '=== DISASSEMBLY HEAD ==='
+          arm-vita-eabi-objdump -drwC SceLowio-365.elf | head -n 400
+
+      - name: Remove proprietary firmware bytes before job completion
+        if: always()
+        shell: bash
+        run: |
+          rm -rf PSP2UPDAT-365.PUP SceLowio-365.elf isolated-home isolated-config vita3k-bin vita3k.zip sceutils-audit
