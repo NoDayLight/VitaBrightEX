@@ -120,6 +120,13 @@ int main(void) {
     failures += ok(parse_text("filter_cct=7000\nfilter_cct=7200\n", &cfg) == 0 && cfg.filter_cct == 7200,
                    "duplicate key last valid occurrence wins");
 
+    failures += ok(parse_text("display_color_space_mode=1\nlcd_color_space_mode=0\n", &cfg) == 0 &&
+                   cfg.lcd_color_space_mode == 0,
+                   "color-space alias pair uses last valid occurrence: legacy last");
+    failures += ok(parse_text("lcd_color_space_mode=0\ndisplay_color_space_mode=1\n", &cfg) == 0 &&
+                   cfg.lcd_color_space_mode == 1,
+                   "color-space alias pair uses last valid occurrence: canonical last");
+
     if (failures) return 1;
     puts("production config parser regressions: OK");
     return 0;
