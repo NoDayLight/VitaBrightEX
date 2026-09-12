@@ -35,11 +35,14 @@ add_executable(vitabright
     screen_filter.c
     screen_filter.h
     taihen_extra.h
+    lut_parser_core.h
+    oled/lut_parser.c
     oled/parser.c
     oled/parser.h
     oled/hooks.c
     oled/hooks.h
     oled/lut.h
+    lcd/lut_parser.c
     lcd/hooks.c
     lcd/hooks.h
     lcd/lcd_lut.h
