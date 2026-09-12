@@ -1,15 +1,6 @@
 #pragma once
 #include <stdint.h>
 
-/*
- * v1.4 filter state.
- *
- * Hardware invert is currently the only verified generic screen-filter
- * capability. LCD CCT/contrast requires a verified persistent scanout CSC
- * path; gamma/panel linearisation requires a verified nonlinear transfer
- * stage. Those parameters are retained in the ABI for editor compatibility
- * and capability reporting, but are not silently approximated.
- */
 typedef struct {
     uint16_t cct;
     float gamma;
@@ -35,7 +26,7 @@ extern ScreenFilterParams g_screen_filter;
 void screen_filter_load_config(void);
 int screen_filter_apply(int is_oled);
 void screen_filter_set_cct(uint16_t cct, int is_oled);
-void screen_filter_reset(int is_oled);
+int screen_filter_reset(int is_oled);
 
 int vitabrightFilterGetParams(ScreenFilterParams *out);
 int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled);
