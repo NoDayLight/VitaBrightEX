@@ -2,6 +2,10 @@
 #include "log.h"
 #include <psp2kern/io/fcntl.h>
 
+#define CFG_READ_EOF      (-1)
+#define CFG_READ_ERROR    (-2)
+#define CFG_READ_TOO_LONG (-3)
+
 static const VitaBrightConfig k_default_config = {
     .oled_panel_lut_override  = 0,
     .panel_lut_path           = "",
@@ -82,20 +86,52 @@ static float cfg_atof(const char *s) {
     return neg ? -val : val;
 }
 
+/* Reads exactly one physical line. Full-line comments are streamed/discarded,
+ * so their length is unbounded. A non-comment directive that does not fit the
+ * bounded config representation is rejected as one line; its tail is never
+ * reinterpreted as a second directive. Leading horizontal whitespace is not
+ * stored because callers already treat it as insignificant. */
 static int cfg_readline(SceUID fd, char *buf, int len) {
     int total = 0;
-    char c;
-    while (total < len - 1) {
+    int at_line_start = 1;
+    int comment = 0;
+    int too_long = 0;
+    int saw_physical_byte = 0;
+
+    while (1) {
+        char c = 0;
         int r = ksceIoRead(fd, &c, 1);
-        if (r <= 0) {
-            buf[total] = '\0';
-            return total == 0 ? -1 : total;
+        if (r < 0) return CFG_READ_ERROR;
+        if (r == 0) {
+            if (!saw_physical_byte && total == 0 && !comment && !too_long)
+                return CFG_READ_EOF;
+            break;
         }
+
+        saw_physical_byte = 1;
         if (c == '\r') continue;
         if (c == '\n') break;
+        if (comment) continue;
+
+        if (at_line_start) {
+            if (c == ' ' || c == '\t') continue;
+            at_line_start = 0;
+            if (c == '#' || c == ';') {
+                comment = 1;
+                continue;
+            }
+        }
+
+        if (too_long) continue;
+        if (total >= len - 1) {
+            too_long = 1;
+            continue;
+        }
         buf[total++] = c;
     }
+
     buf[total] = '\0';
+    if (too_long) return CFG_READ_TOO_LONG;
     return total;
 }
 
@@ -174,14 +210,19 @@ int config_load(void) {
         if (fd >= 0) LOG("[CFG] Loaded from %s\n", CFG_FILE2);
     }
 
+    int parse_error = 0;
     if (fd >= 0) {
         char line[CFG_MAX_LINE];
         while (1) {
             int n = cfg_readline(fd, line, sizeof(line));
-            if (n < 0) break;
+            if (n == CFG_READ_EOF) break;
+            if (n < 0) {
+                parse_error = n;
+                break;
+            }
 
             const char *trimmed = cfg_ltrim(line);
-            if (!trimmed[0] || trimmed[0] == '#' || trimmed[0] == ';') continue;
+            if (!trimmed[0]) continue;
 
             const char *val = cfg_split(trimmed);
             if (!val) continue;
@@ -198,9 +239,15 @@ int config_load(void) {
             key[k] = '\0';
             cfg_apply(&candidate, key, cfg_ltrim(val));
         }
-        ksceIoClose(fd);
+        int close_ret = ksceIoClose(fd);
+        if (parse_error == 0 && close_ret < 0) parse_error = close_ret;
     } else {
         LOG("[CFG] No config file found; using defaults\n");
+    }
+
+    if (parse_error < 0) {
+        LOG("[CFG] Rejected authoritative config: 0x%08X\n", parse_error);
+        return parse_error;
     }
 
     cfg_validate(&candidate);
