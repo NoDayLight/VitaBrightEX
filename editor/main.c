@@ -15,6 +15,8 @@
 #define COLOR_OK    RGBA8(160, 255, 180, 255)
 
 int vitabrightReload(void);
+int vitabrightColorSpaceGetMode(void);
+int vitabrightColorSpaceSetMode(int mode);
 int vitabrightOledGetLut(unsigned char out[LUT_SIZE]);
 int vitabrightOledSetLut(unsigned char in[LUT_SIZE]);
 int vitabrightLcdGetBrightnessValues(unsigned char out[LCD_LUT_LEVELS]);
@@ -27,6 +29,8 @@ static unsigned char g_lcd_lut[LCD_LUT_LEVELS];
 static int g_status_ok = 0;
 static int g_filter_ok = 0;
 static int g_lut_ok = 0;
+static int g_color_ok = 0;
+static int g_color_mode = -1;
 static int g_cursor = 0;
 static char g_notice[96] = "";
 
@@ -56,10 +60,23 @@ static int refresh_state(void) {
         notice("Cannot read VitaBrightEX v1.4 status ABI.");
         g_filter_ok = 0;
         g_lut_ok = 0;
+        g_color_ok = 0;
+        g_color_mode = -1;
         return -1;
     }
 
     g_filter_ok = vitabrightFilterGetParams(&g_filter) >= 0;
+
+    g_color_ok = 0;
+    g_color_mode = -1;
+    if (cap_usable(g_status.display_color_space)) {
+        int mode = vitabrightColorSpaceGetMode();
+        if (mode == 0 || mode == 1) {
+            g_color_mode = mode;
+            g_color_ok = 1;
+        }
+    }
+
     g_lut_ok = 0;
     if (g_status.hardware == VBE_HW_OLED &&
         g_status.brightness_core == VBE_CAP_ACTIVE &&
@@ -120,7 +137,8 @@ static void toggle_invert(void) {
     }
 
     ScreenFilterParams candidate = g_filter;
-    /* Do not perpetuate v1.3 controls that the kernel reports unsupported. */
+    /* Unsupported filter dimensions are kept neutral so this operation is
+     * all-or-nothing: only the independently verified invert bit changes. */
     candidate.cct = CCT_DEFAULT;
     candidate.gamma = 1.0f;
     candidate.contrast = 1.0f;
@@ -130,8 +148,21 @@ static void toggle_invert(void) {
 
     int ret = vitabrightFilterSetParams(&candidate,
         g_status.hardware == VBE_HW_OLED ? 1 : 0);
-    if (ret < 0 && ret != -2) notice("Invert apply failed; status has details.");
+    if (ret < 0) notice("Invert apply failed; previous state retained.");
     else notice(candidate.invert ? "Invert enabled." : "Invert disabled.");
+    refresh_state();
+}
+
+static void toggle_color_space(void) {
+    if (!g_color_ok || !cap_usable(g_status.display_color_space)) {
+        notice("Panel color-space control is not available.");
+        return;
+    }
+
+    int desired = g_color_mode ? 0 : 1;
+    int ret = vitabrightColorSpaceSetMode(desired);
+    if (ret < 0) notice("Color-space write/read-back failed; previous state retained.");
+    else notice(desired ? "Alternate panel color-space enabled." : "Panel color-space mode 0 selected.");
     refresh_state();
 }
 
@@ -208,10 +239,11 @@ static void render(vita2d_pgf *font) {
         cap_name(g_status.invert));
     draw_line(font, y, COLOR_WHITE, line); y += 24.0f;
 
-    snprintf(line, sizeof(line), "LCD color-space=%s  CSC=%s  nonlinear transfer LUT=%s",
-        cap_name(g_status.lcd_color_space), cap_name(g_status.csc_filter),
-        cap_name(g_status.transfer_lut));
-    draw_line(font, y, COLOR_DIM, line); y += 24.0f;
+    snprintf(line, sizeof(line), "Panel color-space=%s  mode=%s  CSC=%s  transfer=%s",
+        cap_name(g_status.display_color_space),
+        g_color_ok ? (g_color_mode ? "1" : "0") : "n/a",
+        cap_name(g_status.csc_filter), cap_name(g_status.transfer_lut));
+    draw_line(font, y, g_color_ok ? COLOR_WHITE : COLOR_DIM, line); y += 24.0f;
 
     snprintf(line, sizeof(line), "Last kernel error: %d  detail: 0x%08X",
         g_status.last_error, (unsigned)g_status.last_error_detail);
@@ -234,10 +266,13 @@ static void render(vita2d_pgf *font) {
     }
 
     draw_line(font, y, COLOR_DIM,
-        "Left/Right select | Up/Down edit | X invert | Square save | Circle reload | Select refresh | Start exit");
-    y += 28.0f;
+        "Left/Right select | Up/Down edit | X invert | Triangle color-space | Square save");
+    y += 24.0f;
     draw_line(font, y, COLOR_DIM,
-        "CCT / gamma / contrast / IPS linearisation are disabled because the kernel reports them unsupported.");
+        "Circle reload | Select refresh | Start exit");
+    y += 24.0f;
+    draw_line(font, y, COLOR_DIM,
+        "CCT/gamma/contrast/panel curves remain disabled when status reports unsupported.");
     y += 30.0f;
     if (g_notice[0]) draw_line(font, y, COLOR_WHITE, g_notice);
 
@@ -272,11 +307,12 @@ int main(void) {
         if (pressed & SCE_CTRL_UP) edit_value(1);
         if (pressed & SCE_CTRL_DOWN) edit_value(-1);
         if (pressed & SCE_CTRL_CROSS) toggle_invert();
+        if (pressed & SCE_CTRL_TRIANGLE) toggle_color_space();
         if (pressed & SCE_CTRL_SELECT) { refresh_state(); notice("Status refreshed."); }
         if (pressed & SCE_CTRL_CIRCLE) {
             int ret = vitabrightReload();
             refresh_state();
-            notice(ret < 0 ? "Reload completed fail-open with an unavailable capability." : "Reload successful.");
+            notice(ret < 0 ? "Reload completed with a requested capability unavailable." : "Reload successful.");
         }
         if (pressed & SCE_CTRL_SQUARE) {
             int ret = -1;
