@@ -79,8 +79,9 @@ int vitabrightGetStatus(VitaBrightStatus *out) {
     }
 
     VitaBrightStatus snapshot = g_vbe_status;
-    ret = ksceKernelMemcpyKernelToUser((void *)out, &snapshot, sizeof(snapshot));
-    state_lock_release();
+    ret = state_lock_release_result(0);
+    if (ret >= 0)
+        ret = ksceKernelMemcpyKernelToUser((void *)out, &snapshot, sizeof(snapshot));
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -117,8 +118,9 @@ int vitabrightGetDiagnostics(VitaBrightDiagnostics *out) {
     d.synchronization_error = slot.error;
     d.synchronization_detail = slot.detail;
 
-    ret = ksceKernelMemcpyKernelToUser((void *)out, &d, sizeof(d));
-    state_lock_release();
+    ret = state_lock_release_result(0);
+    if (ret >= 0)
+        ret = ksceKernelMemcpyKernelToUser((void *)out, &d, sizeof(d));
     EXIT_SYSCALL(state);
     return ret;
 }
