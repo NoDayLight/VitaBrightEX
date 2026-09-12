@@ -46,7 +46,13 @@ typedef struct {
     int brightness_hook;
     int power_limit_hook;
     int invert;
-    int lcd_color_space;
+    /* ABI v2 keeps this slot and struct size unchanged.  The old member name
+     * was lcd_color_space; v1.4 now uses the same slot for the selected
+     * panel's matched Get/SetDisplayColorSpaceMode capability on OLED or LCD. */
+    union {
+        int display_color_space;
+        int lcd_color_space;
+    };
     int csc_filter;
     int transfer_lut;
     int registry_api;
