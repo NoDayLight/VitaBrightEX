@@ -20,6 +20,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: Verify pseudo-v1.4 source contract
         run: python3 tools/verify_source_contract.py
+      - name: Validate packaged LUT/config assets
+        run: python3 tools/validate_packaged_assets.py
       - uses: actions/checkout@v7
         with:
           repository: vitasdk/vdpm
