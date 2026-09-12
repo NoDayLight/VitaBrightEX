@@ -2,9 +2,13 @@
 #include "../config.h"
 #include "../log.h"
 #include "../main.h"
+#include "../persistence_core.h"
+#include "../persistence_file.h"
+#include "../source_authority.h"
 #include "../state_lock.h"
 #include "../status.h"
 #include "../taihen_extra.h"
+#include "../transaction_core.h"
 #include "lut.h"
 #include "parser.h"
 #include <stdint.h>
@@ -23,21 +27,43 @@
 #define OLED_LUT_OFF_P5      0x1C20u
 #define OLED_LUT_OFF_DEFAULT 0x1E00u
 
-static SceUID g_lut_inject = -1;
-static SceUID g_brightness_hook = -1;
-static SceUID g_power_hook = -1;
-static tai_hook_ref_t g_brightness_ref = -1;
-static tai_hook_ref_t g_power_ref = 0;
-static int g_active = 0;
-static int g_panel_type = OLED_PANEL_UNKNOWN;
-static int g_dim_workaround_enabled = 1;
-static char g_lut_source_path[LUT_SOURCE_PATH_MAX];
+typedef struct {
+    unsigned char values[LUT_SIZE];
+    VbeSourceIdentity source;
+    int panel_type;
+} OledCandidate;
+
+typedef struct {
+    int ownership;
+    SceUID lut_inject;
+    SceUID brightness_hook;
+    SceUID power_hook;
+    tai_hook_ref_t brightness_ref;
+    tai_hook_ref_t power_ref;
+    int panel_type;
+    int dim_workaround_enabled;
+    VbeSourceIdentity source;
+    VbePersistenceFile persistence;
+} OledBackend;
+
+static OledBackend g_oled = {
+    .ownership = VBE_OWNERSHIP_CLEAN,
+    .lut_inject = -1,
+    .brightness_hook = -1,
+    .power_hook = -1,
+    .brightness_ref = -1,
+    .power_ref = 0,
+    .panel_type = OLED_PANEL_UNKNOWN,
+    .dim_workaround_enabled = 1,
+    .source = { .kind = VBE_SOURCE_ID_NONE, .path = {0} },
+    .persistence = { .fd = -1, .temp_owned = 0, .target = {0}, .temp = {0} },
+};
 
 unsigned char lookupNew[LUT_SIZE];
 
-int (*ksceOledGetBrightness)(void) = NULL;
-int (*ksceOledSetBrightness)(unsigned int brightness) = NULL;
-int (*ksceOledGetDDB)(uint16_t *supplier_id, uint16_t *supplier_elective_data) = NULL;
+static int (*g_get_brightness)(void) = NULL;
+static int (*g_set_brightness)(unsigned int brightness) = NULL;
+static int (*g_get_ddb)(uint16_t *supplier_id, uint16_t *supplier_elective_data) = NULL;
 
 static void brightness_error(int error, int detail) {
     status_set_error_domain(VBE_ERROR_DOMAIN_BRIGHTNESS, error, detail);
@@ -47,17 +73,16 @@ static void brightness_ok(void) {
     status_clear_error_domain(VBE_ERROR_DOMAIN_BRIGHTNESS);
 }
 
-static void lut_copy(unsigned char *dst, const unsigned char *src) {
-    for (int i = 0; i < LUT_SIZE; ++i) dst[i] = src[i];
+static void brightness_clear_if(int error) {
+    int current = VBE_ERR_NONE;
+    int detail = 0;
+    status_get_error_domain(VBE_ERROR_DOMAIN_BRIGHTNESS, &current, &detail);
+    (void)detail;
+    if (current == error) brightness_ok();
 }
 
-static void path_copy(char dst[LUT_SOURCE_PATH_MAX], const char *src) {
-    int i = 0;
-    while (i < LUT_SOURCE_PATH_MAX - 1 && src[i]) {
-        dst[i] = src[i];
-        ++i;
-    }
-    dst[i] = '\0';
+static void lut_copy(unsigned char *dst, const unsigned char *src) {
+    for (int i = 0; i < LUT_SIZE; ++i) dst[i] = src[i];
 }
 
 static int lut_is_sane(const unsigned char lut[LUT_SIZE]) {
@@ -84,35 +109,60 @@ static int firmware_layout_supported(uint32_t firmware) {
     }
 }
 
+static void publish_active(void) {
+    g_vbe_status.brightness_core = VBE_CAP_ACTIVE;
+    g_vbe_status.brightness_table = VBE_CAP_ACTIVE;
+    g_vbe_status.brightness_hook = VBE_CAP_ACTIVE;
+    g_vbe_status.power_limit_hook = VBE_CAP_ACTIVE;
+}
+
+static void publish_inactive(void) {
+    if (g_vbe_status.brightness_core == VBE_CAP_ACTIVE)
+        g_vbe_status.brightness_core = VBE_CAP_INACTIVE;
+    if (g_vbe_status.brightness_table == VBE_CAP_ACTIVE)
+        g_vbe_status.brightness_table = VBE_CAP_INACTIVE;
+    if (g_vbe_status.brightness_hook == VBE_CAP_ACTIVE)
+        g_vbe_status.brightness_hook = VBE_CAP_INACTIVE;
+    if (g_vbe_status.power_limit_hook == VBE_CAP_ACTIVE)
+        g_vbe_status.power_limit_hook = VBE_CAP_INACTIVE;
+}
+
+static void publish_failed(void) {
+    g_vbe_status.brightness_core = VBE_CAP_FAILED;
+    g_vbe_status.brightness_table = VBE_CAP_FAILED;
+    g_vbe_status.brightness_hook = VBE_CAP_FAILED;
+    g_vbe_status.power_limit_hook = VBE_CAP_FAILED;
+}
+
 static int resolve_core(tai_module_info_t *info) {
     info->size = sizeof(*info);
     int ret = taiGetModuleInfoForKernel(KERNEL_PID, "SceOled", info);
     if (ret < 0) return ret;
 
-    ksceOledGetBrightness = NULL;
-    ksceOledSetBrightness = NULL;
-    ksceOledGetDDB = NULL;
+    g_get_brightness = NULL;
+    g_set_brightness = NULL;
+    g_get_ddb = NULL;
 
     ret = module_get_export_func(KERNEL_PID, "SceOled", TAI_ANY_LIBRARY,
-        NID_OLED_GET_BRIGHTNESS, (uintptr_t *)&ksceOledGetBrightness);
-    if (ret < 0 || ksceOledGetBrightness == NULL) return ret < 0 ? ret : -1;
+        NID_OLED_GET_BRIGHTNESS, (uintptr_t *)&g_get_brightness);
+    if (ret < 0 || g_get_brightness == NULL) return ret < 0 ? ret : -1;
 
     ret = module_get_export_func(KERNEL_PID, "SceOled", TAI_ANY_LIBRARY,
-        NID_OLED_SET_BRIGHTNESS, (uintptr_t *)&ksceOledSetBrightness);
-    if (ret < 0 || ksceOledSetBrightness == NULL) return ret < 0 ? ret : -1;
+        NID_OLED_SET_BRIGHTNESS, (uintptr_t *)&g_set_brightness);
+    if (ret < 0 || g_set_brightness == NULL) return ret < 0 ? ret : -1;
 
     ret = module_get_export_func(KERNEL_PID, "SceOled", TAI_ANY_LIBRARY,
-        NID_OLED_GET_DDB, (uintptr_t *)&ksceOledGetDDB);
-    if (ret < 0 || ksceOledGetDDB == NULL) return ret < 0 ? ret : -1;
+        NID_OLED_GET_DDB, (uintptr_t *)&g_get_ddb);
+    if (ret < 0 || g_get_ddb == NULL) return ret < 0 ? ret : -1;
     return 0;
 }
 
 static int read_panel(int *panel_type, uint32_t *lut_offset) {
     uint16_t supplier_id = 0;
     uint16_t sed = 0;
-    if (ksceOledGetDDB == NULL) return -1;
+    if (g_get_ddb == NULL) return -1;
 
-    int ret = ksceOledGetDDB(&supplier_id, &sed);
+    int ret = g_get_ddb(&supplier_id, &sed);
     if (ret < 0) return ret;
 
     LOG("[OLED] DDB supplier=0x%04X data=0x%04X\n", supplier_id, sed);
@@ -148,117 +198,151 @@ static int validate_layout(const tai_module_info_t *info, uint32_t lut_offset) {
     return lut_is_sane(snapshot) ? 0 : -1;
 }
 
-int oled_detect_panel(void) {
-    int panel = OLED_PANEL_UNKNOWN;
-    uint32_t offset = 0;
-    if (read_panel(&panel, &offset) < 0) return OLED_PANEL_UNKNOWN;
-    return panel;
-}
-
-static int load_disk_candidate(int panel_type, unsigned char out[LUT_SIZE],
-                               char source_path[LUT_SOURCE_PATH_MAX],
+static int load_disk_candidate(int panel_type, OledCandidate *candidate,
                                int *error_code) {
+    char path[LUT_SOURCE_PATH_MAX];
     int ret;
+    path[0] = '\0';
     if (g_config.oled_panel_lut_override && g_config.panel_lut_path[0] != '\0')
-        ret = parse_lut_override(g_config.panel_lut_path, out, source_path,
-                                 error_code);
+        ret = parse_lut_override(g_config.panel_lut_path, candidate->values,
+                                 path, error_code);
     else
-        ret = parse_lut(panel_type, out, source_path, error_code);
+        ret = parse_lut(panel_type, candidate->values, path, error_code);
 
     if (ret < 0) return ret;
-    if (!lut_is_sane(out)) {
+    if (!lut_is_sane(candidate->values)) {
         if (error_code != NULL) *error_code = VBE_ERR_INVALID_USER_INPUT;
         return -1;
     }
+    if (vbe_source_identity_file(&candidate->source, path) < 0) {
+        if (error_code != NULL) *error_code = VBE_ERR_SOURCE_IO;
+        return -1;
+    }
+    candidate->panel_type = panel_type;
     return 0;
 }
 
-int hook_ksceOledSetBrightness(unsigned int brightness) {
-    if (brightness == 1 && g_dim_workaround_enabled && g_config.oled_dim_workaround &&
-        ksceOledGetBrightness != NULL) {
-        int old_brightness = ksceOledGetBrightness();
-        if (old_brightness >= 0 && old_brightness <= 4 * 0x1000)
-            return TAI_CONTINUE(int, g_brightness_ref, (unsigned int)old_brightness);
-    }
-    return TAI_CONTINUE(int, g_brightness_ref, brightness);
-}
-
-int hook_kscePowerSetDisplayMaxBrightnessForOled(int limit) {
-    if (g_power_ref == 0) return 0;
-    if (limit < 0x10000 && limit >= 0)
-        limit = 0x10000 - 2 * 0x1000;
-    else
-        limit = 0x10000;
-    return TAI_CONTINUE(int, g_power_ref, limit);
-}
-
-static int release_transaction(void) {
-    int first_error = 0;
-    int ret;
-
-    if (g_power_hook >= 0) {
-        ret = taiHookReleaseForKernel(g_power_hook, g_power_ref);
-        if (ret >= 0) {
-            g_power_hook = -1;
-            g_power_ref = 0;
-        } else if (first_error == 0) {
-            first_error = ret;
-        }
-    }
-    if (g_brightness_hook >= 0) {
-        ret = taiHookReleaseForKernel(g_brightness_hook, g_brightness_ref);
-        if (ret >= 0) {
-            g_brightness_hook = -1;
-            g_brightness_ref = -1;
-        } else if (first_error == 0) {
-            first_error = ret;
-        }
-    }
-    if (g_lut_inject >= 0) {
-        ret = taiInjectReleaseForKernel(g_lut_inject);
-        if (ret >= 0) {
-            g_lut_inject = -1;
-        } else if (first_error == 0) {
-            first_error = ret;
-        }
-    }
-
-    g_active = 0;
-    if (first_error < 0) {
-        g_vbe_status.brightness_core = VBE_CAP_FAILED;
-        g_vbe_status.brightness_table = VBE_CAP_FAILED;
-        g_vbe_status.brightness_hook = VBE_CAP_FAILED;
-        g_vbe_status.power_limit_hook = VBE_CAP_FAILED;
-        brightness_error(VBE_ERR_RESOURCE_RELEASE, first_error);
-        return first_error;
-    }
-
-    if (g_vbe_status.brightness_core == VBE_CAP_ACTIVE)
-        g_vbe_status.brightness_core = VBE_CAP_INACTIVE;
-    if (g_vbe_status.brightness_table == VBE_CAP_ACTIVE)
-        g_vbe_status.brightness_table = VBE_CAP_INACTIVE;
-    if (g_vbe_status.brightness_hook == VBE_CAP_ACTIVE)
-        g_vbe_status.brightness_hook = VBE_CAP_INACTIVE;
-    if (g_vbe_status.power_limit_hook == VBE_CAP_ACTIVE)
-        g_vbe_status.power_limit_hook = VBE_CAP_INACTIVE;
-    return 0;
-}
-
-static int start_transaction(const unsigned char supplied[LUT_SIZE]) {
-    if (g_active) return 0;
-
+static int prepare_disk_candidate(OledCandidate *candidate, int *error_code) {
     if (!firmware_layout_supported(sw_version)) {
-        g_vbe_status.firmware_layout = VBE_CAP_UNSUPPORTED;
-        brightness_error(VBE_ERR_FIRMWARE_UNSUPPORTED, (int)sw_version);
+        *error_code = VBE_ERR_FIRMWARE_UNSUPPORTED;
         return -1;
     }
 
     tai_module_info_t info;
     int ret = resolve_core(&info);
     if (ret < 0) {
-        g_vbe_status.brightness_core = VBE_CAP_FAILED;
-        brightness_error(VBE_ERR_EXPORT_RESOLUTION, ret);
+        *error_code = VBE_ERR_EXPORT_RESOLUTION;
         return ret;
+    }
+
+    int panel_type = OLED_PANEL_UNKNOWN;
+    uint32_t offset = 0;
+    ret = read_panel(&panel_type, &offset);
+    if (ret < 0) {
+        *error_code = VBE_ERR_LAYOUT_MISMATCH;
+        return ret;
+    }
+    (void)offset;
+    return load_disk_candidate(panel_type, candidate, error_code);
+}
+
+int hook_ksceOledSetBrightness(unsigned int brightness) {
+    if (brightness == 1 && g_oled.dim_workaround_enabled &&
+        g_config.oled_dim_workaround && g_get_brightness != NULL) {
+        int old_brightness = g_get_brightness();
+        if (old_brightness >= 0 && old_brightness <= 4 * 0x1000)
+            return TAI_CONTINUE(int, g_oled.brightness_ref,
+                                (unsigned int)old_brightness);
+    }
+    return TAI_CONTINUE(int, g_oled.brightness_ref, brightness);
+}
+
+int hook_kscePowerSetDisplayMaxBrightnessForOled(int limit) {
+    if (g_oled.power_ref == 0) return 0;
+    if (limit < 0x10000 && limit >= 0)
+        limit = 0x10000 - 2 * 0x1000;
+    else
+        limit = 0x10000;
+    return TAI_CONTINUE(int, g_oled.power_ref, limit);
+}
+
+static VbeTxnAttempt release_resources(void) {
+    int ret;
+
+    if (g_oled.ownership == VBE_OWNERSHIP_CLEAN)
+        return vbe_txn_ok();
+
+    if (g_oled.power_hook >= 0) {
+        ret = taiHookReleaseForKernel(g_oled.power_hook, g_oled.power_ref);
+        if (ret < 0) {
+            g_oled.ownership = VBE_OWNERSHIP_DEGRADED;
+            publish_failed();
+            brightness_error(VBE_ERR_RESOURCE_RELEASE, ret);
+            return vbe_txn_failed_dirty(VBE_ERR_RESOURCE_RELEASE, ret);
+        }
+        g_oled.power_hook = -1;
+        g_oled.power_ref = 0;
+    }
+
+    if (g_oled.brightness_hook >= 0) {
+        ret = taiHookReleaseForKernel(g_oled.brightness_hook, g_oled.brightness_ref);
+        if (ret < 0) {
+            g_oled.ownership = VBE_OWNERSHIP_DEGRADED;
+            publish_failed();
+            brightness_error(VBE_ERR_RESOURCE_RELEASE, ret);
+            return vbe_txn_failed_dirty(VBE_ERR_RESOURCE_RELEASE, ret);
+        }
+        g_oled.brightness_hook = -1;
+        g_oled.brightness_ref = -1;
+    }
+
+    if (g_oled.lut_inject >= 0) {
+        ret = taiInjectReleaseForKernel(g_oled.lut_inject);
+        if (ret < 0) {
+            g_oled.ownership = VBE_OWNERSHIP_DEGRADED;
+            publish_failed();
+            brightness_error(VBE_ERR_RESOURCE_RELEASE, ret);
+            return vbe_txn_failed_dirty(VBE_ERR_RESOURCE_RELEASE, ret);
+        }
+        g_oled.lut_inject = -1;
+    }
+
+    g_oled.ownership = VBE_OWNERSHIP_CLEAN;
+    publish_inactive();
+    return vbe_txn_ok();
+}
+
+static VbeTxnAttempt abort_start(int error, int detail) {
+    VbeTxnAttempt cleanup = release_resources();
+    if (cleanup.state != VBE_TXN_OK) return cleanup;
+    publish_failed();
+    brightness_error(error, detail);
+    return vbe_txn_failed_clean(error, detail);
+}
+
+static VbeTxnAttempt start_transaction(const OledCandidate *candidate) {
+    if (!vbe_txn_can_start(g_oled.ownership)) {
+        publish_failed();
+        brightness_error(VBE_ERR_RESOURCE_RELEASE, -1);
+        return vbe_txn_failed_dirty(VBE_ERR_RESOURCE_RELEASE, -1);
+    }
+    if (!firmware_layout_supported(sw_version)) {
+        g_vbe_status.firmware_layout = VBE_CAP_UNSUPPORTED;
+        brightness_error(VBE_ERR_FIRMWARE_UNSUPPORTED, (int)sw_version);
+        return vbe_txn_failed_clean(VBE_ERR_FIRMWARE_UNSUPPORTED, -1);
+    }
+    if (!lut_is_sane(candidate->values)) {
+        publish_failed();
+        brightness_error(VBE_ERR_INVALID_USER_INPUT, -1);
+        return vbe_txn_failed_clean(VBE_ERR_INVALID_USER_INPUT, -1);
+    }
+
+    tai_module_info_t info;
+    int ret = resolve_core(&info);
+    if (ret < 0) {
+        publish_failed();
+        brightness_error(VBE_ERR_EXPORT_RESOLUTION, ret);
+        return vbe_txn_failed_clean(VBE_ERR_EXPORT_RESOLUTION, ret);
     }
 
     int panel_type = OLED_PANEL_UNKNOWN;
@@ -266,227 +350,174 @@ static int start_transaction(const unsigned char supplied[LUT_SIZE]) {
     ret = read_panel(&panel_type, &lut_offset);
     if (ret < 0) {
         g_vbe_status.firmware_layout = VBE_CAP_FAILED;
+        publish_failed();
         brightness_error(VBE_ERR_LAYOUT_MISMATCH, ret);
-        return ret;
+        return vbe_txn_failed_clean(VBE_ERR_LAYOUT_MISMATCH, ret);
+    }
+    if (candidate->panel_type != OLED_PANEL_UNKNOWN &&
+        candidate->panel_type != panel_type) {
+        g_vbe_status.firmware_layout = VBE_CAP_FAILED;
+        publish_failed();
+        brightness_error(VBE_ERR_LAYOUT_MISMATCH, -1);
+        return vbe_txn_failed_clean(VBE_ERR_LAYOUT_MISMATCH, -1);
     }
 
     ret = validate_layout(&info, lut_offset);
     if (ret < 0) {
         g_vbe_status.firmware_layout = VBE_CAP_FAILED;
-        g_vbe_status.brightness_table = VBE_CAP_FAILED;
+        publish_failed();
         brightness_error(VBE_ERR_LAYOUT_MISMATCH, ret);
-        return ret;
+        return vbe_txn_failed_clean(VBE_ERR_LAYOUT_MISMATCH, ret);
     }
     g_vbe_status.firmware_layout = VBE_CAP_ACTIVE;
 
-    unsigned char candidate[LUT_SIZE];
-    char source_path[LUT_SOURCE_PATH_MAX];
-    source_path[0] = '\0';
-    if (supplied != NULL) {
-        lut_copy(candidate, supplied);
-    } else {
-        int source_error = VBE_ERR_NONE;
-        ret = load_disk_candidate(panel_type, candidate, source_path,
-                                  &source_error);
-        if (ret < 0) {
-            brightness_error(source_error, ret);
-            return ret;
-        }
-    }
-
-    if (!lut_is_sane(candidate)) {
-        brightness_error(VBE_ERR_INVALID_USER_INPUT, -1);
-        return -1;
-    }
-
-    g_lut_inject = taiInjectDataForKernel(KERNEL_PID, info.modid, 0,
-        lut_offset, candidate, LUT_SIZE);
-    if (g_lut_inject < 0) {
-        ret = (int)g_lut_inject;
-        g_vbe_status.brightness_table = VBE_CAP_FAILED;
+    g_oled.lut_inject = taiInjectDataForKernel(KERNEL_PID, info.modid, 0,
+        lut_offset, candidate->values, LUT_SIZE);
+    if (g_oled.lut_inject < 0) {
+        ret = (int)g_oled.lut_inject;
+        g_oled.lut_inject = -1;
+        publish_failed();
         brightness_error(VBE_ERR_TABLE_INJECTION, ret);
-        return ret;
+        return vbe_txn_failed_clean(VBE_ERR_TABLE_INJECTION, ret);
     }
-    g_vbe_status.brightness_table = VBE_CAP_ACTIVE;
+    g_oled.ownership = VBE_OWNERSHIP_DEGRADED;
 
-    g_brightness_hook = taiHookFunctionExportForKernel(KERNEL_PID,
-        &g_brightness_ref, "SceOled", TAI_ANY_LIBRARY,
+    g_oled.brightness_hook = taiHookFunctionExportForKernel(KERNEL_PID,
+        &g_oled.brightness_ref, "SceOled", TAI_ANY_LIBRARY,
         NID_OLED_SET_BRIGHTNESS, hook_ksceOledSetBrightness);
-    if (g_brightness_hook < 0) {
-        ret = (int)g_brightness_hook;
-        int cleanup = release_transaction();
-        if (cleanup < 0) return cleanup;
-        g_vbe_status.brightness_hook = VBE_CAP_FAILED;
-        brightness_error(VBE_ERR_BRIGHTNESS_HOOK, ret);
-        return ret;
+    if (g_oled.brightness_hook < 0) {
+        ret = (int)g_oled.brightness_hook;
+        g_oled.brightness_hook = -1;
+        return abort_start(VBE_ERR_BRIGHTNESS_HOOK, ret);
     }
-    g_vbe_status.brightness_hook = VBE_CAP_ACTIVE;
 
-    g_power_hook = taiHookFunctionExportForKernel(KERNEL_PID,
-        &g_power_ref, "ScePower", TAI_ANY_LIBRARY,
+    g_oled.power_hook = taiHookFunctionExportForKernel(KERNEL_PID,
+        &g_oled.power_ref, "ScePower", TAI_ANY_LIBRARY,
         NID_POWER_SET_MAX_BRIGHT, hook_kscePowerSetDisplayMaxBrightnessForOled);
-    if (g_power_hook < 0) {
-        ret = (int)g_power_hook;
-        int cleanup = release_transaction();
-        if (cleanup < 0) return cleanup;
-        g_vbe_status.power_limit_hook = VBE_CAP_FAILED;
-        brightness_error(VBE_ERR_POWER_HOOK, ret);
-        return ret;
-    }
-    g_vbe_status.power_limit_hook = VBE_CAP_ACTIVE;
-
-    int current = ksceOledGetBrightness();
-    if (current < 0) {
-        ret = current;
-        int cleanup = release_transaction();
-        if (cleanup < 0) return cleanup;
-        g_vbe_status.brightness_core = VBE_CAP_FAILED;
-        brightness_error(VBE_ERR_BACKEND, ret);
-        return ret;
+    if (g_oled.power_hook < 0) {
+        ret = (int)g_oled.power_hook;
+        g_oled.power_hook = -1;
+        return abort_start(VBE_ERR_POWER_HOOK, ret);
     }
 
-    ret = ksceOledSetBrightness((unsigned int)current);
-    if (ret < 0) {
-        int cleanup = release_transaction();
-        if (cleanup < 0) return cleanup;
-        g_vbe_status.brightness_core = VBE_CAP_FAILED;
-        brightness_error(VBE_ERR_BACKEND, ret);
-        return ret;
-    }
+    int current = g_get_brightness();
+    if (current < 0) return abort_start(VBE_ERR_BACKEND, current);
 
-    lut_copy(lookupNew, candidate);
-    if (supplied == NULL) path_copy(g_lut_source_path, source_path);
-    g_panel_type = panel_type;
+    ret = g_set_brightness((unsigned int)current);
+    if (ret < 0) return abort_start(VBE_ERR_BACKEND, ret);
+
+    lut_copy(lookupNew, candidate->values);
+    vbe_source_identity_copy(&g_oled.source, &candidate->source);
+    g_oled.panel_type = panel_type;
     g_vbe_status.panel_type = panel_type;
-    g_active = 1;
-    g_vbe_status.brightness_core = VBE_CAP_ACTIVE;
+    g_oled.ownership = VBE_OWNERSHIP_ACTIVE;
+    publish_active();
     brightness_ok();
-    return 0;
+    return vbe_txn_ok();
 }
 
-static int replace_candidate(const unsigned char candidate[LUT_SIZE]) {
-    if (!lut_is_sane(candidate)) {
-        brightness_error(VBE_ERR_INVALID_USER_INPUT, -1);
+static int replace_candidate(const OledCandidate *candidate) {
+    OledCandidate previous;
+    int had_previous = g_oled.ownership == VBE_OWNERSHIP_ACTIVE;
+    if (had_previous) {
+        lut_copy(previous.values, lookupNew);
+        vbe_source_identity_copy(&previous.source, &g_oled.source);
+        previous.panel_type = g_oled.panel_type;
+    }
+
+    if (g_oled.ownership == VBE_OWNERSHIP_DEGRADED) {
+        brightness_error(VBE_ERR_RESOURCE_RELEASE, -1);
         return -1;
     }
 
-    unsigned char previous[LUT_SIZE];
-    int had_previous = g_active;
-    if (had_previous) lut_copy(previous, lookupNew);
-
-    int release = release_transaction();
-    if (release < 0) return release;
-
-    int ret = start_transaction(candidate);
-    if (ret >= 0) return ret;
-
-    int requested_error = VBE_ERR_BACKEND;
-    int requested_detail = ret;
-    status_get_error_domain(VBE_ERROR_DOMAIN_BRIGHTNESS,
-                            &requested_error, &requested_detail);
-
-    if (had_previous) {
-        int rollback = start_transaction(previous);
-        status_recovery_result(VBE_ERROR_DOMAIN_BRIGHTNESS, rollback >= 0,
-                               requested_error, requested_detail,
-                               VBE_ERR_LUT_ROLLBACK, rollback);
-        if (rollback < 0)
-            LOG("[OLED] replacement failed 0x%08X and rollback failed 0x%08X\n",
-                ret, rollback);
+    if (g_oled.ownership == VBE_OWNERSHIP_ACTIVE) {
+        VbeTxnAttempt release = release_resources();
+        if (release.state != VBE_TXN_OK) return release.detail;
     }
-    return ret;
+
+    VbeTxnAttempt requested = start_transaction(candidate);
+    if (requested.state == VBE_TXN_OK) return 0;
+    if (!vbe_txn_should_rollback(had_previous, g_oled.ownership, requested))
+        return vbe_txn_public_result(requested, 0, vbe_txn_ok());
+
+    VbeTxnAttempt rollback = start_transaction(&previous);
+    if (rollback.state == VBE_TXN_OK) {
+        brightness_error(requested.error, requested.detail);
+    } else if (rollback.state == VBE_TXN_FAILED_CLEAN) {
+        publish_failed();
+        brightness_error(VBE_ERR_LUT_ROLLBACK, rollback.detail);
+    } else {
+        publish_failed();
+        brightness_error(VBE_ERR_RESOURCE_RELEASE, rollback.detail);
+    }
+
+    if (rollback.state != VBE_TXN_OK)
+        LOG("[OLED] requested replacement failed 0x%08X; recovery failed 0x%08X state=%d\n",
+            requested.detail, rollback.detail, rollback.state);
+    return vbe_txn_public_result(requested, 1, rollback);
 }
 
 int oled_enable_hooks(void) {
-    return start_transaction(NULL);
-}
+    if (g_oled.ownership == VBE_OWNERSHIP_ACTIVE) return 0;
+    if (!vbe_txn_can_start(g_oled.ownership)) return -1;
 
-void oled_disable_hooks(void) {
-    int ret = release_transaction();
-    if (ret < 0) LOG("[OLED] resource release failed during shutdown: 0x%08X\n", ret);
-    ksceOledGetBrightness = NULL;
-    ksceOledSetBrightness = NULL;
-    ksceOledGetDDB = NULL;
-}
-
-int oled_reload_backend(void) {
-    if (!firmware_layout_supported(sw_version)) {
-        g_vbe_status.firmware_layout = VBE_CAP_UNSUPPORTED;
-        brightness_error(VBE_ERR_FIRMWARE_UNSUPPORTED, (int)sw_version);
-        return -1;
+    OledCandidate candidate;
+    vbe_source_identity_clear(&candidate.source);
+    candidate.panel_type = OLED_PANEL_UNKNOWN;
+    int error_code = VBE_ERR_NONE;
+    int ret = prepare_disk_candidate(&candidate, &error_code);
+    if (ret < 0) {
+        brightness_error(error_code, ret);
+        return ret;
     }
 
-    tai_module_info_t info;
-    int ret = 0;
-    if (ksceOledGetDDB == NULL || ksceOledGetBrightness == NULL ||
-        ksceOledSetBrightness == NULL) {
-        ret = resolve_core(&info);
-        if (ret < 0) {
-            g_vbe_status.brightness_core = VBE_CAP_FAILED;
-            brightness_error(VBE_ERR_EXPORT_RESOLUTION, ret);
-            return ret;
-        }
-    }
+    VbeTxnAttempt start = start_transaction(&candidate);
+    return start.state == VBE_TXN_OK ? 0 : start.detail;
+}
 
-    int panel_type = OLED_PANEL_UNKNOWN;
+int oled_detect_panel(void) {
+    int panel = OLED_PANEL_UNKNOWN;
     uint32_t offset = 0;
-    ret = read_panel(&panel_type, &offset);
-    if (ret < 0) {
-        g_vbe_status.firmware_layout = VBE_CAP_FAILED;
-        brightness_error(VBE_ERR_LAYOUT_MISMATCH, ret);
-        return ret;
-    }
-
-    unsigned char candidate[LUT_SIZE];
-    char candidate_path[LUT_SOURCE_PATH_MAX];
-    int source_error = VBE_ERR_NONE;
-    ret = load_disk_candidate(panel_type, candidate, candidate_path,
-                              &source_error);
-    if (ret < 0) {
-        brightness_error(source_error, ret);
-        return ret;
-    }
-
-    ret = replace_candidate(candidate);
-    if (ret < 0) return ret;
-
-    path_copy(g_lut_source_path, candidate_path);
-    return 0;
+    if (g_get_ddb == NULL) return OLED_PANEL_UNKNOWN;
+    if (read_panel(&panel, &offset) < 0) return OLED_PANEL_UNKNOWN;
+    return panel;
 }
 
-int oled_reinject_lut(void) {
-    unsigned char candidate[LUT_SIZE];
-    lut_copy(candidate, lookupNew);
-    return replace_candidate(candidate);
+static int persistence_error(const VbePersistenceOutcome *out) {
+    if (out->cleanup_error < 0) return VBE_ERR_PERSISTENCE_CLEANUP;
+    if (out->stage == VBE_PERSIST_STAGE_RENAME) return VBE_ERR_PERSISTENCE_COMMIT;
+    return VBE_ERR_PERSISTENCE_PREPARE;
 }
 
-static int build_temp_path(char out[LUT_SOURCE_PATH_MAX], const char *path) {
-    int i = 0;
-    while (i < LUT_SOURCE_PATH_MAX - 5 && path[i]) {
-        out[i] = path[i];
-        ++i;
-    }
-    if (path[i] != '\0') return -1;
-    out[i++] = '.';
-    out[i++] = 't';
-    out[i++] = 'm';
-    out[i++] = 'p';
-    out[i] = '\0';
-    return 0;
+static int oled_persist_prepare(void *context) {
+    OledBackend *backend = (OledBackend *)context;
+    return vbe_persist_file_prepare(&backend->persistence);
+}
+static int oled_persist_open(void *context) {
+    OledBackend *backend = (OledBackend *)context;
+    return vbe_persist_file_open(&backend->persistence);
+}
+static int oled_persist_sync(void *context) {
+    OledBackend *backend = (OledBackend *)context;
+    return vbe_persist_file_sync(&backend->persistence);
+}
+static int oled_persist_close(void *context) {
+    OledBackend *backend = (OledBackend *)context;
+    return vbe_persist_file_close(&backend->persistence);
+}
+static int oled_persist_rename(void *context) {
+    OledBackend *backend = (OledBackend *)context;
+    return vbe_persist_file_rename(&backend->persistence);
+}
+static int oled_persist_cleanup(void *context) {
+    OledBackend *backend = (OledBackend *)context;
+    return vbe_persist_file_cleanup(&backend->persistence);
 }
 
-static int persist_lut_locked(void) {
-    if (!g_active || g_lut_source_path[0] == '\0') return -1;
-
-    char temp_path[LUT_SOURCE_PATH_MAX];
-    if (build_temp_path(temp_path, g_lut_source_path) < 0) return -1;
-
-    (void)ksceIoRemove(temp_path);
-    SceUID fd = ksceIoOpen(temp_path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
-    if (fd < 0) return fd;
-
+static int oled_persist_write(void *context) {
+    OledBackend *backend = (OledBackend *)context;
+    if (backend->persistence.fd < 0) return -1;
     static const char hex[] = "0123456789ABCDEF";
-    int ret = 0;
     for (int row = 0; row < LUT_ROWS; ++row) {
         char line[LUT_LINE_SIZE * 3];
         int pos = 0;
@@ -496,26 +527,100 @@ static int persist_lut_locked(void) {
             line[pos++] = hex[value & 0x0F];
             line[pos++] = col == LUT_LINE_SIZE - 1 ? '\n' : ' ';
         }
-        int written = ksceIoWrite(fd, line, (SceSize)pos);
-        if (written != pos) {
-            ret = written < 0 ? written : -1;
-            break;
-        }
+        int written = ksceIoWrite(backend->persistence.fd, line, (SceSize)pos);
+        if (written != pos) return written < 0 ? written : -1;
+    }
+    return 0;
+}
+
+static int persist_lut_locked(void) {
+    if (g_oled.ownership != VBE_OWNERSHIP_ACTIVE ||
+        !vbe_source_identity_is_file(&g_oled.source))
+        return -1;
+
+    int cleanup = vbe_persist_file_cleanup(&g_oled.persistence);
+    if (cleanup < 0) {
+        brightness_error(VBE_ERR_PERSISTENCE_CLEANUP, cleanup);
+        return cleanup;
+    }
+    if (vbe_persist_file_set_target(&g_oled.persistence, g_oled.source.path) < 0) {
+        brightness_error(VBE_ERR_PERSISTENCE_PREPARE, -1);
+        return -1;
     }
 
-    if (ret == 0) {
-        int sync_status = 0;
-        int sync_ret = ksceIoSyncByFd(fd, &sync_status);
-        if (sync_ret < 0 || sync_status < 0)
-            ret = sync_ret < 0 ? sync_ret : sync_status;
+    VbePersistenceOps ops = {
+        .context = &g_oled,
+        .prepare = oled_persist_prepare,
+        .open_temp = oled_persist_open,
+        .write_payload = oled_persist_write,
+        .sync_temp = oled_persist_sync,
+        .close_temp = oled_persist_close,
+        .rename_temp = oled_persist_rename,
+        .cleanup_temp = oled_persist_cleanup,
+    };
+    VbePersistenceOutcome out = vbe_persistence_execute(&ops);
+    if (!out.committed) {
+        int detail = out.cleanup_error < 0 ? out.cleanup_error : out.error;
+        brightness_error(persistence_error(&out), detail);
+        LOG("[OLED:PERSIST] stage=%d error=0x%08X cleanup=%d/0x%08X\n",
+            out.stage, out.error, out.cleanup_stage, out.cleanup_error);
+        return detail < 0 ? detail : -1;
     }
 
-    int close_ret = ksceIoClose(fd);
-    if (ret == 0 && close_ret < 0) ret = close_ret;
+    int current_error = VBE_ERR_NONE;
+    int current_detail = 0;
+    status_get_error_domain(VBE_ERROR_DOMAIN_BRIGHTNESS,
+                            &current_error, &current_detail);
+    (void)current_detail;
+    if (current_error == VBE_ERR_PERSISTENCE_PREPARE ||
+        current_error == VBE_ERR_PERSISTENCE_COMMIT ||
+        current_error == VBE_ERR_PERSISTENCE_CLEANUP)
+        brightness_ok();
+    return 0;
+}
 
-    if (ret == 0) ret = ksceIoRename(temp_path, g_lut_source_path);
-    if (ret < 0) (void)ksceIoRemove(temp_path);
-    return ret;
+int oled_disable_hooks(void) {
+    int first_error = 0;
+    int persist = vbe_persist_file_cleanup(&g_oled.persistence);
+    if (persist < 0) {
+        brightness_error(VBE_ERR_PERSISTENCE_CLEANUP, persist);
+        first_error = persist;
+    }
+
+    VbeTxnAttempt release = release_resources();
+    if (release.state != VBE_TXN_OK) first_error = release.detail;
+
+    if (release.state == VBE_TXN_OK) {
+        g_get_brightness = NULL;
+        g_set_brightness = NULL;
+        g_get_ddb = NULL;
+    }
+    if (first_error == 0) brightness_ok();
+    return first_error;
+}
+
+int oled_reload_backend(void) {
+    if (g_oled.ownership == VBE_OWNERSHIP_DEGRADED) return -1;
+
+    OledCandidate candidate;
+    vbe_source_identity_clear(&candidate.source);
+    candidate.panel_type = OLED_PANEL_UNKNOWN;
+    int error_code = VBE_ERR_NONE;
+    int ret = prepare_disk_candidate(&candidate, &error_code);
+    if (ret < 0) {
+        brightness_error(error_code, ret);
+        return ret;
+    }
+    return replace_candidate(&candidate);
+}
+
+int oled_reinject_lut(void) {
+    if (g_oled.ownership != VBE_OWNERSHIP_ACTIVE) return -1;
+    OledCandidate candidate;
+    lut_copy(candidate.values, lookupNew);
+    vbe_source_identity_copy(&candidate.source, &g_oled.source);
+    candidate.panel_type = g_oled.panel_type;
+    return replace_candidate(&candidate);
 }
 
 int vitabrightOledPersistLut(void) {
@@ -524,17 +629,14 @@ int vitabrightOledPersistLut(void) {
     int ret = state_lock_acquire();
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
 
-    if (!g_is_oled || !g_active) {
-        state_lock_release();
+    if (!g_is_oled || g_oled.ownership != VBE_OWNERSHIP_ACTIVE) {
+        (void)state_lock_release();
         EXIT_SYSCALL(state);
         return -1;
     }
 
     ret = persist_lut_locked();
-    status_stage_result(VBE_ERROR_DOMAIN_BRIGHTNESS, ret >= 0,
-                        VBE_ERR_BACKEND, ret);
-
-    state_lock_release();
+    (void)state_lock_release();
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -545,16 +647,17 @@ int vitabrightOledGetLevel(void) {
     int ret = state_lock_acquire();
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
 
-    if (!g_is_oled || !g_active || ksceOledGetBrightness == NULL) {
-        state_lock_release();
+    if (!g_is_oled || g_oled.ownership != VBE_OWNERSHIP_ACTIVE ||
+        g_get_brightness == NULL) {
+        (void)state_lock_release();
         EXIT_SYSCALL(state);
         return -1;
     }
 
-    int brightness = ksceOledGetBrightness();
+    int brightness = g_get_brightness();
     if (brightness < 0) {
         brightness_error(VBE_ERR_BACKEND, brightness);
-        state_lock_release();
+        (void)state_lock_release();
         EXIT_SYSCALL(state);
         return brightness;
     }
@@ -570,8 +673,7 @@ int vitabrightOledGetLevel(void) {
         if (level > 14) level = 14;
     }
 
-    brightness_ok();
-    state_lock_release();
+    (void)state_lock_release();
     EXIT_SYSCALL(state);
     return level;
 }
@@ -582,15 +684,16 @@ int vitabrightOledSetLevel(unsigned int level) {
     int ret = state_lock_acquire();
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
 
-    if (!g_is_oled || !g_active || ksceOledSetBrightness == NULL) {
-        state_lock_release();
+    if (!g_is_oled || g_oled.ownership != VBE_OWNERSHIP_ACTIVE ||
+        g_set_brightness == NULL) {
+        (void)state_lock_release();
         EXIT_SYSCALL(state);
         return -1;
     }
     if (level > 16u) {
         status_stage_result(VBE_ERROR_DOMAIN_INPUT, 0,
                             VBE_ERR_INVALID_USER_INPUT, (int)level);
-        state_lock_release();
+        (void)state_lock_release();
         EXIT_SYSCALL(state);
         return -1;
     }
@@ -603,13 +706,13 @@ int vitabrightOledSetLevel(unsigned int level) {
     else if (level == 0u) brightness = 0x10000;
     else brightness = (unsigned int)(0x1000 * (15 - (int)level));
 
-    g_dim_workaround_enabled = 0;
-    ret = ksceOledSetBrightness(brightness);
-    g_dim_workaround_enabled = 1;
-    status_stage_result(VBE_ERROR_DOMAIN_BRIGHTNESS, ret >= 0,
-                        VBE_ERR_BACKEND, ret);
+    g_oled.dim_workaround_enabled = 0;
+    ret = g_set_brightness(brightness);
+    g_oled.dim_workaround_enabled = 1;
+    if (ret < 0) brightness_error(VBE_ERR_BACKEND, ret);
+    else brightness_clear_if(VBE_ERR_BACKEND);
 
-    state_lock_release();
+    (void)state_lock_release();
     EXIT_SYSCALL(state);
     return ret < 0 ? ret : (int)level;
 }
@@ -620,15 +723,15 @@ int vitabrightOledGetLut(unsigned char oledLut[LUT_SIZE]) {
     int ret = state_lock_acquire();
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
 
-    if (!g_is_oled || !g_active) {
-        state_lock_release();
+    if (!g_is_oled || g_oled.ownership != VBE_OWNERSHIP_ACTIVE) {
+        (void)state_lock_release();
         EXIT_SYSCALL(state);
         return -1;
     }
 
     unsigned char snapshot[LUT_SIZE];
     lut_copy(snapshot, lookupNew);
-    state_lock_release();
+    (void)state_lock_release();
     ret = ksceKernelMemcpyKernelToUser((void *)oledLut, snapshot, LUT_SIZE);
     EXIT_SYSCALL(state);
     return ret;
@@ -636,16 +739,17 @@ int vitabrightOledGetLut(unsigned char oledLut[LUT_SIZE]) {
 
 int vitabrightOledSetLut(unsigned char oledLut[LUT_SIZE]) {
     int state;
-    unsigned char candidate[LUT_SIZE];
+    OledCandidate candidate;
     ENTER_SYSCALL(state);
 
-    int ret = ksceKernelMemcpyUserToKernel(candidate, (const void *)oledLut, LUT_SIZE);
-    if (ret < 0 || !lut_is_sane(candidate)) {
+    int ret = ksceKernelMemcpyUserToKernel(candidate.values,
+                                           (const void *)oledLut, LUT_SIZE);
+    if (ret < 0 || !lut_is_sane(candidate.values)) {
         int detail = ret < 0 ? ret : -1;
         if (state_lock_acquire() >= 0) {
             status_stage_result(VBE_ERROR_DOMAIN_INPUT, 0,
                                 VBE_ERR_INVALID_USER_INPUT, detail);
-            state_lock_release();
+            (void)state_lock_release();
         }
         EXIT_SYSCALL(state);
         return detail;
@@ -655,14 +759,16 @@ int vitabrightOledSetLut(unsigned char oledLut[LUT_SIZE]) {
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
     status_stage_result(VBE_ERROR_DOMAIN_INPUT, 1,
                         VBE_ERR_INVALID_USER_INPUT, 0);
-    if (!g_is_oled || !g_active) {
-        state_lock_release();
+    if (!g_is_oled || g_oled.ownership != VBE_OWNERSHIP_ACTIVE) {
+        (void)state_lock_release();
         EXIT_SYSCALL(state);
         return -1;
     }
 
-    ret = replace_candidate(candidate);
-    state_lock_release();
+    vbe_source_identity_copy(&candidate.source, &g_oled.source);
+    candidate.panel_type = g_oled.panel_type;
+    ret = replace_candidate(&candidate);
+    (void)state_lock_release();
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -673,13 +779,13 @@ int vitabrightOledReload(void) {
     int ret = state_lock_acquire();
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
     if (!g_is_oled) {
-        state_lock_release();
+        (void)state_lock_release();
         EXIT_SYSCALL(state);
         return -1;
     }
 
     ret = vitabright_reload_locked();
-    state_lock_release();
+    (void)state_lock_release();
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -689,8 +795,8 @@ int vitabrightOledGetPanelType(void) {
     ENTER_SYSCALL(state);
     int ret = state_lock_acquire();
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
-    int panel = g_is_oled ? g_panel_type : OLED_PANEL_UNKNOWN;
-    state_lock_release();
+    int panel = g_is_oled ? g_oled.panel_type : OLED_PANEL_UNKNOWN;
+    (void)state_lock_release();
     EXIT_SYSCALL(state);
     return panel;
 }

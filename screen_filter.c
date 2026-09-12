@@ -76,9 +76,6 @@ int screen_filter_apply(int is_oled) {
     g_vbe_status.transfer_lut = policy.transfer_state;
 
     if (policy.result == VBE_RESULT_UNSUPPORTED) {
-        /* Unsupported is a truthful capability result, not a runtime fault.
-         * Reject before touching invert so mixed supported/unsupported requests
-         * remain atomic. */
         status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
         return VBE_RESULT_UNSUPPORTED;
     }
@@ -125,7 +122,7 @@ void screen_filter_set_cct(uint16_t cct, int is_oled) {
     (void)is_oled;
 }
 
-void screen_filter_reset(int is_oled) {
+int screen_filter_reset(int is_oled) {
     ScreenFilterParams previous = g_screen_filter;
     ScreenFilterParams neutral = {
         .cct = CCT_DEFAULT,
@@ -136,8 +133,12 @@ void screen_filter_reset(int is_oled) {
         .panel_enhance = 0,
     };
     g_screen_filter = neutral;
-    if (screen_filter_apply(is_oled) < 0)
+    int ret = screen_filter_apply(is_oled);
+    if (ret < 0) {
         g_screen_filter = previous;
+        return ret;
+    }
+    return 0;
 }
 
 int vitabrightFilterGetParams(ScreenFilterParams *out) {
@@ -150,7 +151,7 @@ int vitabrightFilterGetParams(ScreenFilterParams *out) {
     }
 
     ScreenFilterParams snapshot = g_screen_filter;
-    state_lock_release();
+    (void)state_lock_release();
     ret = ksceKernelMemcpyKernelToUser((void *)out, &snapshot, sizeof(snapshot));
     EXIT_SYSCALL(state);
     return ret;
@@ -168,7 +169,7 @@ int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused) 
         if (state_lock_acquire() >= 0) {
             status_stage_result(VBE_ERROR_DOMAIN_INPUT, 0,
                                 VBE_ERR_INVALID_USER_INPUT, detail);
-            state_lock_release();
+            (void)state_lock_release();
         }
         EXIT_SYSCALL(state);
         return detail;
@@ -187,7 +188,7 @@ int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused) 
     g_vbe_status.transfer_lut = policy.transfer_state;
     if (policy.result == VBE_RESULT_UNSUPPORTED) {
         status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
-        state_lock_release();
+        (void)state_lock_release();
         EXIT_SYSCALL(state);
         return VBE_RESULT_UNSUPPORTED;
     }
@@ -197,7 +198,7 @@ int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused) 
     ret = screen_filter_apply(g_is_oled);
     if (ret < 0) g_screen_filter = previous;
 
-    state_lock_release();
+    (void)state_lock_release();
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -212,22 +213,12 @@ int vitabrightFilterReset(int is_oled_unused) {
         return ret;
     }
 
-    ScreenFilterParams previous = g_screen_filter;
-    ScreenFilterParams neutral = {
-        .cct = CCT_DEFAULT,
-        .gamma = 1.0f,
-        .contrast = 1.0f,
-        .brightness = 0.0f,
-        .invert = 0,
-        .panel_enhance = 0,
-    };
-    g_screen_filter = neutral;
-    ret = screen_filter_apply(g_is_oled);
-    if (ret < 0) g_screen_filter = previous;
-    else status_stage_result(VBE_ERROR_DOMAIN_INPUT, 1,
-                             VBE_ERR_INVALID_USER_INPUT, 0);
+    ret = screen_filter_reset(g_is_oled);
+    if (ret >= 0)
+        status_stage_result(VBE_ERROR_DOMAIN_INPUT, 1,
+                            VBE_ERR_INVALID_USER_INPUT, 0);
 
-    state_lock_release();
+    (void)state_lock_release();
     EXIT_SYSCALL(state);
     return ret;
 }

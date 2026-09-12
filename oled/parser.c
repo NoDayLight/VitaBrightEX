@@ -108,13 +108,12 @@ int parse_lut(int panel_type, unsigned char out[LUT_SIZE],
             if (error_code != NULL) *error_code = source_error_code(source);
             return source.error;
         }
-        /* Only explicit NOT_FOUND reaches the next documented candidate. */
     }
 
     source_path[0] = '\0';
     if (error_code != NULL) *error_code = VBE_ERR_SOURCE_IO;
     LOG("[LUT] All documented LUT sources absent for panel %d\n", panel_type);
-    return SCE_ERROR_ERRNO_ENOENT;
+    return VBE_SCE_IO_ERROR_NOT_FOUND;
 }
 
 int parse_lut_override(const char *path, unsigned char out[LUT_SIZE],

@@ -12,6 +12,7 @@
 #include "screen_filter.h"
 #include "state_lock.h"
 #include "status.h"
+#include "transaction_core.h"
 
 unsigned int sw_version = 0;
 int g_is_oled = 0;
@@ -39,11 +40,10 @@ int module_start(SceSize argc, const void *args) {
     int lock_ret = state_lock_init();
     if (lock_ret < 0) {
         g_vbe_status.state_lock = VBE_CAP_FAILED;
-        status_set_error_domain(VBE_ERROR_DOMAIN_SYNC,
-                                VBE_ERR_SYNCHRONIZATION, lock_ret);
         return SCE_KERNEL_START_SUCCESS;
     }
     g_vbe_status.state_lock = VBE_CAP_ACTIVE;
+    status_clear_error_domain(VBE_ERROR_DOMAIN_SYNC);
 
     int config_ret = config_load();
     if (config_ret < 0)
@@ -65,18 +65,12 @@ int module_start(SceSize argc, const void *args) {
     else if (filter_ret < 0)
         LOG("[CORE] filter runtime failure: 0x%08X\n", filter_ret);
 
-    /* Fail-open module boundary: diagnostics/capabilities retain each stage's
-     * result, but an optional/backend failure never blocks LiveArea. */
     return SCE_KERNEL_START_SUCCESS;
 }
 
 int vitabright_reload_locked(void) {
     int result = VBE_RESULT_OK;
 
-    /* Each stage owns its own commit and error domain. A config success remains
-     * committed even if a later brightness/color/filter stage fails. A config
-     * failure leaves the previous committed config in place while later stages
-     * can still operate fail-open from that known state. */
     int config_ret = config_load();
     keep_first_result(&result, config_ret);
 
@@ -103,7 +97,7 @@ int vitabrightReload(void) {
     }
 
     int result = vitabright_reload_locked();
-    state_lock_release();
+    result = state_lock_release_result(result);
     EXIT_SYSCALL(state);
     return result;
 }
@@ -112,12 +106,28 @@ int module_stop(SceSize argc, const void *args) {
     (void)argc;
     (void)args;
 
-    int locked = state_lock_acquire() >= 0;
-    screen_filter_reset(g_is_oled);
-    color_space_shutdown();
-    if (g_is_oled) oled_disable_hooks();
-    else lcd_disable_hooks();
-    if (locked) state_lock_release();
-    state_lock_destroy();
+    if (state_lock_begin_shutdown() < 0)
+        return SCE_KERNEL_STOP_FAIL;
+
+    VbeStopAccumulator stop;
+    vbe_stop_init(&stop);
+
+    vbe_stop_stage(&stop, screen_filter_reset(g_is_oled));
+    vbe_stop_stage(&stop, color_space_shutdown());
+    vbe_stop_stage(&stop, g_is_oled ? oled_disable_hooks() : lcd_disable_hooks());
+
+    if (!vbe_stop_can_unload(&stop)) {
+        if (state_lock_cancel_shutdown() < 0)
+            g_vbe_status.state_lock = VBE_CAP_FAILED;
+        return SCE_KERNEL_STOP_FAIL;
+    }
+
+    if (state_lock_finish_shutdown() < 0) {
+        g_vbe_status.state_lock = VBE_CAP_FAILED;
+        return SCE_KERNEL_STOP_FAIL;
+    }
+
+    g_vbe_status.state_lock = VBE_CAP_INACTIVE;
+    status_clear_error_domain(VBE_ERROR_DOMAIN_SYNC);
     return SCE_KERNEL_STOP_SUCCESS;
 }
