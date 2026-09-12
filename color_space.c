@@ -82,17 +82,7 @@ static int resolve_locked(void) {
     return 0;
 }
 
-static int set_locked(int mode) {
-    if (mode != 0 && mode != 1) {
-        status_stage_result(VBE_ERROR_DOMAIN_INPUT, 0,
-                            VBE_ERR_INVALID_USER_INPUT, mode);
-        return -1;
-    }
-
-    /* Input validity is independent of later hardware capability. */
-    status_stage_result(VBE_ERROR_DOMAIN_INPUT, 1,
-                        VBE_ERR_INVALID_USER_INPUT, 0);
-
+static int set_mode_locked(int mode) {
     int ret = resolve_locked();
     if (ret < 0) {
         color_error(ret);
@@ -149,10 +139,10 @@ int color_space_apply_config(void) {
     }
 
     if (requested)
-        return set_locked(1);
+        return set_mode_locked(1);
 
     if (g_changed)
-        return set_locked(g_original_mode);
+        return set_mode_locked(g_original_mode);
 
     status_set_capability(VBE_CAP_INACTIVE);
     status_clear_error_domain(VBE_ERROR_DOMAIN_COLOR_SPACE);
@@ -214,7 +204,18 @@ int vitabrightColorSpaceSetMode(int mode) {
         return ret;
     }
 
-    ret = set_locked(mode);
+    if (mode != 0 && mode != 1) {
+        status_stage_result(VBE_ERROR_DOMAIN_INPUT, 0,
+                            VBE_ERR_INVALID_USER_INPUT, mode);
+        state_lock_release();
+        EXIT_SYSCALL(state);
+        return -1;
+    }
+
+    status_stage_result(VBE_ERROR_DOMAIN_INPUT, 1,
+                        VBE_ERR_INVALID_USER_INPUT, 0);
+    ret = set_mode_locked(mode);
+
     state_lock_release();
     EXIT_SYSCALL(state);
     return ret;
