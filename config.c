@@ -10,7 +10,6 @@ static const VitaBrightConfig k_default_config = {
     .color_b_bias             = 0,
     .night_mode_enabled       = 0,
     .night_mode_threshold     = 6,
-    /* Optional LCD colour mutations are deliberately neutral by default. */
     .lcd_color_space_mode     = 0,
     .lcd_rgb_range_mode       = 0,
     .lcd_saturation_boost     = 0,
@@ -35,7 +34,8 @@ VitaBrightConfig g_config = {
 static int cfg_streq(const char *a, const char *b) {
     while (*a && *b) {
         if (*a != *b) return 0;
-        a++; b++;
+        a++;
+        b++;
     }
     return *a == '\0' && *b == '\0';
 }
@@ -161,17 +161,16 @@ static void cfg_validate(VitaBrightConfig *cfg) {
 int config_load(void) {
     VitaBrightConfig candidate = k_default_config;
     SceUID fd = ksceIoOpen(CFG_FILE1, SCE_O_RDONLY, 6);
-    const char *loaded_path = CFG_FILE1;
 
-    /* Precedence is explicit: ur0 wins; ux0 is fallback only. */
-    if (fd < 0) {
-        loaded_path = CFG_FILE2;
+    if (fd >= 0) {
+        LOG("[CFG] Loaded from %s\n", CFG_FILE1);
+    } else {
         fd = ksceIoOpen(CFG_FILE2, SCE_O_RDONLY, 6);
+        if (fd >= 0) LOG("[CFG] Loaded from %s\n", CFG_FILE2);
     }
 
     if (fd >= 0) {
         char line[CFG_MAX_LINE];
-        LOG("[CFG] Loaded from %s\n", loaded_path);
         while (1) {
             int n = cfg_readline(fd, line, sizeof(line));
             if (n < 0) break;
@@ -200,6 +199,6 @@ int config_load(void) {
     }
 
     cfg_validate(&candidate);
-    g_config = candidate; /* one commit point: deleted keys revert to defaults */
+    g_config = candidate;
     return 0;
 }
