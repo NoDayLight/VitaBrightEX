@@ -2,14 +2,12 @@
 
 #include <stdint.h>
 
-/* Hardware selected once at boot. */
 typedef enum {
     VBE_HW_UNKNOWN = 0,
     VBE_HW_OLED = 1,
     VBE_HW_LCD = 2,
 } VbeHardware;
 
-/* Capability state is explicit: unavailable is different from failed. */
 typedef enum {
     VBE_CAP_UNKNOWN = 0,
     VBE_CAP_UNAVAILABLE = 1,
@@ -30,13 +28,19 @@ typedef enum {
     VBE_ERR_POWER_HOOK = 7,
     VBE_ERR_INVALID_USER_INPUT = 8,
     VBE_ERR_DISPLAY_CAPABILITY = 9,
+    VBE_ERR_LAYOUT_MISMATCH = 10,
+    VBE_ERR_SYNCHRONIZATION = 11,
+    VBE_ERR_LUT_ROLLBACK = 12,
 } VbeError;
 
 typedef struct {
     uint32_t abi_version;
     uint32_t firmware;
     int hardware;
+    int panel_type;
 
+    int state_lock;
+    int firmware_layout;
     int brightness_core;
     int brightness_table;
     int brightness_hook;
