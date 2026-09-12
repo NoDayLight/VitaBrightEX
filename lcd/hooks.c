@@ -3,6 +3,7 @@
 #include "../color_space.h"
 #include "../config.h"
 #include "../log.h"
+#include "../lut_parser_core.h"
 #include "../main.h"
 #include "../state_lock.h"
 #include "../status.h"
@@ -19,6 +20,7 @@
 #define NID_POWER_SET_MAX_BRIGHT 0x77027B6B
 #define LCD_DIMMED_VALUE         25u
 #define LCD_SOURCE_PATH_MAX      128
+#define LCD_READ_CHUNK           256
 
 static const uint8_t lcd_brightness_default[LCD_LUT_LEVELS] = {
     1, 3, 5, 8, 13, 20, 29, 41, 57, 76, 95, 116, 137, 161, 190, 220, 255
@@ -52,39 +54,10 @@ static void path_copy(char dst[LCD_SOURCE_PATH_MAX], const char *src) {
     dst[i] = '\0';
 }
 
-static int lut_is_valid(const uint8_t values[LCD_LUT_LEVELS]) {
-    for (int i = 1; i < LCD_LUT_LEVELS; ++i) {
-        if (values[i] < values[i - 1]) return 0;
-    }
-    return 1;
-}
-
 static int lcd_brightness_to_index(unsigned int brightness) {
     if (brightness <= 2u) return 0;
     if (brightness >= 0x10000u) return LCD_LUT_LEVELS - 1;
     return (int)(16u * (brightness - 2u) / 65534u);
-}
-
-static int parse_decimal_line(const char *line, int len, uint8_t *out) {
-    int i = 0;
-    while (i < len && (line[i] == ' ' || line[i] == '\t')) ++i;
-    if (i == len || line[i] == '#') return 1;
-
-    unsigned int value = 0;
-    int digits = 0;
-    while (i < len && line[i] >= '0' && line[i] <= '9') {
-        value = value * 10u + (unsigned int)(line[i] - '0');
-        if (value > 255u) return -1;
-        ++i;
-        ++digits;
-    }
-    if (!digits) return -1;
-
-    while (i < len && (line[i] == ' ' || line[i] == '\t')) ++i;
-    if (i < len && line[i] != '#') return -1;
-
-    *out = (uint8_t)value;
-    return 0;
 }
 
 static int lcd_parse_lut_file(const char *path,
@@ -97,49 +70,33 @@ static int lcd_parse_lut_file(const char *path,
     }
     *opened = 1;
 
-    int count = 0;
-    char line[64];
-    int li = 0;
-    int malformed = 0;
+    VbeLcdLutParser parser;
+    vbe_lcd_lut_parser_init(&parser, out);
+    uint8_t buffer[LCD_READ_CHUNK];
+    int ret = 0;
 
     while (1) {
-        char c = 0;
-        int r = ksceIoRead(fd, &c, 1);
-        int at_eof = r <= 0;
-
-        if (!at_eof && c == '\r') continue;
-
-        if (at_eof || c == '\n') {
-            if (li > 0) {
-                uint8_t value = 0;
-                int parsed = parse_decimal_line(line, li, &value);
-                if (parsed < 0) {
-                    malformed = 1;
-                    break;
-                }
-                if (parsed == 0) {
-                    if (count >= LCD_LUT_LEVELS) {
-                        malformed = 1;
-                        break;
-                    }
-                    out[count++] = value;
-                }
-            }
-            li = 0;
-            if (at_eof) break;
-            continue;
-        }
-
-        if (li >= (int)sizeof(line)) {
-            malformed = 1;
+        int r = ksceIoRead(fd, buffer, sizeof(buffer));
+        if (r < 0) {
+            ret = r;
             break;
         }
-        line[li++] = c;
+        if (r == 0) {
+            ret = vbe_lcd_lut_parser_finish(&parser);
+            break;
+        }
+        for (int i = 0; i < r; ++i) {
+            if (vbe_lcd_lut_parser_feed(&parser, buffer[i]) < 0) {
+                ret = -1;
+                break;
+            }
+        }
+        if (ret < 0) break;
     }
 
-    ksceIoClose(fd);
-    if (malformed || count != LCD_LUT_LEVELS || !lut_is_valid(out)) return -1;
-    return 0;
+    int close_ret = ksceIoClose(fd);
+    if (ret == 0 && close_ret < 0) ret = close_ret;
+    return ret;
 }
 
 static int lcd_load_disk_candidate(uint8_t out[LCD_LUT_LEVELS],
@@ -158,8 +115,6 @@ static int lcd_load_disk_candidate(uint8_t out[LCD_LUT_LEVELS],
     }
 
     lut_copy(out, lcd_brightness_default);
-    /* With no disk LUT, a future explicit Save creates the authoritative ur0
-     * file. Until then the safe built-in table remains the live source. */
     path_copy(source, LCD_LUT_FILE1);
     return 0;
 }
@@ -203,13 +158,18 @@ int hook_ksceLcdSetBrightness(unsigned int brightness) {
 
     unsigned int old_brightness = (unsigned int)old_raw;
     int old_index = lcd_brightness_to_index(old_brightness);
+    uint8_t table_value = lcd_brightness_values[old_index];
+    LOG("[LCD:DIM] req=1 old_raw=%u index=%d table=%u allow=%d\n",
+        old_brightness, old_index, (unsigned)table_value,
+        old_brightness >= 2u && table_value >= LCD_DIMMED_VALUE);
 
-    if (old_brightness >= 2u && lcd_brightness_values[old_index] >= LCD_DIMMED_VALUE)
+    if (old_brightness >= 2u && table_value >= LCD_DIMMED_VALUE)
         return TAI_CONTINUE(int, lcd_set_brightness_ref, brightness);
     return TAI_CONTINUE(int, lcd_set_brightness_ref, old_brightness);
 }
 
 int hook_kscePowerSetDisplayMaxBrightnessForLcd(int limit) {
+    LOG("[LCD:POWER] max brightness request=%d forced=65536\n", limit);
     (void)limit;
     if (power_set_max_bright_ref == 0) return 0;
     return TAI_CONTINUE(int, power_set_max_bright_ref, 0x10000);
@@ -261,7 +221,7 @@ static int lcd_resolve_core(tai_module_info_t *info) {
 
 static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
     if (g_lcd_hooks_active) return 0;
-    if (!lut_is_valid(candidate)) return -1;
+    if (!vbe_lcd_lut_values_valid(candidate)) return -1;
 
     tai_module_info_t info;
     int ret = lcd_resolve_core(&info);
@@ -348,7 +308,7 @@ static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
 }
 
 static int lcd_replace_candidate(const uint8_t candidate[LCD_LUT_LEVELS]) {
-    if (!lut_is_valid(candidate)) return -1;
+    if (!vbe_lcd_lut_values_valid(candidate)) return -1;
 
     uint8_t previous[LCD_LUT_LEVELS];
     int had_previous = g_lcd_hooks_active;
@@ -537,7 +497,7 @@ int vitabrightLcdSetBrightnessValues(uint8_t in[LCD_LUT_LEVELS]) {
     ENTER_SYSCALL(state);
 
     int ret = ksceKernelMemcpyUserToKernel(candidate, (const void *)in, sizeof(candidate));
-    if (ret < 0 || !lut_is_valid(candidate)) {
+    if (ret < 0 || !vbe_lcd_lut_values_valid(candidate)) {
         int detail = ret < 0 ? ret : -1;
         if (state_lock_acquire() >= 0) {
             status_set_error(VBE_ERR_INVALID_USER_INPUT, detail);
