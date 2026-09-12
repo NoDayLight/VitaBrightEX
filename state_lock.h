@@ -9,3 +9,4 @@ int state_lock_begin_shutdown(void);
 int state_lock_cancel_shutdown(void);
 int state_lock_finish_shutdown(void);
 int state_lock_exists(void);
+int state_lock_lifecycle(void);
