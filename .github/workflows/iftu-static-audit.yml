@@ -29,9 +29,13 @@ jobs:
           sha256sum PSP2UPDAT-365.PUP
 
       - name: Install host prerequisites
+        shell: bash
         run: |
+          set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y xvfb unzip p7zip-full binutils file
+          sudo apt-get install -y \
+            xvfb unzip p7zip-full binutils file \
+            qt6-base-dev libqt6svg6 libqt6multimedia6 libsdl2-2.0-0
 
       - name: Download current Vita3K Linux build
         shell: bash
@@ -41,11 +45,16 @@ jobs:
             https://github.com/Vita3K/Vita3K/releases/download/continuous/ubuntu-latest.zip \
             -o vita3k.zip
           unzip -q vita3k.zip -d vita3k-bin
-          find vita3k-bin -maxdepth 3 -type f -printf '%p\n'
-          exe="$(find vita3k-bin -type f -name 'Vita3K' -o -name 'vita3k' | head -n1)"
+          exe="$(find vita3k-bin -type f \( -name 'Vita3K' -o -name 'vita3k' \) | head -n1)"
           test -n "$exe"
           chmod +x "$exe"
           printf '%s\n' "$exe" > vita3k-exe.txt
+          echo '=== Vita3K dynamic dependencies ==='
+          ldd "$exe"
+          if ldd "$exe" | grep -q 'not found'; then
+            echo 'Vita3K has unresolved host libraries' >&2
+            exit 1
+          fi
 
       - name: Install 3.65 into isolated Vita3K filesystem
         shell: bash
@@ -55,31 +64,31 @@ jobs:
           mkdir -p isolated-home isolated-config
           export HOME="$PWD/isolated-home"
           export QT_QPA_PLATFORM=offscreen
-          set +e
-          xvfb-run -a "$exe" --firmware "$PWD/PSP2UPDAT-365.PUP" --config-location "$PWD/isolated-config" >vita3k-install.log 2>&1
-          rc=$?
-          set -e
+          xvfb-run -a "$exe" \
+            --firmware "$PWD/PSP2UPDAT-365.PUP" \
+            --config-location "$PWD/isolated-config" \
+            >vita3k-install.log 2>&1
           cat vita3k-install.log
-          echo "vita3k rc=$rc"
-          find "$PWD" "$HOME" -type f \( -iname '*lowio*' -o -iname '*sceLowio*' \) -print | tee lowio-paths.txt
+          find "$PWD" "$HOME" -type f \
+            \( -iname '*lowio*.skprx' -o -iname '*sceLowio*.skprx' \) \
+            -print | tee lowio-paths.txt
           test -s lowio-paths.txt
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '2.7'
+          test "$(wc -l < lowio-paths.txt)" -eq 1
 
       - name: Decrypt only SceLowio SELF to ELF
         shell: bash
         run: |
           set -euxo pipefail
-          python -m pip install 'pycryptodome<3.10' enum34
           git clone --depth 1 https://github.com/RealYoti/sceutils.git sceutils-audit
           cp sceutils-audit/keys_external.py sceutils-audit/keys.py
-          raw="$(head -n1 lowio-paths.txt)"
+          raw="$(cat lowio-paths.txt)"
           echo "raw SceLowio: $raw"
           file "$raw"
           sha256sum "$raw"
-          python sceutils-audit/self2elf.py -i "$raw" -o SceLowio-365.elf
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            python:2.7-buster \
+            bash -lc "pip install --disable-pip-version-check 'pycryptodome<3.10' enum34 && python sceutils-audit/self2elf.py -i '$raw' -o SceLowio-365.elf"
           file SceLowio-365.elf
           sha256sum SceLowio-365.elf
           readelf -h -l SceLowio-365.elf
@@ -95,7 +104,7 @@ jobs:
           set -euxo pipefail
           bash vdpm/bootstrap-vitasdk.sh
           echo "$VITASDK/bin" >> "$GITHUB_PATH"
-          find "$VITASDK/bin" -maxdepth 1 -type f -printf '%f\n' | sort | grep -E 'vita|arm-vita' | head -n 120
+          find "$VITASDK/bin" -maxdepth 1 -type f -printf '%f\n' | sort | grep -E 'vita|arm-vita' | head -n 160
 
       - name: Emit textual SceLowio audit evidence
         shell: bash
@@ -104,16 +113,16 @@ jobs:
           echo '=== ELF SECTIONS ==='
           arm-vita-eabi-readelf -SW SceLowio-365.elf
           echo '=== ELF SYMBOLS ==='
-          arm-vita-eabi-readelf -sW SceLowio-365.elf | head -n 200
+          arm-vita-eabi-readelf -sW SceLowio-365.elf | head -n 240
           echo '=== CANDIDATE TOOL HELP ==='
-          for t in vita-elf-info vita-nid-check vita-elf-create; do
+          for t in vita-elf-info vita-nid-check vita-elf-create vita-elf-export; do
             if command -v "$t" >/dev/null 2>&1; then
               echo "--- $t ---"
-              "$t" --help 2>&1 | head -n 120 || true
+              "$t" --help 2>&1 | head -n 160 || true
             fi
           done
           echo '=== DISASSEMBLY HEAD ==='
-          arm-vita-eabi-objdump -drwC SceLowio-365.elf | head -n 400
+          arm-vita-eabi-objdump -drwC SceLowio-365.elf | head -n 500
 
       - name: Remove proprietary firmware bytes before job completion
         if: always()
