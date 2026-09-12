@@ -54,6 +54,20 @@ static const char *cap(int s) {
 static int usable(int s) { return s == VBE_CAP_ACTIVE || s == VBE_CAP_INACTIVE; }
 static void set_msg(const char *s) { snprintf(msg, sizeof(msg), "%s", s); }
 
+static int brightness_operational(void) {
+    return status.brightness_core == VBE_CAP_ACTIVE &&
+           status.brightness_table == VBE_CAP_ACTIVE &&
+           status.brightness_hook == VBE_CAP_ACTIVE &&
+           status.power_limit_hook == VBE_CAP_ACTIVE;
+}
+
+static int brightness_recovery_failed(void) {
+    if (!brightness_operational()) return 1;
+    if (!diagnostics_ok) return 0;
+    return diagnostics.brightness_error == VBE_ERR_LUT_ROLLBACK ||
+           diagnostics.brightness_error == VBE_ERR_RESOURCE_RELEASE;
+}
+
 static int refresh(void) {
     memset(&status, 0, sizeof(status));
     memset(&diagnostics, 0, sizeof(diagnostics));
@@ -89,10 +103,18 @@ static int refresh(void) {
 }
 
 static void save_lut(void) {
-    if (!lut_ok || status.brightness_table != VBE_CAP_ACTIVE) { set_msg("No committed brightness table is available to persist."); return; }
+    if (!lut_ok || status.brightness_table != VBE_CAP_ACTIVE) {
+        set_msg("No committed brightness table is available to persist.");
+        return;
+    }
     int r = status.hardware == VBE_HW_OLED ? vitabrightOledPersistLut() : status.hardware == VBE_HW_LCD ? vitabrightLcdPersistBrightnessValues() : -1;
-    set_msg(r < 0 ? "Atomic LUT persistence failed; existing file retained." : "Committed LUT atomically persisted to its authoritative source.");
     refresh();
+    if (r == VBE_RESULT_NO_FILE_SOURCE)
+        set_msg("Compiled fallback LUT has no authoritative file to overwrite.");
+    else if (r < 0)
+        set_msg("Atomic LUT persistence failed; see brightness diagnostics.");
+    else
+        set_msg("Committed LUT atomically persisted to its authoritative source.");
 }
 
 static void toggle_invert(void) {
@@ -100,17 +122,32 @@ static void toggle_invert(void) {
     ScreenFilterParams p = filter;
     p.cct = CCT_DEFAULT; p.gamma = 1.0f; p.contrast = 1.0f; p.brightness = 0.0f; p.panel_enhance = 0; p.invert = !p.invert;
     int r = vitabrightFilterSetParams(&p, status.hardware == VBE_HW_OLED);
-    if (r == VBE_RESULT_UNSUPPORTED) set_msg("Requested filter capability is unsupported.");
-    else set_msg(r < 0 ? "Invert failed; previous state retained." : p.invert ? "Invert enabled." : "Invert disabled.");
     refresh();
+    if (r == VBE_RESULT_UNSUPPORTED) set_msg("Requested filter capability is unsupported.");
+    else if (r < 0) set_msg("Invert operation failed; inspect filter diagnostics.");
+    else set_msg(p.invert ? "Invert enabled." : "Invert disabled.");
 }
 
 static void toggle_color(void) {
     if (!color_ok || !usable(status.display_color_space)) { set_msg("Panel color-space control is unavailable."); return; }
     int wanted = color_mode ? 0 : 1;
     int r = vitabrightColorSpaceSetMode(wanted);
-    set_msg(r < 0 ? "Color-space write/read-back failed; previous state retained." : wanted ? "Alternate panel color-space enabled." : "Panel color-space mode 0 selected.");
     refresh();
+    if (r < 0) set_msg("Color-space write/read-back failed; inspect diagnostics.");
+    else set_msg(wanted ? "Alternate panel color-space enabled." : "Panel color-space mode 0 selected.");
+}
+
+static void report_lut_result(int r, int is_oled) {
+    refresh();
+    if (r >= 0) {
+        set_msg(is_oled ? "OLED LUT updated in RAM; Square atomically persists it."
+                        : "LCD LUT updated in RAM; Square atomically persists it.");
+        return;
+    }
+    if (brightness_recovery_failed())
+        set_msg("LUT update failed and recovery failed; backend is degraded.");
+    else
+        set_msg("LUT update rejected; previous committed table was restored.");
 }
 
 static void edit(int delta) {
@@ -119,22 +156,19 @@ static void edit(int delta) {
         int v = (int)oled_lut[cursor] + delta;
         if (v < 0) v = 0;
         if (v > 255) v = 255;
-        unsigned char old = oled_lut[cursor];
         oled_lut[cursor] = (unsigned char)v;
-        if (vitabrightOledSetLut(oled_lut) < 0) { oled_lut[cursor] = old; set_msg("OLED LUT update rejected; previous table retained."); }
-        else set_msg("OLED LUT updated in RAM; Square atomically persists it.");
+        int r = vitabrightOledSetLut(oled_lut);
+        report_lut_result(r, 1);
     } else if (status.hardware == VBE_HW_LCD) {
         int v = (int)lcd_lut[cursor] + delta;
         int lo = cursor ? lcd_lut[cursor - 1] : 0;
         int hi = cursor == LCD_LUT_LEVELS - 1 ? 255 : lcd_lut[cursor + 1];
         if (v < lo) v = lo;
         if (v > hi) v = hi;
-        unsigned char old = lcd_lut[cursor];
         lcd_lut[cursor] = (unsigned char)v;
-        if (vitabrightLcdSetBrightnessValues(lcd_lut) < 0) { lcd_lut[cursor] = old; set_msg("LCD LUT update rejected; previous table retained."); }
-        else set_msg("LCD LUT updated in RAM; Square atomically persists it.");
+        int r = vitabrightLcdSetBrightnessValues(lcd_lut);
+        report_lut_result(r, 0);
     }
-    refresh();
 }
 
 static void line(vita2d_pgf *font, float y, unsigned c, const char *s) { vita2d_pgf_draw_text(font, 24.0f, y, c, 1.0f, s); }
