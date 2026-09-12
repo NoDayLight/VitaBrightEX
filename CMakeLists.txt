@@ -30,6 +30,8 @@ add_executable(vitabright
     status.h
     state_lock.c
     state_lock.h
+    color_space.c
+    color_space.h
     screen_filter.c
     screen_filter.h
     taihen_extra.h
