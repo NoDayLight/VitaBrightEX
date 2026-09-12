@@ -12,6 +12,11 @@ typedef enum {
 } VbePersistenceStage;
 
 typedef struct {
+    int fd_owned;
+    int temp_owned;
+} VbePersistenceState;
+
+typedef struct {
     int stage;
     int error;
     int cleanup_stage;
@@ -29,5 +34,13 @@ typedef struct {
     int (*rename_temp)(void *context);
     int (*cleanup_temp)(void *context);
 } VbePersistenceOps;
+
+void vbe_persistence_state_init(VbePersistenceState *state);
+int vbe_persistence_state_can_open(const VbePersistenceState *state);
+void vbe_persistence_state_opened(VbePersistenceState *state);
+void vbe_persistence_state_closed(VbePersistenceState *state);
+void vbe_persistence_state_renamed(VbePersistenceState *state);
+void vbe_persistence_state_temp_removed(VbePersistenceState *state);
+int vbe_persistence_state_clean(const VbePersistenceState *state);
 
 VbePersistenceOutcome vbe_persistence_execute(const VbePersistenceOps *ops);
