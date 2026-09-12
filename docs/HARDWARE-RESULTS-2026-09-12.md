@@ -30,7 +30,21 @@ last_error_detail=-1
 
 Fail-open behavior itself passed: the plugin and status ABI remained operational and LiveArea loaded while the brightness backend stayed inactive.
 
-The permanent correction replaces fixed physical-line LUT parsing with the same streaming pure-C grammar used by production and host CI. Full-line comments are discarded without buffering; actual data remains strict. OLED had the same fixed-line class (`PARSER_LINE_MAX 160`) and config parsing could split an overlong line into a second fake directive; both were audited/fixed as part of the same change.
+## Software correction checkpoint after the hardware finding
+
+The permanent correction is broader than the single 77-character comment that triggered the failure:
+
+- LCD and OLED LUT parsing use portable streaming production C state machines rather than fixed physical-line buffers.
+- the same production parser sources are compiled and executed by host CI against the exact source/package bytes;
+- one shared newline decoder accepts LF and CRLF only, rejecting interior or lone CR rather than silently deleting it;
+- config loading now feeds a portable production parser core that is also executed by host CI;
+- config numeric values are exact-token parsed, so suffix garbage is rejected rather than acquiring a prefix value accidentally;
+- config long comments, overlong known directives, duplicate keys, missing `=`, unknown keys, EOF and CRLF behavior are behaviorally tested;
+- deployment CMake now uses canonical absolute VitaShell FTP paths (`//ur0:` / `//ux0:`);
+- the matching editor and plugin expose build IDs generated from the build checkout and show `MATCH`/`MISMATCH` on-device;
+- `VitaBrightStatus` remains ABI v2, while additive diagnostics ABI v1 retains independent config/brightness/color/filter/input/synchronization error domains so unrelated successful operations cannot erase unresolved errors.
+
+None of these software changes are counted as new hardware passes. A new release-artifact cold boot is still required.
 
 ## 3.65 SceLcd runtime layout evidence: PASS
 
@@ -74,19 +88,21 @@ Both reloaded with backend/layout/hooks active and error 0. Stock entry 0 produc
 
 At a real mid system-brightness setting, inactivity visibly dimmed the screen and activity restored it normally. At very low extended levels no visible dim was observed, consistent with the anti-paradoxical-brightening threshold (`table value < 25`).
 
-Maximum system brightness remains explicitly unclosed. Source logic predicts that a genuine `brightness == 1` inactivity request at maximum maps to table value 255 and should be allowed. The diagnostic build now logs the requested dim, prior raw brightness, derived table index/value and allow decision, plus ScePower max-brightness requests. Do not mark Gate A2 complete until actual minimum/mid/maximum slider positions are tested independently of the editor cursor.
+Maximum system brightness remains explicitly unclosed. Source logic predicts that a genuine `brightness == 1` inactivity request at maximum maps to table value 255 and should be allowed. The diagnostic build logs the requested dim, prior raw brightness, derived table index/value and allow decision, plus ScePower max-brightness requests. Do not mark Gate A2 complete until actual minimum/mid/maximum slider positions are tested independently of the editor cursor.
 
-## Editor terminology
+## Editor terminology and component provenance
 
-The editor cursor indexes the LUT; it is not the current Vita system brightness. Hardware testing exposed that `LCD brightness level X/16` was ambiguous. The intended UI wording for corrected artifacts is `LCD LUT entry X/16`.
+The editor cursor indexes the LUT; it is not current Vita system brightness. Corrected editor artifacts label it `LCD LUT entry X/16`.
+
+The editor is a separate installed Vita application. Replacing `ur0:tai/vitabright.skprx`, LUT or config files does not update it. Hardware checkpoints that rely on current wording, diagnostics ABI v1 or build provenance must install the matching VPK. The current development editor displays an 8-character plugin build ID, its own build ID, and `MATCH`/`MISMATCH`.
 
 ## Still pending before wider compatibility testing
 
-1. Fresh cold boot with the normal commented packaged LUT on the corrected parser build; backend must be active directly at boot with error 0, without Circle/reload.
+1. Install the matching corrected editor and release kernel-side bundle, then fresh-cold-boot with the normal commented packaged LUT. Before any Circle/reload action, require component `MATCH`, active layout/core/table/hooks, `last_error=0`, and zero unresolved diagnostics domains.
 2. Live LUT edit -> Square kernel-authoritative persistence -> reload -> reboot exact-value persistence.
-3. Malformed authoritative file and rollback/error paths.
+3. Malformed authoritative file and rollback/error paths, including missing-preferred/fallback versus present-malformed/no-fallback behavior.
 4. Hardware invert and panel color-space read-back/restore.
-5. Explicit suspend/resume.
-6. ioPlus, VitaGrafix, then exact normal plugin-stack restoration.
+5. Explicit suspend/resume and true maximum-slider inactivity behavior.
+6. ioPlus, VitaGrafix, then exact normal plugin-stack restoration from the preserved known-good config backup.
 
 PR #1 remains draft.
