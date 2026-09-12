@@ -29,11 +29,13 @@ static void resolution_reset(void) {
     g_changed = 0;
 }
 
-/* Historical ABI note: status field lcd_color_space is retained at the same
- * struct offset for binary compatibility, but in v1.4 it reports the selected
- * panel's colour-space capability (LCD or OLED). */
 static void status_set_capability(int state) {
     g_vbe_status.lcd_color_space = state;
+}
+
+static void color_error(int detail) {
+    status_set_error_domain(VBE_ERROR_DOMAIN_COLOR_SPACE,
+                            VBE_ERR_DISPLAY_CAPABILITY, detail);
 }
 
 static int resolve_locked(void) {
@@ -64,14 +66,11 @@ static int resolve_locked(void) {
     }
 
     int mode = g_get_mode();
-    /* Only the independently observed 0/1 panel modes are exposed.  If a
-     * firmware reports another state, fail closed rather than guessing its
-     * semantics or overwriting it. */
     if (mode < 0 || mode > 1) {
         int detail = mode < 0 ? mode : -mode;
         resolution_reset();
         status_set_capability(VBE_CAP_FAILED);
-        status_set_error(VBE_ERR_DISPLAY_CAPABILITY, detail);
+        color_error(detail);
         return detail ? detail : -1;
     }
 
@@ -85,7 +84,8 @@ static int resolve_locked(void) {
 
 static int set_locked(int mode) {
     if (mode != 0 && mode != 1) {
-        status_set_error(VBE_ERR_INVALID_USER_INPUT, mode);
+        status_set_error_domain(VBE_ERROR_DOMAIN_INPUT,
+                                VBE_ERR_INVALID_USER_INPUT, mode);
         return -1;
     }
 
@@ -95,7 +95,7 @@ static int set_locked(int mode) {
     int current = g_get_mode();
     if (current < 0 || current > 1) {
         status_set_capability(VBE_CAP_FAILED);
-        status_set_error(VBE_ERR_DISPLAY_CAPABILITY, current < 0 ? current : -current);
+        color_error(current < 0 ? current : -current);
         return current < 0 ? current : -1;
     }
 
@@ -103,7 +103,7 @@ static int set_locked(int mode) {
         ret = g_set_mode(mode);
         if (ret < 0) {
             status_set_capability(VBE_CAP_FAILED);
-            status_set_error(VBE_ERR_DISPLAY_CAPABILITY, ret);
+            color_error(ret);
             return ret;
         }
 
@@ -111,7 +111,7 @@ static int set_locked(int mode) {
         if (current < 0 || current != mode) {
             int detail = current < 0 ? current : -(0x200 + current);
             status_set_capability(VBE_CAP_FAILED);
-            status_set_error(VBE_ERR_DISPLAY_CAPABILITY, detail);
+            color_error(detail);
             return detail;
         }
     }
@@ -119,13 +119,11 @@ static int set_locked(int mode) {
     g_last_mode = current;
     g_changed = current != g_original_mode;
     status_set_capability(g_changed ? VBE_CAP_ACTIVE : VBE_CAP_INACTIVE);
+    status_clear_error_domain(VBE_ERROR_DOMAIN_COLOR_SPACE);
     return 0;
 }
 
 static int config_requests_enhanced_mode(void) {
-    /* lcd_saturation_boost/lcd_ips_enhance were v1.3 names for the same live
-     * colour-space switch.  Preserve their behaviour as compatibility aliases
-     * without pretending that they are independent IPS/transfer-LUT stages. */
     return g_config.lcd_color_space_mode ||
            g_config.lcd_saturation_boost ||
            g_config.lcd_ips_enhance;
@@ -134,19 +132,23 @@ static int config_requests_enhanced_mode(void) {
 int color_space_apply_config(void) {
     int requested = config_requests_enhanced_mode();
     int ret = resolve_locked();
-    if (ret < 0)
-        return requested ? ret : 0;
+    if (ret < 0) {
+        if (!requested) {
+            status_clear_error_domain(VBE_ERROR_DOMAIN_COLOR_SPACE);
+            return 0;
+        }
+        color_error(ret);
+        return ret;
+    }
 
     if (requested)
         return set_locked(1);
 
-    /* A neutral config means "leave firmware/native state alone".  If this
-     * plugin previously changed the mode in the same session, restore exactly
-     * the value that was observed before our first write. */
     if (g_changed)
         return set_locked(g_original_mode);
 
     status_set_capability(VBE_CAP_INACTIVE);
+    status_clear_error_domain(VBE_ERROR_DOMAIN_COLOR_SPACE);
     return 0;
 }
 
@@ -179,12 +181,13 @@ int vitabrightColorSpaceGetMode(void) {
         if (ret < 0 || ret > 1) {
             int detail = ret < 0 ? ret : -ret;
             status_set_capability(VBE_CAP_FAILED);
-            status_set_error(VBE_ERR_DISPLAY_CAPABILITY, detail);
+            color_error(detail);
             ret = detail ? detail : -1;
         } else {
             g_last_mode = ret;
             g_changed = ret != g_original_mode;
             status_set_capability(g_changed ? VBE_CAP_ACTIVE : VBE_CAP_INACTIVE);
+            status_clear_error_domain(VBE_ERROR_DOMAIN_COLOR_SPACE);
         }
     }
 
@@ -203,7 +206,10 @@ int vitabrightColorSpaceSetMode(int mode) {
     }
 
     ret = set_locked(mode);
-    if (ret == 0) status_clear_error();
+    if (ret == 0) {
+        status_clear_error_domain(VBE_ERROR_DOMAIN_INPUT);
+        status_clear_error_domain(VBE_ERROR_DOMAIN_COLOR_SPACE);
+    }
 
     state_lock_release();
     EXIT_SYSCALL(state);
