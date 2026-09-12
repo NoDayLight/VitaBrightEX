@@ -67,6 +67,50 @@ static int oled_file(const char *path, int prepend_long_comment) {
     return r;
 }
 
+static int oled_crlf_file(const char *path) {
+    size_t n = 0;
+    unsigned char *p = read_all(path, &n);
+    if (!p) return -1;
+    uint8_t out[LUT_SIZE];
+    VbeOledLutParser s;
+    vbe_oled_lut_parser_init(&s, out);
+    int r = 0;
+    for (size_t i = 0; i < n && r == 0; ++i) {
+        if (p[i] == '\n') r = vbe_oled_lut_parser_feed(&s, '\r');
+        if (r == 0) r = vbe_oled_lut_parser_feed(&s, p[i]);
+    }
+    if (r == 0) r = vbe_oled_lut_parser_finish(&s);
+    free(p);
+    return r;
+}
+
+static int oled_interior_cr_rejected(const char *path) {
+    size_t n = 0;
+    unsigned char *p = read_all(path, &n);
+    if (!p) return -1;
+    uint8_t out[LUT_SIZE];
+    VbeOledLutParser s;
+    vbe_oled_lut_parser_init(&s, out);
+    int line_start = 1, comment = 0, inserted = 0, r = 0;
+    for (size_t i = 0; i < n && r == 0; ++i) {
+        unsigned char c = p[i];
+        if (c == '\n') { line_start = 1; comment = 0; }
+        else if (line_start && (c == ' ' || c == '\t')) { }
+        else if (line_start && (c == '#' || c == ';')) { line_start = 0; comment = 1; }
+        else if (line_start) { line_start = 0; }
+
+        r = vbe_oled_lut_parser_feed(&s, c);
+        if (!inserted && !comment && ((c >= '0' && c <= '9') ||
+            (c >= 'A' && c <= 'F') || (c >= 'a' && c <= 'f'))) {
+            inserted = 1;
+            if (r == 0) r = vbe_oled_lut_parser_feed(&s, '\r');
+        }
+    }
+    if (r == 0) r = vbe_oled_lut_parser_finish(&s);
+    free(p);
+    return inserted && r < 0 ? 0 : -1;
+}
+
 static int long_lcd_comment(void) {
     uint8_t out[LCD_LUT_LEVELS];
     VbeLcdLutParser s;
@@ -107,6 +151,8 @@ int main(void) {
     f += ok(long_bad_lcd_data() == 0, "long malformed LCD data rejected");
     f += ok(lcd_text("1\n3\n5\n8\n13\n20\n29\n41\n57\n76\n95\n116\n137\n161\n190\n220\n255") == 0, "EOF without newline");
     f += ok(lcd_text("1\r\n3\r\n5\r\n8\r\n13\r\n20\r\n29\r\n41\r\n57\r\n76\r\n95\r\n116\r\n137\r\n161\r\n190\r\n220\r\n255\r\n") == 0, "CRLF");
+    f += ok(lcd_text("1\n3\n5\n8\n13\n20\n29\n41\n57\n76\n95\n116\n137\n161\n190\n220\n2\r55\n") < 0, "LCD CR inside token rejected");
+    f += ok(lcd_text("1\n3\n5\n8\n13\n20\n29\n41\n57\n76\n95\n116\n137\n161\n190\n220\n255\r") < 0, "LCD terminal CR rejected");
     f += ok(lcd_text("1\n3\n5\n8\n13\n20\n29\n41\n57\n76\n95\n116\n137\n161\n190\n180\n255\n") < 0, "non-monotonic rejected");
     f += ok(lcd_text("1\n3\n5\n8\n13\n20\n29\n41\n57\n76\n95\n116\n137\n161\n190\n220\n256\n") < 0, ">255 rejected");
     f += ok(lcd_text("1\n3\n5\n8\n13\n20\n29\n41\n57\n76\n95\n116\n137\n161\n190\n220\n") < 0, "fewer than 17 rejected");
@@ -122,6 +168,8 @@ int main(void) {
     for (unsigned i = 0; i < sizeof(oled) / sizeof(oled[0]); ++i)
         f += ok(oled_file(oled[i], 0) == 0, oled[i]);
     f += ok(oled_file("oled/luts/vitabright_lut.txt", 1) == 0, "arbitrarily long OLED comment");
+    f += ok(oled_crlf_file("oled/luts/vitabright_lut.txt") == 0, "OLED CRLF");
+    f += ok(oled_interior_cr_rejected("oled/luts/vitabright_lut.txt") == 0, "OLED CR inside byte rejected");
 
     if (f) return 1;
     puts("production LUT parser regressions: OK");
