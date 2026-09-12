@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     if(DEFINED ENV{VITASDK})
@@ -17,7 +17,7 @@ if(ENABLE_LOGGING)
     add_definitions(-DENABLE_LOGGING=1)
 endif()
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -Wall -Wextra -O3 -fno-pic -fno-PIC -std=gnu99")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -Wall -Wextra -Werror -O3 -fno-pic -fno-PIC -std=gnu99")
 
 add_executable(vitabright
     main.c
