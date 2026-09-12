@@ -30,6 +30,7 @@ static unsigned int hex_value(unsigned char c) {
 void vbe_oled_lut_parser_init(VbeOledLutParser *parser,
                               uint8_t out[LUT_SIZE]) {
     parser->out = out;
+    vbe_text_newline_init(&parser->newline);
     parser->high_nibble = 0;
     parser->rows = 0;
     parser->cols = 0;
@@ -65,9 +66,16 @@ static int end_line(VbeOledLutParser *parser) {
     return -1;
 }
 
-int vbe_oled_lut_parser_feed(VbeOledLutParser *parser, unsigned char c) {
+int vbe_oled_lut_parser_feed(VbeOledLutParser *parser, unsigned char raw) {
     if (parser->failed) return -1;
-    if (c == '\r') return 0;
+
+    unsigned char c = 0;
+    int decoded = vbe_text_newline_feed(&parser->newline, raw, &c);
+    if (decoded < 0) {
+        parser->failed = 1;
+        return -1;
+    }
+    if (decoded == 0) return 0;
     if (c == '\n') return end_line(parser);
 
     switch (parser->state) {
@@ -124,7 +132,10 @@ int vbe_oled_lut_parser_feed(VbeOledLutParser *parser, unsigned char c) {
 }
 
 int vbe_oled_lut_parser_finish(VbeOledLutParser *parser) {
-    if (parser->failed) return -1;
+    if (parser->failed || vbe_text_newline_finish(&parser->newline) < 0) {
+        parser->failed = 1;
+        return -1;
+    }
     if (parser->state == OLED_AFTER_BYTE || parser->state == OLED_BETWEEN_BYTES) {
         if (parser->cols != LUT_LINE_SIZE || commit_row(parser) < 0) return -1;
     } else if (parser->state != OLED_START && parser->state != OLED_COMMENT) {
