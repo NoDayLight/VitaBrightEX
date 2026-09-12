@@ -14,7 +14,7 @@ env:
   VDPM_NONINTERACTIVE: 1
 
 jobs:
-  plugin:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -26,14 +26,27 @@ jobs:
         run: |
           bash vdpm/bootstrap-vitasdk.sh
           echo "$VITASDK/bin" >> "$GITHUB_PATH"
-      - name: Install kernel dependencies
-        run: vdpm install taihen
-      - name: Configure
+      - name: Install dependencies
+        run: |
+          vdpm install taihen
+          vdpm install libvita2d
+      - name: Configure plugin
         run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DENABLE_LOGGING=OFF
-      - name: Build
+      - name: Build plugin and stubs
         run: cmake --build build --parallel
+      - name: Install generated syscall stubs
+        run: cmake --install build --prefix "$VITASDK/arm-vita-eabi"
+      - name: Configure editor
+        run: cmake -S editor -B editor-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+      - name: Build editor
+        run: cmake --build editor-build --parallel
       - name: Upload plugin
         uses: actions/upload-artifact@v7
         with:
           name: VitaBrightEX-v1.4-plugin
           path: build/vitabright.skprx
+      - name: Upload editor
+        uses: actions/upload-artifact@v7
+        with:
+          name: VitaBrightEX-v1.4-editor
+          path: editor-build/vitabrightex-editor.vpk
