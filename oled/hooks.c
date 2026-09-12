@@ -192,23 +192,47 @@ int hook_kscePowerSetDisplayMaxBrightnessForOled(int limit) {
     return TAI_CONTINUE(int, g_power_ref, limit);
 }
 
-static void release_transaction(void) {
+static int release_transaction(void) {
+    int first_error = 0;
+    int ret;
+
     if (g_power_hook >= 0) {
-        (void)taiHookReleaseForKernel(g_power_hook, g_power_ref);
-        g_power_hook = -1;
-        g_power_ref = 0;
+        ret = taiHookReleaseForKernel(g_power_hook, g_power_ref);
+        if (ret >= 0) {
+            g_power_hook = -1;
+            g_power_ref = 0;
+        } else if (first_error == 0) {
+            first_error = ret;
+        }
     }
     if (g_brightness_hook >= 0) {
-        (void)taiHookReleaseForKernel(g_brightness_hook, g_brightness_ref);
-        g_brightness_hook = -1;
-        g_brightness_ref = -1;
+        ret = taiHookReleaseForKernel(g_brightness_hook, g_brightness_ref);
+        if (ret >= 0) {
+            g_brightness_hook = -1;
+            g_brightness_ref = -1;
+        } else if (first_error == 0) {
+            first_error = ret;
+        }
     }
     if (g_lut_inject >= 0) {
-        (void)taiInjectReleaseForKernel(g_lut_inject);
-        g_lut_inject = -1;
+        ret = taiInjectReleaseForKernel(g_lut_inject);
+        if (ret >= 0) {
+            g_lut_inject = -1;
+        } else if (first_error == 0) {
+            first_error = ret;
+        }
     }
 
     g_active = 0;
+    if (first_error < 0) {
+        g_vbe_status.brightness_core = VBE_CAP_FAILED;
+        g_vbe_status.brightness_table = VBE_CAP_FAILED;
+        g_vbe_status.brightness_hook = VBE_CAP_FAILED;
+        g_vbe_status.power_limit_hook = VBE_CAP_FAILED;
+        brightness_error(VBE_ERR_RESOURCE_RELEASE, first_error);
+        return first_error;
+    }
+
     if (g_vbe_status.brightness_core == VBE_CAP_ACTIVE)
         g_vbe_status.brightness_core = VBE_CAP_INACTIVE;
     if (g_vbe_status.brightness_table == VBE_CAP_ACTIVE)
@@ -217,6 +241,7 @@ static void release_transaction(void) {
         g_vbe_status.brightness_hook = VBE_CAP_INACTIVE;
     if (g_vbe_status.power_limit_hook == VBE_CAP_ACTIVE)
         g_vbe_status.power_limit_hook = VBE_CAP_INACTIVE;
+    return 0;
 }
 
 static int start_transaction(const unsigned char supplied[LUT_SIZE]) {
@@ -278,7 +303,6 @@ static int start_transaction(const unsigned char supplied[LUT_SIZE]) {
         lut_offset, candidate, LUT_SIZE);
     if (g_lut_inject < 0) {
         ret = (int)g_lut_inject;
-        release_transaction();
         g_vbe_status.brightness_table = VBE_CAP_FAILED;
         brightness_error(VBE_ERR_TABLE_INJECTION, ret);
         return ret;
@@ -290,7 +314,8 @@ static int start_transaction(const unsigned char supplied[LUT_SIZE]) {
         NID_OLED_SET_BRIGHTNESS, hook_ksceOledSetBrightness);
     if (g_brightness_hook < 0) {
         ret = (int)g_brightness_hook;
-        release_transaction();
+        int cleanup = release_transaction();
+        if (cleanup < 0) return cleanup;
         g_vbe_status.brightness_hook = VBE_CAP_FAILED;
         brightness_error(VBE_ERR_BRIGHTNESS_HOOK, ret);
         return ret;
@@ -302,7 +327,8 @@ static int start_transaction(const unsigned char supplied[LUT_SIZE]) {
         NID_POWER_SET_MAX_BRIGHT, hook_kscePowerSetDisplayMaxBrightnessForOled);
     if (g_power_hook < 0) {
         ret = (int)g_power_hook;
-        release_transaction();
+        int cleanup = release_transaction();
+        if (cleanup < 0) return cleanup;
         g_vbe_status.power_limit_hook = VBE_CAP_FAILED;
         brightness_error(VBE_ERR_POWER_HOOK, ret);
         return ret;
@@ -312,7 +338,8 @@ static int start_transaction(const unsigned char supplied[LUT_SIZE]) {
     int current = ksceOledGetBrightness();
     if (current < 0) {
         ret = current;
-        release_transaction();
+        int cleanup = release_transaction();
+        if (cleanup < 0) return cleanup;
         g_vbe_status.brightness_core = VBE_CAP_FAILED;
         brightness_error(VBE_ERR_BACKEND, ret);
         return ret;
@@ -320,7 +347,8 @@ static int start_transaction(const unsigned char supplied[LUT_SIZE]) {
 
     ret = ksceOledSetBrightness((unsigned int)current);
     if (ret < 0) {
-        release_transaction();
+        int cleanup = release_transaction();
+        if (cleanup < 0) return cleanup;
         g_vbe_status.brightness_core = VBE_CAP_FAILED;
         brightness_error(VBE_ERR_BACKEND, ret);
         return ret;
@@ -346,7 +374,9 @@ static int replace_candidate(const unsigned char candidate[LUT_SIZE]) {
     int had_previous = g_active;
     if (had_previous) lut_copy(previous, lookupNew);
 
-    release_transaction();
+    int release = release_transaction();
+    if (release < 0) return release;
+
     int ret = start_transaction(candidate);
     if (ret >= 0) return ret;
 
@@ -372,7 +402,8 @@ int oled_enable_hooks(void) {
 }
 
 void oled_disable_hooks(void) {
-    release_transaction();
+    int ret = release_transaction();
+    if (ret < 0) LOG("[OLED] resource release failed during shutdown: 0x%08X\n", ret);
     ksceOledGetBrightness = NULL;
     ksceOledSetBrightness = NULL;
     ksceOledGetDDB = NULL;
