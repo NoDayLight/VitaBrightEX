@@ -47,22 +47,17 @@ static VbeSourceOutcome config_read_source(const char *path,
     return vbe_source_evaluate(fd, read_result, parse_result, close_result);
 }
 
-static int config_accept_source(const char *path, int fallback,
-                                VbeSourceOutcome source,
+static int config_accept_source(VbeSourceOutcome source,
                                 const VitaBrightConfig *candidate) {
     if (source.decision == VBE_SOURCE_USE) {
         g_config = *candidate;
         status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 1, VBE_ERR_CONFIG, 0);
-        LOG("[CFG] Loaded %s source %s\n",
-            fallback ? "fallback" : "authoritative", path);
         return 0;
     }
 
     if (source.decision == VBE_SOURCE_FAIL) {
         status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 0, VBE_ERR_CONFIG,
                             source.error);
-        LOG("[CFG] Rejected %s at source stage %d: 0x%08X\n",
-            path, source.stage, source.error);
         return source.error;
     }
 
@@ -72,12 +67,28 @@ static int config_accept_source(const char *path, int fallback,
 int config_load(void) {
     VitaBrightConfig candidate;
     VbeSourceOutcome source = config_read_source(CFG_FILE1, &candidate);
-    int decision = config_accept_source(CFG_FILE1, 0, source, &candidate);
-    if (decision <= 0) return decision;
+    int decision = config_accept_source(source, &candidate);
+    if (decision == 0) {
+        LOG("[CFG] Loaded authoritative source " CFG_FILE1 "\n");
+        return 0;
+    }
+    if (decision < 0) {
+        LOG("[CFG] Rejected authoritative source " CFG_FILE1 ": 0x%08X\n",
+            decision);
+        return decision;
+    }
 
     source = config_read_source(CFG_FILE2, &candidate);
-    decision = config_accept_source(CFG_FILE2, 1, source, &candidate);
-    if (decision <= 0) return decision;
+    decision = config_accept_source(source, &candidate);
+    if (decision == 0) {
+        LOG("[CFG] Loaded fallback source " CFG_FILE2 "\n");
+        return 0;
+    }
+    if (decision < 0) {
+        LOG("[CFG] Rejected fallback source " CFG_FILE2 ": 0x%08X\n",
+            decision);
+        return decision;
+    }
 
     VitaBrightConfig defaults;
     vbe_config_defaults(&defaults);
