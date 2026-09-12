@@ -1,179 +1,110 @@
 # VitaBrightEX pseudo-v1.4
 
-VitaBrightEX is a hardening/rearchitecture fork of [devnoname120/vitabright](https://github.com/devnoname120/vitabright). This branch exists because VitaBrightEX 1.3 reproducibly hung a PCH-2000 / firmware 3.65 Ensō system at `PS logo → display on → no LiveArea`, while multiple v1.3 display features were either speculative, ineffective, or built on incorrect assumptions.
+VitaBrightEX is a hardening/rearchitecture fork of [devnoname120/vitabright](https://github.com/devnoname120/vitabright). This branch exists because VitaBrightEX 1.3 reproducibly hung a PCH-2000 / firmware 3.65 Ensō system at `PS logo → display on → no LiveArea`, while multiple v1.3 display features were speculative, ineffective, or based on incorrect assumptions.
 
-> **Development status:** software/CI hardening is being completed before physical regression. The PR remains draft until the hardware matrix passes, beginning with the reproducing PCH-2000 / 3.65 Ensō console.
+> **Development status:** PR #1 remains draft. The mandatory isolated **PCH-2000 / 3.65 Ensō** cold boot has now passed without reproducing the v1.3 hang, and the loaded 3.65 `SceLcd` image passed the production exact-signature gate at segment-0 `0x1B48`. That first hardware run also exposed a real parser/CI incompatibility in the prior build; the corrected branch now makes CI execute the same streaming LUT parser core used by the SKPRX. A fresh cold boot with the normal commented packaged LUT is the next required checkpoint.
 
 ## Design contract
 
 - Optional enhancement failure must never prevent LiveArea from loading.
 - Exactly one backend is selected: OLED on PCH-1000, LCD on PCH-2000.
-- Backend setup and live replacement are transactional with rollback/fail-open behaviour.
-- Userland writes follow copy → validate → serialized state transition → commit/rollback.
+- Backend setup/live replacement is transactional with unwind/rollback.
+- Userland writes follow copy -> validate -> serialized state transition -> commit/rollback.
 - LUT persistence is kernel-authoritative and atomic relative to the source actually loaded.
 - No polling threads, timers, periodic filesystem reads, framebuffer interception or per-frame software processing are introduced.
 - Unknown firmware/layouts do not receive guessed kernel offsets.
 - A control is exposed only when its implementation is technically supported.
+- Packaged text assets must pass production parser semantics, not a separate looser validator.
 
-See [`docs/V1.4-ARCHITECTURE.md`](docs/V1.4-ARCHITECTURE.md).
+See [`docs/V1.4-ARCHITECTURE.md`](docs/V1.4-ARCHITECTURE.md) and the recorded hardware evidence in [`docs/HARDWARE-RESULTS-2026-09-12.md`](docs/HARDWARE-RESULTS-2026-09-12.md).
 
 ## Current capabilities
 
 | Capability | PCH-1000 OLED | PCH-2000 LCD |
 |---|---|---|
-| Extended brightness | implemented, transactional | implemented, transactional |
+| Extended brightness | transactional | transactional |
 | Inactivity-dim workaround | implemented | implemented |
 | Power-mode brightness hook | implemented | implemented |
 | Panel/LUT selection | DDB-based | n/a |
-| Live LUT editing | validated + rollback | monotonic validation + rollback |
+| Live LUT editing | validation + rollback | monotonic validation + rollback |
 | Atomic authoritative LUT save | implemented | implemented |
-| Hardware colour invert | available when SceDisplay export resolves | available when SceDisplay export resolves |
-| Panel color-space Get/Set | optional, read-back verified, restored on stop | optional, read-back verified, restored on stop |
+| Hardware colour invert | when SceDisplay export resolves | when SceDisplay export resolves |
+| Panel color-space Get/Set | read-back verified | read-back verified |
 | Persistent registry RGB-range mutation | not used | not used |
 | Persistent active-scanout CSC | unsupported | unsupported |
-| Gamma correction | unsupported | unsupported |
-| Nonlinear panel linearisation | unsupported | unsupported |
+| Gamma/nonlinear panel processing | unsupported without verified hardware model | unsupported without verified hardware model |
 
-The old `0x0FCBF457` IFTU call has been removed. Current VitaSDK documents `ksceIftuCsc()` as an explicit source/destination framebuffer conversion API under NID `0x67E37EFC`; that is not evidence for the persistent display-head setter assumed by v1.3. Gamma and true panel linearisation additionally require a verified nonlinear transfer stage.
+The old private `0x0FCBF457` IFTU path is removed. Current VitaSDK documents `ksceIftuCsc()` as a source/destination framebuffer conversion API under NID `0x67E37EFC`; that does not establish the persistent display-head setter assumed by v1.3.
 
-## Firmware/layout policy
+## Production parser / CI contract
 
-Function exports are resolved by NID, but raw brightness-table injection still depends on module layout. Those are separate claims.
+Physical testing found that the previous LCD parser required an entire physical line to fit in `char line[64]`, while CI ignored comment lines without that limit. The normal commented packaged LUT therefore passed workflow #114 but production rejected it before `SceLcd` initialization.
 
-The raw-layout whitelist currently preserves only firmware families present in original VitaBright:
+The corrected architecture fixes the class of mismatch:
 
-- 3.60
-- 3.65
-- 3.67
-- 3.68
-- 3.69
-- 3.70
+- LCD and OLED LUTs use portable streaming C state machines with no fixed physical-comment-line buffer.
+- Arbitrarily long full-line `#`/`;` comments are discarded as streams.
+- LCD data remains strict: exactly 17 decimal bytes, `0..255`, monotonic nondecreasing, CRLF and EOF-without-final-newline supported.
+- OLED remains exactly 17 x 21 two-digit hex bytes with strict row structure.
+- Config parsing was audited too: long comments are streamed; an overlong non-comment directive is consumed/rejected as one physical line and can never become a second fake directive.
+- Present-but-malformed authoritative files are errors; only missing preferred files may use documented fallback.
+- CI compiles the **same parser C files linked into the kernel plugin** into a host regression executable and feeds it the exact source/package assets and malformed edge cases.
 
-For LCD, the inherited candidate offsets are:
+## Firmware/layout evidence
 
-- 3.60: `0x1B00`
-- 3.65/3.67/3.68/3.69/3.70: `0x1B48`
+Raw table injection is separate from NID-resolved function support.
 
-v1.4 resolves the address in loaded `SceLcd` and requires the **exact stock 17-byte table signature** before injection. A mismatch fails open. 3.71–3.74 are not claimed supported by this raw-table feature.
+LCD candidates:
 
-Static decrypted-binary verification is tracked separately in [`docs/FIRMWARE-LAYOUT-VERIFICATION.md`](docs/FIRMWARE-LAYOUT-VERIFICATION.md). `tools/verify_scelcd_layout.py` correctly maps a segment-0-relative taiHEN offset through a decrypted ELF before comparing bytes; encrypted SKPRX data is not falsely treated as verification evidence.
+- 3.60 -> `0x1B00`
+- 3.65/3.67/3.68/3.69/3.70 -> `0x1B48`
 
-For OLED, a successful `ksceOledGetDDB()` read selects the inherited panel layout:
+Before injection, loaded `SceLcd` must contain the exact Sony stock 17-byte table at the candidate segment-relative address. On the tested physical PCH-2000 / firmware `0x03650000`, this runtime exact-signature gate has **passed at `0x1B48`**, followed by successful injection/hooks and `last_error=0`.
 
-- DDB low byte `4` → `0x1AB8`
-- DDB low byte `5` → `0x1C20`
-- DDB low byte `6` / another successfully read type → `0x1E00`
+That is physical runtime evidence, not static decrypted-image verification. Static evidence remains pending and is tracked in [`docs/FIRMWARE-LAYOUT-VERIFICATION.md`](docs/FIRMWARE-LAYOUT-VERIFICATION.md). 3.71–3.74 remain unsupported by the raw-table feature.
 
-Before injection the address is resolved in loaded `SceOled` and the 357-byte object must pass structural plausibility checks. A failed DDB read never falls through to a guessed default panel.
+OLED requires a successful DDB read and validated loaded-module table address; DDB failure never falls through to an assumed panel.
 
-## OLED LUT semantics
+## Authoritative load/save behaviour
 
-The 17 × 21-byte OLED table is not a normal framebuffer RGB LUT. Panel documentation establishes that each row contains seven RGB gamma-reference triplets, but an independently verified register-code → voltage/transfer model for those references is still missing.
+The backend records the exact LUT source path. Live editor changes use kernel validation and transaction/rollback. Square Save calls the kernel persistence syscall, which writes a temporary file, syncs/closes it, then renames it over the authoritative path. The editor never guesses a `ur0`/`ux0` or OLED panel filename.
 
-Therefore pseudo-v1.4 does **not** perform the old white-point normalization, byte-level RGB bias or night-mode arithmetic. Those operations were not removed merely because they are difficult; they remain disabled because their physical mapping cannot currently be verified.
+## Panel color-space and filter boundary
 
-Panel-specific LUT files and explicit raw editor changes are preserved after structural checks. Legacy configuration keys remain parseable so old files do not break.
+Matched Get/SetDisplayColorSpaceMode exports are used as a session-scoped optional capability on both panel families. v1.4 snapshots the original mode, accepts only 0/1, avoids redundant writes, verifies by read-back and restores the original firmware-owned mode on teardown. No persistent registry mutation or continuous processing is added.
 
-## Authoritative load / save behaviour
-
-LUT files use one authority at a time:
-
-- a missing preferred file may use its documented fallback
-- an existing malformed preferred/override file is an explicit failure and does not silently fall through
-- the backend records the exact source path that produced the committed table
-- live editor updates go through kernel validation and rollback
-- Square in the editor calls the backend's kernel persistence syscall
-- the kernel writes a temporary file, synchronizes it, then renames it over the authoritative target
-
-This prevents custom OLED overrides or `ur0`/`ux0` fallback state from being saved to the wrong guessed filename.
-
-## Panel color-space control
-
-VitaSDK independently names matched Get/SetDisplayColorSpaceMode exports for both `SceOled` and `SceLcd`. Pseudo-v1.4 uses those as a single optional capability:
-
-- snapshot the original firmware-owned mode
-- only accept defined modes 0/1
-- avoid redundant writes
-- set and immediately read back the requested mode
-- restore the original mode on plugin teardown
-
-No registry value is persistently changed and no continuous processing is introduced.
-
-`rgb_range_mode` is intentionally not restored: independent registry documentation identifies it as a PSTV-oriented setting with `0=Auto`, `1=Limited`, `2=Full`, contradicting the old VitaBrightEX claim that `1` meant full range on PCH-2000.
+Hardware invert remains capability-gated. Arbitrary CCT/gamma/contrast/nonlinear processing remains unsupported until the corresponding persistent scanout/physical transfer model is independently established.
 
 ## Configuration
 
-Configuration lookup is deterministic:
+Configuration lookup is `ur0:tai/vitabrightex.cfg`, then `ux0:tai/vitabrightex.cfg` only if the primary cannot be opened. Successful loads use defaults -> candidate -> validate -> commit. Malformed authoritative config is reported without preventing LiveArea from loading.
 
-1. `ur0:tai/vitabrightex.cfg`
-2. `ux0:tai/vitabrightex.cfg` only if the `ur0` file is absent
+## Status ABI / companion editor
 
-Every reload starts from defaults, parses into a temporary candidate, validates/clamps it, then publishes one complete snapshot. Removing a key therefore restores its default instead of retaining stale state.
+`vitabrightGetStatus()` ABI v2 reports model/firmware, panel, synchronization, raw-layout validation, brightness transaction state, invert, panel color-space, unsupported CSC/transfer stages and last error/detail.
 
-See [`vitabrightex.cfg`](vitabrightex.cfg) for current supported settings.
-
-## Status ABI
-
-`vitabrightGetStatus()` ABI v2 reports selected hardware/firmware, OLED panel, synchronization state, firmware-layout validation, brightness transaction state, invert, panel color-space, unsupported CSC/transfer stages, and the last error/detail. The companion editor treats this object as the authority for enabling controls.
-
-## Companion editor
-
-The historical later editor versions in this repository were shipped as VPK binaries without corresponding reproducible source. Pseudo-v1.4 adds a new source-controlled editor under [`editor/`](editor/) and builds it against generated syscall stubs.
-
-It provides capability-gated OLED/LCD LUT editing, kernel-authoritative atomic save, hardware invert, panel color-space Get/Set, status/error display and reload. Unsupported CCT/gamma/contrast/linearisation controls are not simulated.
+The source-controlled editor is built against generated syscall stubs and uses status capabilities to gate controls. The LCD cursor is labelled **`LCD LUT entry X/16`** because it selects a table value; it is not the Vita system brightness slider.
 
 ## Build and validation
 
-GitHub Actions now gates more than compilation:
+GitHub Actions gates:
 
-1. architectural source-contract checks
-2. packaged OLED/LCD LUT structure and source/package equality
-3. packaged config equality
-4. release plugin + syscall stubs under current VitaSDK with warnings as errors
-5. diagnostic plugin from the same functional code
-6. editor build against generated stubs
-7. plugin/editor artifacts
+1. architectural source contracts
+2. parser/runtime/CI contract
+3. exact source/package LUT and config equality
+4. production-parser host regressions on exact packaged bytes
+5. firmware-audit tool syntax
+6. release plugin + syscall stubs under current VitaSDK with warnings as errors
+7. diagnostic plugin from the same functional source
+8. editor build against generated stubs
+9. plugin/editor artifacts
 
-Local plugin build:
+## Hardware testing
 
-```sh
-export VITASDK=/usr/local/vitasdk
-export PATH="$VITASDK/bin:$PATH"
-cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
-cmake --build build --parallel
-```
+Do not replace a known-good taiHEN setup without preserving the exact rollback config and a verified plugin-bypass recovery path. The current pass/fail record and next steps are in [`docs/HARDWARE-TEST-MATRIX.md`](docs/HARDWARE-TEST-MATRIX.md).
 
-Then install generated stubs and build the editor:
-
-```sh
-cmake --install build --prefix "$VITASDK/arm-vita-eabi"
-cmake -S editor -B editor-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
-cmake --build editor-build --parallel
-```
-
-## Installation for hardware testing
-
-Do not replace a known-good plugin setup without a recovery path. Keep a backup of `ur0:tai/config.txt` and verify that holding `L` during boot bypasses taiHEN plugins on the target setup.
-
-Copy the CI-built `vitabright.skprx`, relevant LUT files and `vitabrightex.cfg` into `ur0:tai/`, add this under `*KERNEL`, then reboot:
-
-```text
-ur0:tai/vitabright.skprx
-```
-
-Do not use the historical prebuilt binaries in `release/` as evidence for the current pseudo-v1.4 source. The exact pre-merge sequence is in [`docs/HARDWARE-TEST-MATRIX.md`](docs/HARDWARE-TEST-MATRIX.md).
+The next required check is intentionally narrow: install the corrected release SKPRX plus the **normal commented packaged LCD LUT** on the still-isolated PCH-2000/3.65 unit, perform a fresh cold boot without pressing Circle/reload, and require immediate `firmware_layout/core/table/brightness_hook/power_limit_hook=active` with `last_error=0`. Only then continue persistence, malformed/error paths, invert/color-space, suspend/resume, ioPlus, VitaGrafix and normal-stack compatibility.
 
 ## Power/performance
 
-The kernel architecture is event-driven: work occurs at boot, configuration/editor changes, or when the OS itself changes brightness. There is no newly introduced continuous worker. This makes steady-state software overhead structurally minimal, but the project does **not** claim a measured `<0.01 W` delta without instrumented hardware measurement.
-
-## Evidence / provenance
-
-Primary implementation references include:
-
-- [VitaSDK vita-headers](https://github.com/vitasdk/vita-headers) for current kernel structures and NIDs
-- [devnoname120/vitabright](https://github.com/devnoname120/vitabright) for original brightness-table layouts/hooks
-- [vitabright PR #39](https://github.com/devnoname120/vitabright/pull/39) for DDB-dependent OLED table selection
-- Team Molecule `sceutils`, VitaDeploy and Vita3K as reproducible firmware-audit tooling routes documented in the firmware-layout note
-
-Historical VitaBrightEX README/changelog claims are not treated as authoritative when they disagree with source or independently verifiable platform evidence.
+The kernel architecture is event-driven. Work occurs at boot, configuration/editor changes or OS brightness events; no new continuous worker exists. No measured `<0.01 W` claim is made without suitable instrumentation.
