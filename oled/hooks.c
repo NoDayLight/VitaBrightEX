@@ -19,7 +19,7 @@
 #define NID_OLED_GET_DDB         0xC9D5987C
 #define NID_POWER_SET_MAX_BRIGHT 0x77027B6B
 
-/* Provenance: devnoname120/vitabright PR #39.  These are only selected
+/* Provenance: devnoname120/vitabright PR #39. These are selected only
  * after a successful DDB read and on a whitelisted firmware layout. */
 #define OLED_LUT_OFF_P4      0x1AB8u
 #define OLED_LUT_OFF_P5      0x1C20u
@@ -44,9 +44,8 @@ static void lut_copy(unsigned char *dst, const unsigned char *src) {
     for (int i = 0; i < LUT_SIZE; ++i) dst[i] = src[i];
 }
 
-/* The byte-level semantics of the OLED panel table are not sufficiently
- * documented to invent per-field validation.  Reject only obviously corrupt
- * objects; all other bytes remain opaque panel-control data. */
+/* The OLED table is opaque panel-control/calibration data. Do not invent
+ * per-field RGB semantics; reject only unmistakably corrupt whole objects. */
 static int lut_is_sane(const unsigned char lut[LUT_SIZE]) {
     int any_nonzero = 0;
     int any_not_ff = 0;
@@ -118,8 +117,8 @@ static int read_panel(int *panel_type, uint32_t *lut_offset) {
         *lut_offset = OLED_LUT_OFF_DEFAULT;
         break;
     default:
-        /* Upstream PR #39 deliberately uses the default table for other
-         * successfully identified DDB types.  Do not use it on DDB failure. */
+        /* PR #39 deliberately maps other successfully identified DDB types
+         * to the default table. A failed DDB read never reaches this branch. */
         *panel_type = OLED_PANEL_UNKNOWN;
         *lut_offset = OLED_LUT_OFF_DEFAULT;
         break;
@@ -165,8 +164,7 @@ int hook_kscePowerSetDisplayMaxBrightnessForOled(int limit) {
 }
 
 static void release_transaction(void) {
-    /* Hooks go first.  Function pointers remain valid until after the hook can
-     * no longer execute, avoiding the old NULL-during-hook race window. */
+    /* Remove hooks before invalidating anything they may observe. */
     if (g_power_hook >= 0) {
         (void)taiHookReleaseForKernel(g_power_hook, g_power_ref);
         g_power_hook = -1;
@@ -183,10 +181,14 @@ static void release_transaction(void) {
     }
 
     g_active = 0;
-    g_vbe_status.brightness_core = VBE_CAP_INACTIVE;
-    g_vbe_status.brightness_table = VBE_CAP_INACTIVE;
-    g_vbe_status.brightness_hook = VBE_CAP_INACTIVE;
-    g_vbe_status.power_limit_hook = VBE_CAP_INACTIVE;
+    if (g_vbe_status.brightness_core == VBE_CAP_ACTIVE)
+        g_vbe_status.brightness_core = VBE_CAP_INACTIVE;
+    if (g_vbe_status.brightness_table == VBE_CAP_ACTIVE)
+        g_vbe_status.brightness_table = VBE_CAP_INACTIVE;
+    if (g_vbe_status.brightness_hook == VBE_CAP_ACTIVE)
+        g_vbe_status.brightness_hook = VBE_CAP_INACTIVE;
+    if (g_vbe_status.power_limit_hook == VBE_CAP_ACTIVE)
+        g_vbe_status.power_limit_hook = VBE_CAP_INACTIVE;
 }
 
 static int start_transaction(const unsigned char supplied[LUT_SIZE]) {
@@ -236,9 +238,9 @@ static int start_transaction(const unsigned char supplied[LUT_SIZE]) {
         lut_offset, candidate, LUT_SIZE);
     if (g_lut_inject < 0) {
         ret = (int)g_lut_inject;
+        release_transaction();
         g_vbe_status.brightness_table = VBE_CAP_FAILED;
         status_set_error(VBE_ERR_TABLE_INJECTION, ret);
-        release_transaction();
         return ret;
     }
     g_vbe_status.brightness_table = VBE_CAP_ACTIVE;
@@ -248,9 +250,9 @@ static int start_transaction(const unsigned char supplied[LUT_SIZE]) {
         NID_OLED_SET_BRIGHTNESS, hook_ksceOledSetBrightness);
     if (g_brightness_hook < 0) {
         ret = (int)g_brightness_hook;
+        release_transaction();
         g_vbe_status.brightness_hook = VBE_CAP_FAILED;
         status_set_error(VBE_ERR_BRIGHTNESS_HOOK, ret);
-        release_transaction();
         return ret;
     }
     g_vbe_status.brightness_hook = VBE_CAP_ACTIVE;
@@ -260,17 +262,18 @@ static int start_transaction(const unsigned char supplied[LUT_SIZE]) {
         NID_POWER_SET_MAX_BRIGHT, hook_kscePowerSetDisplayMaxBrightnessForOled);
     if (g_power_hook < 0) {
         ret = (int)g_power_hook;
+        release_transaction();
         g_vbe_status.power_limit_hook = VBE_CAP_FAILED;
         status_set_error(VBE_ERR_POWER_HOOK, ret);
-        release_transaction();
         return ret;
     }
     g_vbe_status.power_limit_hook = VBE_CAP_ACTIVE;
 
     ret = ksceOledSetBrightness((unsigned int)ksceOledGetBrightness());
     if (ret < 0) {
-        status_set_error(VBE_ERR_BACKEND, ret);
         release_transaction();
+        g_vbe_status.brightness_core = VBE_CAP_FAILED;
+        status_set_error(VBE_ERR_BACKEND, ret);
         return ret;
     }
 
@@ -318,6 +321,50 @@ void oled_disable_hooks(void) {
     ksceOledGetBrightness = NULL;
     ksceOledSetBrightness = NULL;
     ksceOledGetDDB = NULL;
+}
+
+int oled_reload_backend(void) {
+    if (!firmware_layout_supported(sw_version)) {
+        g_vbe_status.firmware_layout = VBE_CAP_UNSUPPORTED;
+        status_set_error(VBE_ERR_FIRMWARE_UNSUPPORTED, (int)sw_version);
+        return -1;
+    }
+
+    tai_module_info_t info;
+    int ret = 0;
+    if (ksceOledGetDDB == NULL || ksceOledGetBrightness == NULL ||
+        ksceOledSetBrightness == NULL) {
+        ret = resolve_core(&info);
+        if (ret < 0) {
+            g_vbe_status.brightness_core = VBE_CAP_FAILED;
+            status_set_error(VBE_ERR_EXPORT_RESOLUTION, ret);
+            return ret;
+        }
+    }
+
+    int panel_type = OLED_PANEL_UNKNOWN;
+    uint32_t offset = 0;
+    ret = read_panel(&panel_type, &offset);
+    if (ret < 0) {
+        g_vbe_status.firmware_layout = VBE_CAP_FAILED;
+        status_set_error(VBE_ERR_LAYOUT_MISMATCH, ret);
+        return ret;
+    }
+
+    VitaBrightConfig previous_config = g_config;
+    config_load();
+
+    unsigned char candidate[LUT_SIZE];
+    ret = load_disk_candidate(panel_type, candidate);
+    if (ret < 0) {
+        g_config = previous_config;
+        status_set_error(VBE_ERR_INVALID_USER_INPUT, ret);
+        return ret;
+    }
+
+    ret = replace_candidate(candidate);
+    if (ret < 0) g_config = previous_config;
+    return ret;
 }
 
 int oled_reinject_lut(void) {
@@ -410,9 +457,13 @@ int vitabrightOledSetLut(unsigned char oledLut[LUT_SIZE]) {
 
     int ret = ksceKernelMemcpyUserToKernel(candidate, (const void *)oledLut, LUT_SIZE);
     if (ret < 0 || !lut_is_sane(candidate)) {
-        status_set_error(VBE_ERR_INVALID_USER_INPUT, ret < 0 ? ret : -1);
+        int detail = ret < 0 ? ret : -1;
+        if (state_lock_acquire() >= 0) {
+            status_set_error(VBE_ERR_INVALID_USER_INPUT, detail);
+            state_lock_release();
+        }
         EXIT_SYSCALL(state);
-        return ret < 0 ? ret : -1;
+        return detail;
     }
 
     ret = state_lock_acquire();
@@ -440,19 +491,7 @@ int vitabrightOledReload(void) {
         return -1;
     }
 
-    /* Preload the new disk candidate while the current transaction is still
-     * intact; only a valid candidate is allowed to replace live state. */
-    tai_module_info_t info;
-    ret = firmware_layout_supported(sw_version) ? resolve_core(&info) : -1;
-    int panel_type = OLED_PANEL_UNKNOWN;
-    uint32_t offset = 0;
-    unsigned char candidate[LUT_SIZE];
-    if (ret >= 0) ret = read_panel(&panel_type, &offset);
-
-    config_load();
-    if (ret >= 0) ret = load_disk_candidate(panel_type, candidate);
-    if (ret >= 0) ret = replace_candidate(candidate);
-
+    ret = oled_reload_backend();
     screen_filter_load_config();
     (void)screen_filter_apply(1);
 
