@@ -12,7 +12,7 @@ project(vitabrightex-editor C)
 include("${VITASDK}/share/vita.cmake" REQUIRED)
 
 set(VITA_TITLEID VBRIGHT14)
-add_executable(vitabrightex-editor.elf main.c)
+add_executable(vitabrightex-editor.elf app.c)
 target_include_directories(vitabrightex-editor.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_compile_options(vitabrightex-editor.elf PRIVATE -Wall -Wextra -Werror)
 
