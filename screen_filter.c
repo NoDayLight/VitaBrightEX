@@ -75,49 +75,49 @@ void screen_filter_load_config(void) {
 
 int screen_filter_apply(int is_oled) {
     (void)is_oled;
-
-    /* The old private IFTU call had no verified active-scanout ABI. Keep these
-     * states explicit until an independently documented persistent CSC and
-     * nonlinear transfer stage exists. */
     g_vbe_status.csc_filter = VBE_CAP_UNSUPPORTED;
     g_vbe_status.transfer_lut = VBE_CAP_UNSUPPORTED;
 
-    /* Resolving the documented invert export is sufficient to report the
-     * capability. A neutral boot performs no display write. */
     if (resolve_invert() < 0) {
         if (g_screen_filter.invert) {
-            status_set_error(VBE_ERR_DISPLAY_CAPABILITY, NID_DISPLAY_INVERT_COLORS);
+            status_set_error_domain(VBE_ERROR_DOMAIN_FILTER,
+                                    VBE_ERR_DISPLAY_CAPABILITY,
+                                    NID_DISPLAY_INVERT_COLORS);
             return -1;
         }
+        status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
         return advanced_filter_requested(&g_screen_filter) ? -2 : 0;
     }
 
     if (!g_screen_filter.invert && !g_invert_programmed) {
         g_vbe_status.invert = VBE_CAP_INACTIVE;
+        status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
         return advanced_filter_requested(&g_screen_filter) ? -2 : 0;
     }
 
-    if (g_invert_programmed && g_invert_value == g_screen_filter.invert)
+    if (g_invert_programmed && g_invert_value == g_screen_filter.invert) {
+        status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
         return advanced_filter_requested(&g_screen_filter) ? -2 : 0;
+    }
 
     int ret = ksceDisplaySetInvertColors(0, g_screen_filter.invert ? 1 : 0);
     if (ret < 0) {
         g_vbe_status.invert = VBE_CAP_FAILED;
-        status_set_error(VBE_ERR_DISPLAY_CAPABILITY, ret);
+        status_set_error_domain(VBE_ERROR_DOMAIN_FILTER,
+                                VBE_ERR_DISPLAY_CAPABILITY, ret);
         return ret;
     }
 
     g_invert_value = g_screen_filter.invert ? 1 : 0;
     g_invert_programmed = g_invert_value;
     g_vbe_status.invert = g_invert_value ? VBE_CAP_ACTIVE : VBE_CAP_INACTIVE;
+    status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
     return advanced_filter_requested(&g_screen_filter) ? -2 : 0;
 }
 
 void screen_filter_set_cct(uint16_t cct, int is_oled) {
     (void)cct;
     (void)is_oled;
-    /* Kept as a source-compatible internal symbol. Arbitrary CCT is not
-     * committed while transfer_lut/csc_filter are reported unsupported. */
 }
 
 void screen_filter_reset(int is_oled) {
@@ -161,7 +161,8 @@ int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused) 
     if (ret < 0 || !params_valid(&candidate)) {
         int detail = ret < 0 ? ret : -1;
         if (state_lock_acquire() >= 0) {
-            status_set_error(VBE_ERR_INVALID_USER_INPUT, detail);
+            status_set_error_domain(VBE_ERROR_DOMAIN_INPUT,
+                                    VBE_ERR_INVALID_USER_INPUT, detail);
             state_lock_release();
         }
         EXIT_SYSCALL(state);
@@ -174,8 +175,6 @@ int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused) 
         return ret;
     }
 
-    /* A syscall update is transactional: do not apply the supported invert
-     * field while simultaneously accepting unsupported CCT/gamma/etc. */
     if (advanced_filter_requested(&candidate)) {
         g_vbe_status.csc_filter = VBE_CAP_UNSUPPORTED;
         g_vbe_status.transfer_lut = VBE_CAP_UNSUPPORTED;
@@ -190,7 +189,8 @@ int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused) 
     if (ret < 0) {
         g_screen_filter = previous;
     } else {
-        status_clear_error();
+        status_clear_error_domain(VBE_ERROR_DOMAIN_INPUT);
+        status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
     }
 
     state_lock_release();
@@ -222,7 +222,8 @@ int vitabrightFilterReset(int is_oled_unused) {
     if (ret < 0) {
         g_screen_filter = previous;
     } else {
-        status_clear_error();
+        status_clear_error_domain(VBE_ERROR_DOMAIN_INPUT);
+        status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
     }
 
     state_lock_release();
