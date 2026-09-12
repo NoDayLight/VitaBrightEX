@@ -76,11 +76,14 @@ void screen_filter_load_config(void) {
 int screen_filter_apply(int is_oled) {
     (void)is_oled;
 
+    /* The old private IFTU call had no verified active-scanout ABI. Keep these
+     * states explicit until an independently documented persistent CSC and
+     * nonlinear transfer stage exists. */
     g_vbe_status.csc_filter = VBE_CAP_UNSUPPORTED;
     g_vbe_status.transfer_lut = VBE_CAP_UNSUPPORTED;
 
-    /* Resolving the documented export is sufficient to report capability.
-     * A neutral boot does not write display hardware at all. */
+    /* Resolving the documented invert export is sufficient to report the
+     * capability. A neutral boot performs no display write. */
     if (resolve_invert() < 0) {
         if (g_screen_filter.invert) {
             status_set_error(VBE_ERR_DISPLAY_CAPABILITY, NID_DISPLAY_INVERT_COLORS);
@@ -111,14 +114,14 @@ int screen_filter_apply(int is_oled) {
 }
 
 void screen_filter_set_cct(uint16_t cct, int is_oled) {
-    ScreenFilterParams candidate = g_screen_filter;
-    candidate.cct = cct;
-    if (!params_valid(&candidate)) return;
-    g_screen_filter = candidate;
-    (void)screen_filter_apply(is_oled);
+    (void)cct;
+    (void)is_oled;
+    /* Kept as a source-compatible internal symbol. Arbitrary CCT is not
+     * committed while transfer_lut/csc_filter are reported unsupported. */
 }
 
 void screen_filter_reset(int is_oled) {
+    ScreenFilterParams previous = g_screen_filter;
     ScreenFilterParams neutral = {
         .cct = CCT_DEFAULT,
         .gamma = 1.0f,
@@ -128,7 +131,8 @@ void screen_filter_reset(int is_oled) {
         .panel_enhance = 0,
     };
     g_screen_filter = neutral;
-    (void)screen_filter_apply(is_oled);
+    if (screen_filter_apply(is_oled) < 0)
+        g_screen_filter = previous;
 }
 
 int vitabrightFilterGetParams(ScreenFilterParams *out) {
@@ -169,8 +173,26 @@ int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused) 
         EXIT_SYSCALL(state);
         return ret;
     }
+
+    /* A syscall update is transactional: do not apply the supported invert
+     * field while simultaneously accepting unsupported CCT/gamma/etc. */
+    if (advanced_filter_requested(&candidate)) {
+        g_vbe_status.csc_filter = VBE_CAP_UNSUPPORTED;
+        g_vbe_status.transfer_lut = VBE_CAP_UNSUPPORTED;
+        state_lock_release();
+        EXIT_SYSCALL(state);
+        return -2;
+    }
+
+    ScreenFilterParams previous = g_screen_filter;
     g_screen_filter = candidate;
     ret = screen_filter_apply(g_is_oled);
+    if (ret < 0) {
+        g_screen_filter = previous;
+    } else {
+        status_clear_error();
+    }
+
     state_lock_release();
     EXIT_SYSCALL(state);
     return ret;
@@ -185,8 +207,25 @@ int vitabrightFilterReset(int is_oled_unused) {
         EXIT_SYSCALL(state);
         return ret;
     }
-    screen_filter_reset(g_is_oled);
+
+    ScreenFilterParams previous = g_screen_filter;
+    ScreenFilterParams neutral = {
+        .cct = CCT_DEFAULT,
+        .gamma = 1.0f,
+        .contrast = 1.0f,
+        .brightness = 0.0f,
+        .invert = 0,
+        .panel_enhance = 0,
+    };
+    g_screen_filter = neutral;
+    ret = screen_filter_apply(g_is_oled);
+    if (ret < 0) {
+        g_screen_filter = previous;
+    } else {
+        status_clear_error();
+    }
+
     state_lock_release();
     EXIT_SYSCALL(state);
-    return 0;
+    return ret;
 }
