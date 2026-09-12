@@ -3,19 +3,19 @@
 #include <psp2kern/kernel/sysroot.h>
 #include <taihen.h>
 
-#include "main.h"
 #include "config.h"
 #include "lcd/hooks.h"
 #include "log.h"
+#include "main.h"
 #include "oled/hooks.h"
 #include "screen_filter.h"
+#include "state_lock.h"
 #include "status.h"
 
 unsigned int sw_version = 0;
 int g_is_oled = 0;
 
 static int detect_is_lcd(void) {
-    /* Boot type indicator 1: bit 0 + bit 3 identifies LCD hardware. */
     return (*(uint8_t *)(ksceKernelSysrootGetKblParam() + 0xE8) & 9) != 0;
 }
 
@@ -25,26 +25,26 @@ int module_start(SceSize argc, const void *args) {
     (void)args;
 
     sw_version = ksceKernelSysrootGetSystemSwVersion();
-    config_load();
-
     int is_lcd = detect_is_lcd();
     g_is_oled = !is_lcd;
     status_init(is_lcd ? VBE_HW_LCD : VBE_HW_OLED, sw_version);
 
-    /* Exactly one brightness backend participates in startup. */
-    if (is_lcd) {
-        int ret = lcd_enable_hooks();
-        if (ret < 0) {
-            /* Fail open: retain the error in status and still finish boot. */
-            LOG("[CORE] LCD brightness backend unavailable: 0x%08X\n", ret);
-        }
-    } else {
-        oled_enable_hooks();
-        /* OLED backend predates status-aware return codes; mark selected core. */
-        g_vbe_status.brightness_core = VBE_CAP_ACTIVE;
+    int lock_ret = state_lock_init();
+    if (lock_ret < 0) {
+        g_vbe_status.state_lock = VBE_CAP_FAILED;
+        status_set_error(VBE_ERR_SYNCHRONIZATION, lock_ret);
+        /* No mutable backend is started without serialization support. */
+        return SCE_KERNEL_START_SUCCESS;
     }
+    g_vbe_status.state_lock = VBE_CAP_ACTIVE;
 
-    /* Optional display capabilities are never boot-critical. */
+    config_load();
+
+    int ret = is_lcd ? lcd_enable_hooks() : oled_enable_hooks();
+    if (ret < 0)
+        LOG("[CORE] selected brightness backend unavailable: 0x%08X\n", ret);
+
+    /* Optional display capabilities are not part of the boot-success contract. */
     screen_filter_load_config();
     (void)screen_filter_apply(g_is_oled);
 
@@ -53,25 +53,24 @@ int module_start(SceSize argc, const void *args) {
 
 int vitabrightReload(void) {
     int state;
-    int ret = 0;
     ENTER_SYSCALL(state);
-
-    /* Stop only the backend that exists on this device. */
-    if (g_is_oled) oled_disable_hooks();
-    else lcd_disable_hooks();
-
-    config_load();
+    int ret = state_lock_acquire();
+    if (ret < 0) { EXIT_SYSCALL(state); return ret; }
 
     if (g_is_oled) {
-        oled_enable_hooks();
-        g_vbe_status.brightness_core = VBE_CAP_ACTIVE;
+        /* OLED reload is fail-open.  A bad replacement may disable the
+         * enhancement, but cannot initialize the LCD backend or block boot. */
+        oled_disable_hooks();
+        config_load();
+        ret = oled_enable_hooks();
     } else {
-        ret = lcd_enable_hooks();
+        ret = lcd_reload_backend();
     }
 
     screen_filter_load_config();
     (void)screen_filter_apply(g_is_oled);
 
+    state_lock_release();
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -80,8 +79,11 @@ int module_stop(SceSize argc, const void *args) {
     (void)argc;
     (void)args;
 
+    int locked = state_lock_acquire() >= 0;
     screen_filter_reset(g_is_oled);
     if (g_is_oled) oled_disable_hooks();
     else lcd_disable_hooks();
+    if (locked) state_lock_release();
+    state_lock_destroy();
     return SCE_KERNEL_STOP_SUCCESS;
 }
