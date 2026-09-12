@@ -6,9 +6,9 @@ typedef enum { VBE_CAP_UNKNOWN = 0, VBE_CAP_UNAVAILABLE = 1, VBE_CAP_INACTIVE = 
 
 typedef enum {
     VBE_RESULT_OK = 0,
-    /* Capability result, not a runtime failure. Callers must handle this
-     * explicitly instead of treating every negative result as an error. */
-    VBE_RESULT_UNSUPPORTED = -2,
+    /* Positive nonzero capability result: deliberately outside the SCE/taiHEN
+     * negative runtime-error namespace. */
+    VBE_RESULT_UNSUPPORTED = 1,
 } VbeResult;
 
 typedef enum {
