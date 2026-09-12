@@ -100,7 +100,8 @@ static void toggle_invert(void) {
     ScreenFilterParams p = filter;
     p.cct = CCT_DEFAULT; p.gamma = 1.0f; p.contrast = 1.0f; p.brightness = 0.0f; p.panel_enhance = 0; p.invert = !p.invert;
     int r = vitabrightFilterSetParams(&p, status.hardware == VBE_HW_OLED);
-    set_msg(r < 0 ? "Invert failed; previous state retained." : p.invert ? "Invert enabled." : "Invert disabled.");
+    if (r == VBE_RESULT_UNSUPPORTED) set_msg("Requested filter capability is unsupported.");
+    else set_msg(r < 0 ? "Invert failed; previous state retained." : p.invert ? "Invert enabled." : "Invert disabled.");
     refresh();
 }
 
@@ -185,7 +186,16 @@ int main(void) {
         if (p & SCE_CTRL_CROSS) toggle_invert();
         if (p & SCE_CTRL_TRIANGLE) toggle_color();
         if (p & SCE_CTRL_SELECT) { refresh(); set_msg("Status refreshed."); }
-        if (p & SCE_CTRL_CIRCLE) { int r = vitabrightReload(); refresh(); set_msg(r < 0 ? "Reload retained previous state where a request failed." : "Reload successful."); }
+        if (p & SCE_CTRL_CIRCLE) {
+            int r = vitabrightReload();
+            refresh();
+            if (r == VBE_RESULT_UNSUPPORTED)
+                set_msg("Reload complete; config requests an unsupported filter capability.");
+            else if (r < 0)
+                set_msg("Reload completed fail-open; see domain diagnostics for the failed stage.");
+            else
+                set_msg("Reload successful.");
+        }
         if (p & SCE_CTRL_SQUARE) save_lut();
         if (p & SCE_CTRL_START) running = 0;
         draw(font); old = pad;
