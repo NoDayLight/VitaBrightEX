@@ -1,5 +1,6 @@
 #include "screen_filter.h"
 #include "config.h"
+#include "filter_policy.h"
 #include "log.h"
 #include "main.h"
 #include "state_lock.h"
@@ -56,12 +57,6 @@ static int params_valid(const ScreenFilterParams *p) {
     return 1;
 }
 
-static int advanced_filter_requested(const ScreenFilterParams *p) {
-    return p->cct != CCT_DEFAULT || p->gamma != 1.0f ||
-           p->contrast != 1.0f || p->brightness != 0.0f ||
-           p->panel_enhance != 0;
-}
-
 void screen_filter_load_config(void) {
     ScreenFilterParams p;
     p.cct = (uint16_t)g_config.filter_cct;
@@ -75,8 +70,18 @@ void screen_filter_load_config(void) {
 
 int screen_filter_apply(int is_oled) {
     (void)is_oled;
-    g_vbe_status.csc_filter = VBE_CAP_UNSUPPORTED;
-    g_vbe_status.transfer_lut = VBE_CAP_UNSUPPORTED;
+
+    VbeFilterRequestPolicy policy = vbe_filter_request_policy(&g_screen_filter);
+    g_vbe_status.csc_filter = policy.csc_state;
+    g_vbe_status.transfer_lut = policy.transfer_state;
+
+    if (policy.result == VBE_RESULT_UNSUPPORTED) {
+        /* Unsupported is a truthful capability result, not a runtime fault.
+         * Reject before touching invert so mixed supported/unsupported requests
+         * remain atomic. */
+        status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
+        return VBE_RESULT_UNSUPPORTED;
+    }
 
     if (resolve_invert() < 0) {
         if (g_screen_filter.invert) {
@@ -86,18 +91,18 @@ int screen_filter_apply(int is_oled) {
             return -1;
         }
         status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
-        return advanced_filter_requested(&g_screen_filter) ? -2 : 0;
+        return VBE_RESULT_OK;
     }
 
     if (!g_screen_filter.invert && !g_invert_programmed) {
         g_vbe_status.invert = VBE_CAP_INACTIVE;
         status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
-        return advanced_filter_requested(&g_screen_filter) ? -2 : 0;
+        return VBE_RESULT_OK;
     }
 
     if (g_invert_programmed && g_invert_value == g_screen_filter.invert) {
         status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
-        return advanced_filter_requested(&g_screen_filter) ? -2 : 0;
+        return VBE_RESULT_OK;
     }
 
     int ret = ksceDisplaySetInvertColors(0, g_screen_filter.invert ? 1 : 0);
@@ -112,7 +117,7 @@ int screen_filter_apply(int is_oled) {
     g_invert_programmed = g_invert_value;
     g_vbe_status.invert = g_invert_value ? VBE_CAP_ACTIVE : VBE_CAP_INACTIVE;
     status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
-    return advanced_filter_requested(&g_screen_filter) ? -2 : 0;
+    return VBE_RESULT_OK;
 }
 
 void screen_filter_set_cct(uint16_t cct, int is_oled) {
@@ -161,8 +166,8 @@ int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused) 
     if (ret < 0 || !params_valid(&candidate)) {
         int detail = ret < 0 ? ret : -1;
         if (state_lock_acquire() >= 0) {
-            status_set_error_domain(VBE_ERROR_DOMAIN_INPUT,
-                                    VBE_ERR_INVALID_USER_INPUT, detail);
+            status_stage_result(VBE_ERROR_DOMAIN_INPUT, 0,
+                                VBE_ERR_INVALID_USER_INPUT, detail);
             state_lock_release();
         }
         EXIT_SYSCALL(state);
@@ -174,24 +179,23 @@ int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused) 
         EXIT_SYSCALL(state);
         return ret;
     }
+    status_stage_result(VBE_ERROR_DOMAIN_INPUT, 1,
+                        VBE_ERR_INVALID_USER_INPUT, 0);
 
-    if (advanced_filter_requested(&candidate)) {
-        g_vbe_status.csc_filter = VBE_CAP_UNSUPPORTED;
-        g_vbe_status.transfer_lut = VBE_CAP_UNSUPPORTED;
+    VbeFilterRequestPolicy policy = vbe_filter_request_policy(&candidate);
+    g_vbe_status.csc_filter = policy.csc_state;
+    g_vbe_status.transfer_lut = policy.transfer_state;
+    if (policy.result == VBE_RESULT_UNSUPPORTED) {
+        status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
         state_lock_release();
         EXIT_SYSCALL(state);
-        return -2;
+        return VBE_RESULT_UNSUPPORTED;
     }
 
     ScreenFilterParams previous = g_screen_filter;
     g_screen_filter = candidate;
     ret = screen_filter_apply(g_is_oled);
-    if (ret < 0) {
-        g_screen_filter = previous;
-    } else {
-        status_clear_error_domain(VBE_ERROR_DOMAIN_INPUT);
-        status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
-    }
+    if (ret < 0) g_screen_filter = previous;
 
     state_lock_release();
     EXIT_SYSCALL(state);
@@ -219,12 +223,9 @@ int vitabrightFilterReset(int is_oled_unused) {
     };
     g_screen_filter = neutral;
     ret = screen_filter_apply(g_is_oled);
-    if (ret < 0) {
-        g_screen_filter = previous;
-    } else {
-        status_clear_error_domain(VBE_ERROR_DOMAIN_INPUT);
-        status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
-    }
+    if (ret < 0) g_screen_filter = previous;
+    else status_stage_result(VBE_ERROR_DOMAIN_INPUT, 1,
+                             VBE_ERR_INVALID_USER_INPUT, 0);
 
     state_lock_release();
     EXIT_SYSCALL(state);
