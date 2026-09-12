@@ -40,9 +40,13 @@ static int cfg_streq(const char *a, const char *b) {
     return *a == '\0' && *b == '\0';
 }
 
-static void cfg_strncpy(char *dst, const char *src, int dst_size) {
-    int i;
-    for (i = 0; i < dst_size - 1 && src[i]; i++) dst[i] = src[i];
+static void cfg_copy_value(char *dst, const char *src, int dst_size) {
+    int i = 0;
+    while (i < dst_size - 1 && src[i] && src[i] != '\r' && src[i] != '\n') {
+        dst[i] = src[i];
+        ++i;
+    }
+    while (i > 0 && (dst[i - 1] == ' ' || dst[i - 1] == '\t')) --i;
     dst[i] = '\0';
 }
 
@@ -119,12 +123,13 @@ static float clamp_f(float v, float lo, float hi) {
 
 static void cfg_apply(VitaBrightConfig *cfg, const char *key, const char *val) {
     if      (cfg_streq(key, "oled_panel_lut_override")) cfg->oled_panel_lut_override = cfg_atoi(val);
-    else if (cfg_streq(key, "panel_lut_path")) cfg_strncpy(cfg->panel_lut_path, val, sizeof(cfg->panel_lut_path));
+    else if (cfg_streq(key, "panel_lut_path")) cfg_copy_value(cfg->panel_lut_path, val, sizeof(cfg->panel_lut_path));
     else if (cfg_streq(key, "color_r_bias")) cfg->color_r_bias = cfg_atoi(val);
     else if (cfg_streq(key, "color_g_bias")) cfg->color_g_bias = cfg_atoi(val);
     else if (cfg_streq(key, "color_b_bias")) cfg->color_b_bias = cfg_atoi(val);
     else if (cfg_streq(key, "night_mode_enabled")) cfg->night_mode_enabled = cfg_atoi(val);
     else if (cfg_streq(key, "night_mode_threshold")) cfg->night_mode_threshold = cfg_atoi(val);
+    else if (cfg_streq(key, "display_color_space_mode")) cfg->lcd_color_space_mode = cfg_atoi(val);
     else if (cfg_streq(key, "lcd_color_space_mode")) cfg->lcd_color_space_mode = cfg_atoi(val);
     else if (cfg_streq(key, "lcd_rgb_range_mode")) cfg->lcd_rgb_range_mode = cfg_atoi(val);
     else if (cfg_streq(key, "lcd_saturation_boost")) cfg->lcd_saturation_boost = cfg_atoi(val);
@@ -146,7 +151,7 @@ static void cfg_validate(VitaBrightConfig *cfg) {
     cfg->night_mode_enabled = !!cfg->night_mode_enabled;
     cfg->night_mode_threshold = clamp_i(cfg->night_mode_threshold, 0, 16);
     cfg->lcd_color_space_mode = !!cfg->lcd_color_space_mode;
-    cfg->lcd_rgb_range_mode = !!cfg->lcd_rgb_range_mode;
+    cfg->lcd_rgb_range_mode = clamp_i(cfg->lcd_rgb_range_mode, 0, 2);
     cfg->lcd_saturation_boost = !!cfg->lcd_saturation_boost;
     cfg->lcd_ips_enhance = !!cfg->lcd_ips_enhance;
     cfg->oled_dim_workaround = !!cfg->oled_dim_workaround;
