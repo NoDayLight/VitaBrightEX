@@ -18,18 +18,18 @@
 #define NID_LCD_SET_BRIGHTNESS   0x581D3A87
 #define NID_POWER_SET_MAX_BRIGHT 0x77027B6B
 #define LCD_DIMMED_VALUE         25u
+#define LCD_SOURCE_PATH_MAX      128
 
 static const uint8_t lcd_brightness_default[LCD_LUT_LEVELS] = {
     1, 3, 5, 8, 13, 20, 29, 41, 57, 76, 95, 116, 137, 161, 190, 220, 255
 };
 
-/* Stock table documented in the original VitaBright source. Raw offsets are
- * accepted only when the loaded SceLcd image still contains this signature. */
 static const uint8_t lcd_stock_signature[LCD_LUT_LEVELS] = {
     31, 37, 43, 50, 58, 67, 77, 88, 100, 114, 129, 147, 166, 182, 203, 227, 255
 };
 
 static uint8_t lcd_brightness_values[LCD_LUT_LEVELS];
+static char lcd_source_path[LCD_SOURCE_PATH_MAX];
 static SceUID lcd_table_inject = -1;
 static SceUID lcd_set_brightness_hook = -1;
 static SceUID power_set_max_bright_hook = -1;
@@ -43,6 +43,15 @@ static void lut_copy(uint8_t *dst, const uint8_t *src) {
     for (int i = 0; i < LCD_LUT_LEVELS; ++i) dst[i] = src[i];
 }
 
+static void path_copy(char dst[LCD_SOURCE_PATH_MAX], const char *src) {
+    int i = 0;
+    while (i < LCD_SOURCE_PATH_MAX - 1 && src[i]) {
+        dst[i] = src[i];
+        ++i;
+    }
+    dst[i] = '\0';
+}
+
 static int lut_is_valid(const uint8_t values[LCD_LUT_LEVELS]) {
     for (int i = 1; i < LCD_LUT_LEVELS; ++i) {
         if (values[i] < values[i - 1]) return 0;
@@ -50,18 +59,12 @@ static int lut_is_valid(const uint8_t values[LCD_LUT_LEVELS]) {
     return 1;
 }
 
-/* Preserve original VitaBright semantics: GetBrightness returns the logical
- * 2..65536 coordinate used to select one of 17 table entries. The injected
- * 8-bit table is the output mapping, not that coordinate itself. */
 static int lcd_brightness_to_index(unsigned int brightness) {
     if (brightness <= 2u) return 0;
     if (brightness >= 0x10000u) return LCD_LUT_LEVELS - 1;
     return (int)(16u * (brightness - 2u) / 65534u);
 }
 
-/* Parse one strict decimal LUT line. Returns 1 for blank/comment, 0 for a
- * value, negative for malformed data.  Silently clamping malformed user data
- * makes reload status dishonest, so values above 255 are rejected. */
 static int parse_decimal_line(const char *line, int len, uint8_t *out) {
     int i = 0;
     while (i < len && (line[i] == ' ' || line[i] == '\t')) ++i;
@@ -87,7 +90,7 @@ static int parse_decimal_line(const char *line, int len, uint8_t *out) {
 static int lcd_parse_lut_file(const char *path,
                               uint8_t out[LCD_LUT_LEVELS],
                               int *opened) {
-    SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 6);
+    SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
     if (fd < 0) {
         *opened = 0;
         return fd;
@@ -139,23 +142,28 @@ static int lcd_parse_lut_file(const char *path,
     return 0;
 }
 
-/* ur0 is authoritative when present. ux0 is consulted only when ur0 does not
- * exist/open. A malformed authoritative file is an error, not a request to
- * silently fall back to another table. If neither exists, use safe defaults. */
-static int lcd_load_disk_candidate(uint8_t out[LCD_LUT_LEVELS]) {
+static int lcd_load_disk_candidate(uint8_t out[LCD_LUT_LEVELS],
+                                   char source[LCD_SOURCE_PATH_MAX]) {
     int opened = 0;
     int ret = lcd_parse_lut_file(LCD_LUT_FILE1, out, &opened);
-    if (opened) return ret;
+    if (opened) {
+        if (ret == 0) path_copy(source, LCD_LUT_FILE1);
+        return ret;
+    }
 
     ret = lcd_parse_lut_file(LCD_LUT_FILE2, out, &opened);
-    if (opened) return ret;
+    if (opened) {
+        if (ret == 0) path_copy(source, LCD_LUT_FILE2);
+        return ret;
+    }
 
     lut_copy(out, lcd_brightness_default);
+    /* With no disk LUT, a future explicit Save creates the authoritative ur0
+     * file. Until then the safe built-in table remains the live source. */
+    path_copy(source, LCD_LUT_FILE1);
     return 0;
 }
 
-/* Keep this whitelist identical to the raw-layout provenance in original
- * VitaBright. 3.71-3.74 remain unsupported until independently verified. */
 static int lcd_get_table_offset(uint32_t firmware, uint32_t *out) {
     switch (firmware >> 16) {
     case 0x360:
@@ -196,9 +204,6 @@ int hook_ksceLcdSetBrightness(unsigned int brightness) {
     unsigned int old_brightness = (unsigned int)old_raw;
     int old_index = lcd_brightness_to_index(old_brightness);
 
-    /* Inactivity dim maps to approximately 25 in the stock driver. Only
-     * accept it when doing so cannot make a deliberately darker custom table
-     * brighter than its current level. */
     if (old_brightness >= 2u && lcd_brightness_values[old_index] >= LCD_DIMMED_VALUE)
         return TAI_CONTINUE(int, lcd_set_brightness_ref, brightness);
     return TAI_CONTINUE(int, lcd_set_brightness_ref, old_brightness);
@@ -294,8 +299,6 @@ static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
     }
     g_vbe_status.brightness_table = VBE_CAP_ACTIVE;
 
-    /* Publish before the hook can observe the candidate. A failed later step
-     * tears down the transaction; live replacement restores the old table. */
     lut_copy(lcd_brightness_values, candidate);
 
     lcd_set_brightness_hook = taiHookFunctionExportForKernel(KERNEL_PID,
@@ -372,12 +375,16 @@ int lcd_enable_hooks(void) {
     if (g_lcd_hooks_active) return 0;
 
     uint8_t candidate[LCD_LUT_LEVELS];
-    int ret = lcd_load_disk_candidate(candidate);
+    char source[LCD_SOURCE_PATH_MAX];
+    int ret = lcd_load_disk_candidate(candidate, source);
     if (ret < 0) {
         status_set_error(VBE_ERR_INVALID_USER_INPUT, ret);
         return ret;
     }
-    return lcd_start_transaction(candidate);
+
+    ret = lcd_start_transaction(candidate);
+    if (ret == 0) path_copy(lcd_source_path, source);
+    return ret;
 }
 
 void lcd_disable_hooks(void) {
@@ -389,6 +396,7 @@ void lcd_disable_hooks(void) {
 int lcd_reload_backend(void) {
     VitaBrightConfig previous_config = g_config;
     uint8_t candidate[LCD_LUT_LEVELS];
+    char candidate_source[LCD_SOURCE_PATH_MAX];
 
     int ret = config_load();
     if (ret < 0) {
@@ -397,7 +405,7 @@ int lcd_reload_backend(void) {
         return ret;
     }
 
-    ret = lcd_load_disk_candidate(candidate);
+    ret = lcd_load_disk_candidate(candidate, candidate_source);
     if (ret < 0) {
         g_config = previous_config;
         status_set_error(VBE_ERR_INVALID_USER_INPUT, ret);
@@ -409,17 +417,105 @@ int lcd_reload_backend(void) {
         g_config = previous_config;
         return ret;
     }
+
+    path_copy(lcd_source_path, candidate_source);
     return 0;
+}
+
+static int build_temp_path(char out[LCD_SOURCE_PATH_MAX], const char *path) {
+    int i = 0;
+    while (i < LCD_SOURCE_PATH_MAX - 5 && path[i]) {
+        out[i] = path[i];
+        ++i;
+    }
+    if (path[i] != '\0') return -1;
+    out[i++] = '.';
+    out[i++] = 't';
+    out[i++] = 'm';
+    out[i++] = 'p';
+    out[i] = '\0';
+    return 0;
+}
+
+static int decimal_line(uint8_t value, char out[4]) {
+    int pos = 0;
+    if (value >= 100) {
+        out[pos++] = (char)('0' + value / 100);
+        value = (uint8_t)(value % 100);
+        out[pos++] = (char)('0' + value / 10);
+        out[pos++] = (char)('0' + value % 10);
+    } else if (value >= 10) {
+        out[pos++] = (char)('0' + value / 10);
+        out[pos++] = (char)('0' + value % 10);
+    } else {
+        out[pos++] = (char)('0' + value);
+    }
+    out[pos++] = '\n';
+    return pos;
+}
+
+static int persist_lcd_locked(void) {
+    if (!g_lcd_hooks_active || lcd_source_path[0] == '\0') return -1;
+
+    char temp_path[LCD_SOURCE_PATH_MAX];
+    if (build_temp_path(temp_path, lcd_source_path) < 0) return -1;
+
+    (void)ksceIoRemove(temp_path);
+    SceUID fd = ksceIoOpen(temp_path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+    if (fd < 0) return fd;
+
+    int ret = 0;
+    for (int i = 0; i < LCD_LUT_LEVELS; ++i) {
+        char line[4];
+        int len = decimal_line(lcd_brightness_values[i], line);
+        int written = ksceIoWrite(fd, line, (SceSize)len);
+        if (written != len) {
+            ret = written < 0 ? written : -1;
+            break;
+        }
+    }
+
+    if (ret == 0) {
+        int sync_status = 0;
+        int sync_ret = ksceIoSyncByFd(fd, &sync_status);
+        if (sync_ret < 0 || sync_status < 0)
+            ret = sync_ret < 0 ? sync_ret : sync_status;
+    }
+
+    int close_ret = ksceIoClose(fd);
+    if (ret == 0 && close_ret < 0) ret = close_ret;
+
+    if (ret == 0) ret = ksceIoRename(temp_path, lcd_source_path);
+    if (ret < 0) (void)ksceIoRemove(temp_path);
+    return ret;
+}
+
+int vitabrightLcdPersistBrightnessValues(void) {
+    int state;
+    ENTER_SYSCALL(state);
+    int ret = state_lock_acquire();
+    if (ret < 0) { EXIT_SYSCALL(state); return ret; }
+
+    if (g_is_oled || !g_lcd_hooks_active) {
+        state_lock_release();
+        EXIT_SYSCALL(state);
+        return -1;
+    }
+
+    ret = persist_lcd_locked();
+    if (ret < 0) status_set_error(VBE_ERR_BACKEND, ret);
+    else status_clear_error();
+
+    state_lock_release();
+    EXIT_SYSCALL(state);
+    return ret;
 }
 
 int vitabrightLcdGetBrightnessValues(uint8_t out[LCD_LUT_LEVELS]) {
     int state;
     ENTER_SYSCALL(state);
     int ret = state_lock_acquire();
-    if (ret < 0) {
-        EXIT_SYSCALL(state);
-        return ret;
-    }
+    if (ret < 0) { EXIT_SYSCALL(state); return ret; }
 
     if (g_is_oled || !g_lcd_hooks_active) {
         state_lock_release();
@@ -452,10 +548,7 @@ int vitabrightLcdSetBrightnessValues(uint8_t in[LCD_LUT_LEVELS]) {
     }
 
     ret = state_lock_acquire();
-    if (ret < 0) {
-        EXIT_SYSCALL(state);
-        return ret;
-    }
+    if (ret < 0) { EXIT_SYSCALL(state); return ret; }
     if (g_is_oled || !g_lcd_hooks_active) {
         state_lock_release();
         EXIT_SYSCALL(state);
@@ -469,16 +562,11 @@ int vitabrightLcdSetBrightnessValues(uint8_t in[LCD_LUT_LEVELS]) {
     return ret;
 }
 
-/* Retained for ABI compatibility with the older companion editor. Colour
- * space is now backend-neutral and transactional in color_space.c. */
 int vitabrightLcdReapplyColor(void) {
     int state;
     ENTER_SYSCALL(state);
     int ret = state_lock_acquire();
-    if (ret < 0) {
-        EXIT_SYSCALL(state);
-        return ret;
-    }
+    if (ret < 0) { EXIT_SYSCALL(state); return ret; }
     if (g_is_oled) {
         state_lock_release();
         EXIT_SYSCALL(state);
