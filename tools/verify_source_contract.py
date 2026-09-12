@@ -51,8 +51,30 @@ for path in (ROOT / "lcd" / "hooks.c", ROOT / "oled" / "hooks.c"):
            f"{path.relative_to(ROOT)} ignores hook-release ownership failure")
     forbid(path, "(void)taiInjectReleaseForKernel",
            f"{path.relative_to(ROOT)} ignores injection-release ownership failure")
+    forbid(path, "(void)state_lock_release()",
+           f"{path.relative_to(ROOT)} ignores synchronization ownership failure")
+    require(path, "VBE_OWNERSHIP_DEGRADED",
+            f"{path.relative_to(ROOT)} lost explicit dirty-ownership state")
+    require(path, "vbe_txn_should_rollback",
+            f"{path.relative_to(ROOT)} bypasses shared rollback legality")
+    require(path, "vbe_txn_commit_source",
+            f"{path.relative_to(ROOT)} bypasses transactional source commit")
+    require(path, "vbe_txn_file_persistence_allowed",
+            f"{path.relative_to(ROOT)} bypasses shared persistence eligibility")
     require(path, "VBE_ERR_RESOURCE_RELEASE",
             f"{path.relative_to(ROOT)} no longer reports incomplete teardown")
+
+for split_truth in ("g_lcd_hooks_active", "static int g_active"):
+    forbid(ROOT / "lcd" / "hooks.c", split_truth,
+           f"LCD backend reintroduces split ownership flag {split_truth}")
+    forbid(ROOT / "oled" / "hooks.c", split_truth,
+           f"OLED backend reintroduces split ownership flag {split_truth}")
+
+for path in (ROOT / "status.c", ROOT / "color_space.c", ROOT / "screen_filter.c"):
+    forbid(path, "(void)state_lock_release()",
+           f"{path.relative_to(ROOT)} ignores synchronization ownership failure")
+    require(path, "state_lock_release_result",
+            f"{path.relative_to(ROOT)} bypasses operation+unlock result composition")
 
 for symbol in ("normalise_white_point", "apply_color_bias", "apply_night_mode"):
     forbid(ROOT / "oled" / "hooks.c", symbol,
@@ -60,6 +82,10 @@ for symbol in ("normalise_white_point", "apply_color_bias", "apply_night_mode"):
 
 require(ROOT / "lcd" / "hooks.c", "lcd_validate_layout", "LCD runtime signature validation missing")
 require(ROOT / "lcd" / "hooks.c", "lcd_stock_signature", "LCD stock signature missing")
+require(ROOT / "lcd" / "hooks.c", "VBE_SOURCE_ID_COMPILED",
+        "LCD compiled fallback source identity missing")
+forbid(ROOT / "lcd" / "hooks.c", "vbe_source_identity_file(&candidate->source, LCD_LUT_FILE1);\n    *error_code = VBE_ERR_NONE;\n    return 0;\n}\n\n    lut_copy(candidate->values, lcd_brightness_default);\n    vbe_source_identity_file",
+       "LCD compiled fallback fabricates a file-backed source")
 require(ROOT / "oled" / "hooks.c", "validate_layout", "OLED layout plausibility validation missing")
 require(ROOT / "oled" / "hooks.c", "module_get_offset", "OLED inherited offset is no longer resolved")
 for version in ("0x371", "0x372", "0x373", "0x374"):
@@ -71,6 +97,11 @@ for nid in ("0x17F66722", "0xD40968FB", "0x4F8A1D4A", "0xDABBD9D3"):
 require(ROOT / "color_space.c", "g_original_mode", "color-space original state snapshot missing")
 require(ROOT / "color_space.c", "current = g_get_mode()", "color-space read-back verification missing")
 require(ROOT / "main.c", "color_space_shutdown()", "module stop no longer restores color-space state")
+require(ROOT / "main.c", "state_lock_begin_shutdown()", "module stop no longer quiesces runtime operations")
+require(ROOT / "main.c", "state_lock_cancel_shutdown()", "failed stop cannot return to resident runtime")
+require(ROOT / "main.c", "state_lock_finish_shutdown()", "module stop bypasses confirmed mutex teardown")
+require(ROOT / "main.c", "vbe_stop_can_unload", "module stop no longer uses explicit unload-safety accumulator")
+require(ROOT / "main.c", "SCE_KERNEL_STOP_FAIL", "stop-critical failures no longer cancel unload")
 
 require(ROOT / "status.c", "s.abi_version = 2", "status ABI v2 changed unexpectedly")
 require(ROOT / "status.c", "vitabrightGetDiagnostics", "per-domain diagnostics syscall missing")
@@ -106,9 +137,15 @@ require(root_cmake, 'set(VBE_FTP_UX0 "${VBE_FTP_ROOT}//ux0:")',
 for relative in (":1337/ur0:/", ":1337/ux0:/"):
     forbid(root_cmake, relative, f"relative Vita FTP path returned: {relative}")
 require(root_cmake, "VBE_BUILD_ID", "plugin build identity is not generated")
-require(root_cmake, "source_authority.c", "production source authority core is not linked")
-require(root_cmake, "filter_policy.c", "production filter policy core is not linked")
+for core in ("source_authority.c", "transaction_core.c", "persistence_core.c", "state_lock_core.c", "filter_policy.c"):
+    require(root_cmake, core, f"production shared core is not linked: {core}")
 require(ROOT / "editor" / "CMakeLists.txt", "VBE_BUILD_ID", "editor build identity is not generated")
+
+for path in (ROOT / "source_authority.h", ROOT / "source_authority.c"):
+    forbid(path, "#define SCE_ERROR_ERRNO_ENOENT",
+           "project reintroduced SDK-looking ENOENT ownership")
+require(ROOT / "source_authority.h", "VBE_SCE_IO_ERROR_NOT_FOUND",
+        "project-owned Vita not-found compatibility constant missing")
 
 editor = ROOT / "editor" / "app.c"
 require(ROOT / "editor" / "CMakeLists.txt", "add_executable(vitabrightex-editor.elf app.c)",
@@ -119,6 +156,7 @@ require(editor, "LCD LUT entry %d/%d: %u", "editor mislabels LUT cursor")
 require(editor, "Build plugin=%s editor=%s", "editor no longer exposes plugin/editor provenance")
 require(editor, "vitabrightGetDiagnostics", "editor no longer exposes error domains")
 require(editor, "r == VBE_RESULT_UNSUPPORTED", "editor collapses unsupported capability into generic failure")
+require(editor, "VBE_RESULT_NO_FILE_SOURCE", "editor hides compiled-source persistence semantics")
 for forbidden in ("fopen(", "vitabright_lut_p4.txt", "vitabright_lcd_lut.txt"):
     forbid(editor, forbidden,
            f"editor reintroduces direct/guessed LUT persistence ({forbidden})")
