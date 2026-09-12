@@ -63,7 +63,7 @@ static LcdBackend g_lcd = {
     .get_brightness = NULL,
     .set_brightness = NULL,
     .source = { .kind = VBE_SOURCE_ID_NONE, .path = {0} },
-    .persistence = { .fd = -1, .temp_owned = 0, .target = {0}, .temp = {0} },
+    .persistence = { .fd = -1, .fd_owned = 0, .temp_owned = 0, .target = {0}, .temp = {0} },
 };
 
 static void brightness_error(int error, int detail) {
@@ -379,7 +379,7 @@ static VbeTxnAttempt lcd_start_transaction(const LcdCandidate *candidate) {
         return lcd_abort_start(VBE_ERR_BACKEND, ret);
 
     lut_copy(g_lcd.committed_lut, candidate->values);
-    vbe_source_identity_copy(&g_lcd.source, &candidate->source);
+    vbe_txn_commit_source(&g_lcd.source, &candidate->source);
     g_lcd.ownership = VBE_OWNERSHIP_ACTIVE;
     publish_active();
     brightness_ok();
@@ -504,10 +504,11 @@ static int lcd_persist_write(void *context) {
 }
 
 static int persist_lcd_locked(void) {
-    if (g_lcd.ownership != VBE_OWNERSHIP_ACTIVE) return -1;
-    if (g_lcd.source.kind == VBE_SOURCE_ID_COMPILED)
+    if (g_lcd.source.kind == VBE_SOURCE_ID_COMPILED &&
+        g_lcd.ownership == VBE_OWNERSHIP_ACTIVE)
         return VBE_RESULT_NO_FILE_SOURCE;
-    if (!vbe_source_identity_is_file(&g_lcd.source)) return -1;
+    if (!vbe_txn_file_persistence_allowed(g_lcd.ownership, &g_lcd.source))
+        return -1;
 
     int cleanup = vbe_persist_file_cleanup(&g_lcd.persistence);
     if (cleanup < 0) {
@@ -588,13 +589,13 @@ int vitabrightLcdPersistBrightnessValues(void) {
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
 
     if (g_is_oled || g_lcd.ownership != VBE_OWNERSHIP_ACTIVE) {
-        (void)state_lock_release();
+        ret = state_lock_release_result(-1);
         EXIT_SYSCALL(state);
-        return -1;
+        return ret;
     }
 
     ret = persist_lcd_locked();
-    (void)state_lock_release();
+    ret = state_lock_release_result(ret);
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -606,15 +607,16 @@ int vitabrightLcdGetBrightnessValues(uint8_t out[LCD_LUT_LEVELS]) {
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
 
     if (g_is_oled || g_lcd.ownership != VBE_OWNERSHIP_ACTIVE) {
-        (void)state_lock_release();
+        ret = state_lock_release_result(-1);
         EXIT_SYSCALL(state);
-        return -1;
+        return ret;
     }
 
     uint8_t snapshot[LCD_LUT_LEVELS];
     lut_copy(snapshot, g_lcd.committed_lut);
-    (void)state_lock_release();
-    ret = ksceKernelMemcpyKernelToUser((void *)out, snapshot, sizeof(snapshot));
+    ret = state_lock_release_result(0);
+    if (ret >= 0)
+        ret = ksceKernelMemcpyKernelToUser((void *)out, snapshot, sizeof(snapshot));
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -628,10 +630,13 @@ int vitabrightLcdSetBrightnessValues(uint8_t in[LCD_LUT_LEVELS]) {
                                            sizeof(candidate.values));
     if (ret < 0 || !vbe_lcd_lut_values_valid(candidate.values)) {
         int detail = ret < 0 ? ret : -1;
-        if (state_lock_acquire() >= 0) {
+        int lock = state_lock_acquire();
+        if (lock >= 0) {
             status_stage_result(VBE_ERROR_DOMAIN_INPUT, 0,
                                 VBE_ERR_INVALID_USER_INPUT, detail);
-            (void)state_lock_release();
+            detail = state_lock_release_result(detail);
+        } else {
+            detail = lock;
         }
         EXIT_SYSCALL(state);
         return detail;
@@ -642,14 +647,14 @@ int vitabrightLcdSetBrightnessValues(uint8_t in[LCD_LUT_LEVELS]) {
     status_stage_result(VBE_ERROR_DOMAIN_INPUT, 1,
                         VBE_ERR_INVALID_USER_INPUT, 0);
     if (g_is_oled || g_lcd.ownership != VBE_OWNERSHIP_ACTIVE) {
-        (void)state_lock_release();
+        ret = state_lock_release_result(-1);
         EXIT_SYSCALL(state);
-        return -1;
+        return ret;
     }
 
     vbe_source_identity_copy(&candidate.source, &g_lcd.source);
     ret = lcd_replace_candidate(&candidate);
-    (void)state_lock_release();
+    ret = state_lock_release_result(ret);
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -660,13 +665,13 @@ int vitabrightLcdReapplyColor(void) {
     int ret = state_lock_acquire();
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
     if (g_is_oled) {
-        (void)state_lock_release();
+        ret = state_lock_release_result(-1);
         EXIT_SYSCALL(state);
-        return -1;
+        return ret;
     }
 
     ret = color_space_apply_config();
-    (void)state_lock_release();
+    ret = state_lock_release_result(ret);
     EXIT_SYSCALL(state);
     return ret;
 }
