@@ -22,6 +22,8 @@ ScreenFilterParams g_screen_filter = {
 };
 
 static int (*ksceDisplaySetInvertColors)(int head, int enable) = NULL;
+static int g_invert_programmed = 0;
+static int g_invert_value = 0;
 
 static int float_is_finite(float value) {
     union { float f; uint32_t u; } bits;
@@ -74,12 +76,11 @@ void screen_filter_load_config(void) {
 int screen_filter_apply(int is_oled) {
     (void)is_oled;
 
-    /* No speculative persistent IFTU path.  The documented ksceIftuCsc API
-     * is an explicit buffer conversion API, not an active-scanout setter.
-     * Gamma/panel linearisation additionally require a nonlinear stage. */
     g_vbe_status.csc_filter = VBE_CAP_UNSUPPORTED;
     g_vbe_status.transfer_lut = VBE_CAP_UNSUPPORTED;
 
+    /* Resolving the documented export is sufficient to report capability.
+     * A neutral boot does not write display hardware at all. */
     if (resolve_invert() < 0) {
         if (g_screen_filter.invert) {
             status_set_error(VBE_ERR_DISPLAY_CAPABILITY, NID_DISPLAY_INVERT_COLORS);
@@ -88,13 +89,24 @@ int screen_filter_apply(int is_oled) {
         return advanced_filter_requested(&g_screen_filter) ? -2 : 0;
     }
 
+    if (!g_screen_filter.invert && !g_invert_programmed) {
+        g_vbe_status.invert = VBE_CAP_INACTIVE;
+        return advanced_filter_requested(&g_screen_filter) ? -2 : 0;
+    }
+
+    if (g_invert_programmed && g_invert_value == g_screen_filter.invert)
+        return advanced_filter_requested(&g_screen_filter) ? -2 : 0;
+
     int ret = ksceDisplaySetInvertColors(0, g_screen_filter.invert ? 1 : 0);
     if (ret < 0) {
         g_vbe_status.invert = VBE_CAP_FAILED;
         status_set_error(VBE_ERR_DISPLAY_CAPABILITY, ret);
         return ret;
     }
-    g_vbe_status.invert = g_screen_filter.invert ? VBE_CAP_ACTIVE : VBE_CAP_INACTIVE;
+
+    g_invert_value = g_screen_filter.invert ? 1 : 0;
+    g_invert_programmed = g_invert_value;
+    g_vbe_status.invert = g_invert_value ? VBE_CAP_ACTIVE : VBE_CAP_INACTIVE;
     return advanced_filter_requested(&g_screen_filter) ? -2 : 0;
 }
 
@@ -123,7 +135,10 @@ int vitabrightFilterGetParams(ScreenFilterParams *out) {
     int state;
     ENTER_SYSCALL(state);
     int ret = state_lock_acquire();
-    if (ret < 0) { EXIT_SYSCALL(state); return ret; }
+    if (ret < 0) {
+        EXIT_SYSCALL(state);
+        return ret;
+    }
 
     ScreenFilterParams snapshot = g_screen_filter;
     state_lock_release();
@@ -150,7 +165,10 @@ int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused) 
     }
 
     ret = state_lock_acquire();
-    if (ret < 0) { EXIT_SYSCALL(state); return ret; }
+    if (ret < 0) {
+        EXIT_SYSCALL(state);
+        return ret;
+    }
     g_screen_filter = candidate;
     ret = screen_filter_apply(g_is_oled);
     state_lock_release();
@@ -163,7 +181,10 @@ int vitabrightFilterReset(int is_oled_unused) {
     (void)is_oled_unused;
     ENTER_SYSCALL(state);
     int ret = state_lock_acquire();
-    if (ret < 0) { EXIT_SYSCALL(state); return ret; }
+    if (ret < 0) {
+        EXIT_SYSCALL(state);
+        return ret;
+    }
     screen_filter_reset(g_is_oled);
     state_lock_release();
     EXIT_SYSCALL(state);
