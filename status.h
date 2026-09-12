@@ -3,6 +3,14 @@
 
 typedef enum { VBE_HW_UNKNOWN = 0, VBE_HW_OLED = 1, VBE_HW_LCD = 2 } VbeHardware;
 typedef enum { VBE_CAP_UNKNOWN = 0, VBE_CAP_UNAVAILABLE = 1, VBE_CAP_INACTIVE = 2, VBE_CAP_ACTIVE = 3, VBE_CAP_FAILED = 4, VBE_CAP_UNSUPPORTED = 5 } VbeCapabilityState;
+
+typedef enum {
+    VBE_RESULT_OK = 0,
+    /* Capability result, not a runtime failure. Callers must handle this
+     * explicitly instead of treating every negative result as an error. */
+    VBE_RESULT_UNSUPPORTED = -2,
+} VbeResult;
+
 typedef enum {
     VBE_ERR_NONE = 0, VBE_ERR_CONFIG = 1, VBE_ERR_BACKEND = 2,
     VBE_ERR_FIRMWARE_UNSUPPORTED = 3, VBE_ERR_EXPORT_RESOLUTION = 4,
@@ -10,6 +18,7 @@ typedef enum {
     VBE_ERR_POWER_HOOK = 7, VBE_ERR_INVALID_USER_INPUT = 8,
     VBE_ERR_DISPLAY_CAPABILITY = 9, VBE_ERR_LAYOUT_MISMATCH = 10,
     VBE_ERR_SYNCHRONIZATION = 11, VBE_ERR_LUT_ROLLBACK = 12,
+    VBE_ERR_SOURCE_IO = 13,
 } VbeError;
 
 typedef enum {
@@ -38,6 +47,7 @@ typedef struct {
     int csc_filter;
     int transfer_lut;
     int registry_api;
+    /* Compatibility summary only. Internal code must use error domains. */
     int last_error;
     int last_error_detail;
 } VitaBrightStatus;
@@ -54,9 +64,9 @@ typedef struct {
 
 extern VitaBrightStatus g_vbe_status;
 void status_init(int hardware, uint32_t firmware);
-void status_set_error(int error, int detail);
 void status_set_error_domain(int domain, int error, int detail);
 void status_clear_error_domain(int domain);
-void status_clear_error(void);
+void status_stage_result(int domain, int succeeded, int error, int detail);
+void status_get_error_domain(int domain, int *error, int *detail);
 int vitabrightGetStatus(VitaBrightStatus *out);
 int vitabrightGetDiagnostics(VitaBrightDiagnostics *out);
