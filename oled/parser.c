@@ -53,8 +53,8 @@ static int parse_data_line(const char *line, int len,
 }
 
 /* `opened` distinguishes an absent candidate from an authoritative-but-bad
- * candidate. That distinction is what prevents a malformed ur0 file from
- * silently falling through to ux0 or a generic LUT. */
+ * candidate. That distinction prevents a malformed ur0 file from silently
+ * falling through to ux0 or a generic LUT. */
 static int parse_candidate(const char *path, unsigned char out[LUT_SIZE],
                            int *opened) {
     SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
@@ -161,11 +161,10 @@ int parse_lut(int panel_type, unsigned char out[LUT_SIZE],
     }
 
     const char *candidates[4] = { panel_ur0, panel_ux0, LUT_FILE1, LUT_FILE2 };
-    int candidate_count = panel_ur0 != NULL ? 4 : 2;
     int first = panel_ur0 != NULL ? 0 : 2;
     int last_open_error = -1;
 
-    for (int i = first; i < candidate_count; ++i) {
+    for (int i = first; i < 4; ++i) {
         const char *path = candidates[i];
         if (path == NULL) continue;
 
