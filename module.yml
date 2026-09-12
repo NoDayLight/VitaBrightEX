@@ -18,10 +18,12 @@ vitabright:
         - vitabrightOledSetLevel
         - vitabrightOledGetLut
         - vitabrightOledSetLut
+        - vitabrightOledPersistLut
         - vitabrightOledReload
         - vitabrightOledGetPanelType
         - vitabrightLcdGetBrightnessValues
         - vitabrightLcdSetBrightnessValues
+        - vitabrightLcdPersistBrightnessValues
         - vitabrightLcdReapplyColor
         - vitabrightFilterGetParams
         - vitabrightFilterSetParams
