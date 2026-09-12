@@ -11,6 +11,9 @@ endif()
 
 project(vitabright C)
 include("${VITASDK}/share/vita.cmake" REQUIRED)
+include("${CMAKE_SOURCE_DIR}/cmake/VbeBuildId.cmake")
+vbe_resolve_build_id(VBE_BUILD_ID "${CMAKE_SOURCE_DIR}")
+message(STATUS "VitaBrightEX build id: ${VBE_BUILD_ID}")
 
 option(ENABLE_LOGGING "Enable debug logging to ur0:data/vitabright_log.txt" OFF)
 if(ENABLE_LOGGING)
@@ -24,10 +27,17 @@ add_executable(vitabright
     main.h
     log.c
     log.h
+    build_info.c
+    build_info.h
     config.c
     config.h
+    config_parser.c
+    config_parser.h
+    text_stream.c
+    text_stream.h
     status.c
     status.h
+    status_error_core.h
     state_lock.c
     state_lock.h
     color_space.c
@@ -47,6 +57,8 @@ add_executable(vitabright
     lcd/hooks.h
     lcd/lcd_lut.h
 )
+
+target_compile_definitions(vitabright PRIVATE VBE_BUILD_ID="${VBE_BUILD_ID}")
 
 target_link_libraries(vitabright
     SceDisplayForDriver_stub
@@ -79,21 +91,25 @@ install(DIRECTORY ${CMAKE_BINARY_DIR}/vitabright-stubs/
 )
 
 set(PSVITAIP "192.168.1.10" CACHE STRING "PS Vita IP address for FTP deploy")
+set(VBE_FTP_ROOT "ftp://${PSVITAIP}:1337")
+set(VBE_FTP_UR0 "${VBE_FTP_ROOT}//ur0:")
+set(VBE_FTP_UX0 "${VBE_FTP_ROOT}//ux0:")
+set(VBE_FTP_UR0_TAI "${VBE_FTP_UR0}/tai")
 
 add_custom_target(send
     COMMAND curl --ftp-method nocwd -T vitabright.skprx
-            ftp://${PSVITAIP}:1337/ur0:/tai/vitabright.skprx
+            ${VBE_FTP_UR0_TAI}/vitabright.skprx
     COMMAND curl --ftp-method nocwd -T ${CMAKE_SOURCE_DIR}/oled/luts/vitabright_lut.txt
-            ftp://${PSVITAIP}:1337/ur0:/tai/vitabright_lut.txt
+            ${VBE_FTP_UR0_TAI}/vitabright_lut.txt
     COMMAND curl --ftp-method nocwd -T ${CMAKE_SOURCE_DIR}/oled/luts/vitabright_lut_p4.txt
-            ftp://${PSVITAIP}:1337/ur0:/tai/vitabright_lut_p4.txt
+            ${VBE_FTP_UR0_TAI}/vitabright_lut_p4.txt
     COMMAND curl --ftp-method nocwd -T ${CMAKE_SOURCE_DIR}/oled/luts/vitabright_lut_p5.txt
-            ftp://${PSVITAIP}:1337/ur0:/tai/vitabright_lut_p5.txt
+            ${VBE_FTP_UR0_TAI}/vitabright_lut_p5.txt
     COMMAND curl --ftp-method nocwd -T ${CMAKE_SOURCE_DIR}/oled/luts/vitabright_lut_p6.txt
-            ftp://${PSVITAIP}:1337/ur0:/tai/vitabright_lut_p6.txt
+            ${VBE_FTP_UR0_TAI}/vitabright_lut_p6.txt
     COMMAND curl --ftp-method nocwd -T ${CMAKE_SOURCE_DIR}/lcd/luts/vitabright_lcd_lut.txt
-            ftp://${PSVITAIP}:1337/ur0:/tai/vitabright_lcd_lut.txt
+            ${VBE_FTP_UR0_TAI}/vitabright_lcd_lut.txt
     COMMAND curl --ftp-method nocwd -T ${CMAKE_SOURCE_DIR}/vitabrightex.cfg
-            ftp://${PSVITAIP}:1337/ur0:/tai/vitabrightex.cfg
+            ${VBE_FTP_UR0_TAI}/vitabrightex.cfg
     DEPENDS vitabright.skprx
 )
