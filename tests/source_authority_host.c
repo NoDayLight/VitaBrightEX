@@ -27,11 +27,19 @@ int main(void) {
     o = vbe_source_evaluate(4, (int)0x80010005u, 0, 0);
     failures += check(o.decision == VBE_SOURCE_FAIL && o.stage == VBE_SOURCE_STAGE_READ, "read failure terminal");
 
+    o = vbe_source_evaluate(4, SCE_ERROR_ERRNO_ENOENT, 0, 0);
+    failures += check(o.decision == VBE_SOURCE_FAIL && o.stage == VBE_SOURCE_STAGE_READ,
+                      "ENOENT after successful open is read failure, never fallback");
+
     o = vbe_source_evaluate(4, 0, -1, 0);
     failures += check(o.decision == VBE_SOURCE_FAIL && o.stage == VBE_SOURCE_STAGE_PARSE, "parse failure terminal");
 
     o = vbe_source_evaluate(4, 0, 0, (int)0x80010005u);
     failures += check(o.decision == VBE_SOURCE_FAIL && o.stage == VBE_SOURCE_STAGE_CLOSE, "close failure terminal");
+
+    o = vbe_source_evaluate(4, 0, 0, SCE_ERROR_ERRNO_ENOENT);
+    failures += check(o.decision == VBE_SOURCE_FAIL && o.stage == VBE_SOURCE_STAGE_CLOSE,
+                      "ENOENT on close is terminal, never fallback");
 
     VbeSourceOutcome primary = vbe_source_evaluate(SCE_ERROR_ERRNO_ENOENT, 0, 0, 0);
     VbeSourceOutcome fallback = vbe_source_evaluate(7, 0, 0, 0);
@@ -39,6 +47,10 @@ int main(void) {
 
     fallback = vbe_source_evaluate(7, 0, -1, 0);
     failures += check(primary.decision == VBE_SOURCE_FALLBACK && fallback.decision == VBE_SOURCE_FAIL, "malformed fallback terminal");
+
+    fallback = vbe_source_evaluate(SCE_ERROR_ERRNO_ENOENT, 0, 0, 0);
+    failures += check(primary.decision == VBE_SOURCE_FALLBACK && fallback.decision == VBE_SOURCE_FALLBACK,
+                      "both missing remains explicit no-source decision for subsystem policy");
 
     if (failures) return 1;
     puts("production source-authority regressions: OK");
