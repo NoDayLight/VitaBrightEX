@@ -37,6 +37,12 @@ add_executable(vitabright
     text_stream.h
     source_authority.c
     source_authority.h
+    transaction_core.c
+    transaction_core.h
+    persistence_core.c
+    persistence_core.h
+    persistence_file.c
+    persistence_file.h
     status.c
     status.h
     status_error_core.h
