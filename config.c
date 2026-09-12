@@ -47,12 +47,16 @@ static VbeSourceOutcome config_read_source(const char *path,
     return vbe_source_evaluate(fd, read_result, parse_result, close_result);
 }
 
-static int config_commit_source(const char *path, int fallback) {
-    VitaBrightConfig candidate;
-    VbeSourceOutcome source = config_read_source(path, &candidate);
-
-    if (source.decision == VBE_SOURCE_FALLBACK)
-        return SCE_ERROR_ERRNO_ENOENT;
+static int config_accept_source(const char *path, int fallback,
+                                VbeSourceOutcome source,
+                                const VitaBrightConfig *candidate) {
+    if (source.decision == VBE_SOURCE_USE) {
+        g_config = *candidate;
+        status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 1, VBE_ERR_CONFIG, 0);
+        LOG("[CFG] Loaded %s source %s\n",
+            fallback ? "fallback" : "authoritative", path);
+        return 0;
+    }
 
     if (source.decision == VBE_SOURCE_FAIL) {
         status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 0, VBE_ERR_CONFIG,
@@ -62,19 +66,18 @@ static int config_commit_source(const char *path, int fallback) {
         return source.error;
     }
 
-    g_config = candidate;
-    status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 1, VBE_ERR_CONFIG, 0);
-    LOG("[CFG] Loaded %s source %s\n",
-        fallback ? "fallback" : "authoritative", path);
-    return 0;
+    return 1; /* Explicit NOT_FOUND: caller may try its documented fallback. */
 }
 
 int config_load(void) {
-    int ret = config_commit_source(CFG_FILE1, 0);
-    if (ret != SCE_ERROR_ERRNO_ENOENT) return ret;
+    VitaBrightConfig candidate;
+    VbeSourceOutcome source = config_read_source(CFG_FILE1, &candidate);
+    int decision = config_accept_source(CFG_FILE1, 0, source, &candidate);
+    if (decision <= 0) return decision;
 
-    ret = config_commit_source(CFG_FILE2, 1);
-    if (ret != SCE_ERROR_ERRNO_ENOENT) return ret;
+    source = config_read_source(CFG_FILE2, &candidate);
+    decision = config_accept_source(CFG_FILE2, 1, source, &candidate);
+    if (decision <= 0) return decision;
 
     VitaBrightConfig defaults;
     vbe_config_defaults(&defaults);
