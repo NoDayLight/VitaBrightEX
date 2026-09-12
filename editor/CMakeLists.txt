@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     if(DEFINED ENV{VITASDK})
@@ -14,6 +14,7 @@ include("${VITASDK}/share/vita.cmake" REQUIRED)
 set(VITA_TITLEID VBRIGHT14)
 add_executable(vitabrightex-editor.elf main.c)
 target_include_directories(vitabrightex-editor.elf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_compile_options(vitabrightex-editor.elf PRIVATE -Wall -Wextra -Werror)
 
 target_link_libraries(vitabrightex-editor.elf
     vitabright_stub_weak
