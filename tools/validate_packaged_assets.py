@@ -71,8 +71,16 @@ run_host_test("config_parser_host", [
     "text_stream.c",
     "config_parser.c",
 ])
+run_host_test("source_authority_host", [
+    "tests/source_authority_host.c",
+    "source_authority.c",
+])
 run_host_test("status_error_host", [
     "tests/status_error_host.c",
+])
+run_host_test("filter_policy_host", [
+    "tests/filter_policy_host.c",
+    "filter_policy.c",
 ])
 
 if errors:
@@ -80,4 +88,4 @@ if errors:
         print(f"ERROR: {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("packaged assets + production parser/status contracts: OK")
+print("packaged assets + production parser/authority/status/filter contracts: OK")
