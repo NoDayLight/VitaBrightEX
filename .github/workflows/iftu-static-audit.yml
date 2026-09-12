@@ -41,8 +41,6 @@ jobs:
           set -euxo pipefail
           git clone --depth 1 https://github.com/RealYoti/sceutils.git sceutils-audit
           cp sceutils-audit/keys_external.py sceutils-audit/keys.py
-          # pup_fiction imports require the unarzl path to exist even though the
-          # os0-only path below never executes SLB2/unarzl processing.
           mkdir -p sceutils-audit/unarzl
           : > sceutils-audit/unarzl/unarzl
           cat > extract_os0.py <<'PY'
@@ -58,10 +56,10 @@ jobs:
               raise SystemExit('os0.bin was not produced')
           PY
           docker run --rm \
-            --user "$(id -u):$(id -g)" \
             -v "$PWD:/work" -w /work \
             python:2.7-buster \
-            bash -lc "pip install --user --disable-pip-version-check 'pycryptodome<3.10' enum34 && python extract_os0.py"
+            bash -lc "pip install --disable-pip-version-check 'pycryptodome<3.10' enum34 && python extract_os0.py"
+          sudo chown -R "$(id -u):$(id -g)" fw
           file fw/PUP_dec/os0.bin
           sha256sum fw/PUP_dec/os0.bin
           mkdir -p fw/os0
@@ -79,10 +77,10 @@ jobs:
           file "$raw"
           sha256sum "$raw"
           docker run --rm \
-            --user "$(id -u):$(id -g)" \
             -v "$PWD:/work" -w /work \
             python:2.7-buster \
-            bash -lc "pip install --user --disable-pip-version-check 'pycryptodome<3.10' enum34 && python sceutils-audit/self2elf.py -i '$raw' -o SceLowio-365.elf"
+            bash -lc "pip install --disable-pip-version-check 'pycryptodome<3.10' enum34 && python sceutils-audit/self2elf.py -i '$raw' -o SceLowio-365.elf"
+          sudo chown "$(id -u):$(id -g)" SceLowio-365.elf
           file SceLowio-365.elf
           sha256sum SceLowio-365.elf
           readelf -h -l SceLowio-365.elf
