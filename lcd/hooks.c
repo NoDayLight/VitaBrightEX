@@ -132,8 +132,6 @@ static int lcd_load_disk_candidate(uint8_t out[LCD_LUT_LEVELS],
         return fallback.error;
     }
 
-    /* LCD has a compiled safe default. Missing both documented sources is the
-     * only case that selects it; any I/O/parse/close failure above is terminal. */
     lut_copy(out, lcd_brightness_default);
     path_copy(source, LCD_LUT_FILE1);
     *error_code = VBE_ERR_NONE;
@@ -196,23 +194,49 @@ int hook_kscePowerSetDisplayMaxBrightnessForLcd(int limit) {
     return TAI_CONTINUE(int, power_set_max_bright_ref, 0x10000);
 }
 
-static void lcd_release_transaction(void) {
+static int lcd_release_transaction(void) {
+    int first_error = 0;
+    int ret;
+
     if (power_set_max_bright_hook >= 0) {
-        (void)taiHookReleaseForKernel(power_set_max_bright_hook, power_set_max_bright_ref);
-        power_set_max_bright_hook = -1;
-        power_set_max_bright_ref = 0;
+        ret = taiHookReleaseForKernel(power_set_max_bright_hook,
+                                      power_set_max_bright_ref);
+        if (ret >= 0) {
+            power_set_max_bright_hook = -1;
+            power_set_max_bright_ref = 0;
+        } else if (first_error == 0) {
+            first_error = ret;
+        }
     }
     if (lcd_set_brightness_hook >= 0) {
-        (void)taiHookReleaseForKernel(lcd_set_brightness_hook, lcd_set_brightness_ref);
-        lcd_set_brightness_hook = -1;
-        lcd_set_brightness_ref = -1;
+        ret = taiHookReleaseForKernel(lcd_set_brightness_hook,
+                                      lcd_set_brightness_ref);
+        if (ret >= 0) {
+            lcd_set_brightness_hook = -1;
+            lcd_set_brightness_ref = -1;
+        } else if (first_error == 0) {
+            first_error = ret;
+        }
     }
     if (lcd_table_inject >= 0) {
-        (void)taiInjectReleaseForKernel(lcd_table_inject);
-        lcd_table_inject = -1;
+        ret = taiInjectReleaseForKernel(lcd_table_inject);
+        if (ret >= 0) {
+            lcd_table_inject = -1;
+        } else if (first_error == 0) {
+            first_error = ret;
+        }
     }
 
     g_lcd_hooks_active = 0;
+    if (first_error < 0) {
+        g_vbe_status.brightness_core = VBE_CAP_FAILED;
+        g_vbe_status.brightness_table = VBE_CAP_FAILED;
+        g_vbe_status.brightness_hook = VBE_CAP_FAILED;
+        g_vbe_status.power_limit_hook = VBE_CAP_FAILED;
+        brightness_error(VBE_ERR_RESOURCE_RELEASE, first_error);
+        return first_error;
+    }
+
     if (g_vbe_status.brightness_core == VBE_CAP_ACTIVE)
         g_vbe_status.brightness_core = VBE_CAP_INACTIVE;
     if (g_vbe_status.brightness_table == VBE_CAP_ACTIVE)
@@ -221,6 +245,7 @@ static void lcd_release_transaction(void) {
         g_vbe_status.brightness_hook = VBE_CAP_INACTIVE;
     if (g_vbe_status.power_limit_hook == VBE_CAP_ACTIVE)
         g_vbe_status.power_limit_hook = VBE_CAP_INACTIVE;
+    return 0;
 }
 
 static int lcd_resolve_core(tai_module_info_t *info) {
@@ -276,9 +301,8 @@ static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
         table_off, candidate, LCD_LUT_LEVELS);
     if (lcd_table_inject < 0) {
         ret = (int)lcd_table_inject;
-        brightness_error(VBE_ERR_TABLE_INJECTION, ret);
-        lcd_release_transaction();
         g_vbe_status.brightness_table = VBE_CAP_FAILED;
+        brightness_error(VBE_ERR_TABLE_INJECTION, ret);
         return ret;
     }
     g_vbe_status.brightness_table = VBE_CAP_ACTIVE;
@@ -290,9 +314,10 @@ static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
         NID_LCD_SET_BRIGHTNESS, hook_ksceLcdSetBrightness);
     if (lcd_set_brightness_hook < 0) {
         ret = (int)lcd_set_brightness_hook;
-        brightness_error(VBE_ERR_BRIGHTNESS_HOOK, ret);
-        lcd_release_transaction();
+        int cleanup = lcd_release_transaction();
+        if (cleanup < 0) return cleanup;
         g_vbe_status.brightness_hook = VBE_CAP_FAILED;
+        brightness_error(VBE_ERR_BRIGHTNESS_HOOK, ret);
         return ret;
     }
     g_vbe_status.brightness_hook = VBE_CAP_ACTIVE;
@@ -302,9 +327,10 @@ static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
         NID_POWER_SET_MAX_BRIGHT, hook_kscePowerSetDisplayMaxBrightnessForLcd);
     if (power_set_max_bright_hook < 0) {
         ret = (int)power_set_max_bright_hook;
-        brightness_error(VBE_ERR_POWER_HOOK, ret);
-        lcd_release_transaction();
+        int cleanup = lcd_release_transaction();
+        if (cleanup < 0) return cleanup;
         g_vbe_status.power_limit_hook = VBE_CAP_FAILED;
+        brightness_error(VBE_ERR_POWER_HOOK, ret);
         return ret;
     }
     g_vbe_status.power_limit_hook = VBE_CAP_ACTIVE;
@@ -312,17 +338,19 @@ static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
     int current = ksceLcdGetBrightness();
     if (current < 0) {
         ret = current;
-        brightness_error(VBE_ERR_BACKEND, ret);
-        lcd_release_transaction();
+        int cleanup = lcd_release_transaction();
+        if (cleanup < 0) return cleanup;
         g_vbe_status.brightness_core = VBE_CAP_FAILED;
+        brightness_error(VBE_ERR_BACKEND, ret);
         return ret;
     }
 
     ret = ksceLcdSetBrightness((unsigned int)current);
     if (ret < 0) {
-        brightness_error(VBE_ERR_BACKEND, ret);
-        lcd_release_transaction();
+        int cleanup = lcd_release_transaction();
+        if (cleanup < 0) return cleanup;
         g_vbe_status.brightness_core = VBE_CAP_FAILED;
+        brightness_error(VBE_ERR_BACKEND, ret);
         return ret;
     }
 
@@ -342,7 +370,9 @@ static int lcd_replace_candidate(const uint8_t candidate[LCD_LUT_LEVELS]) {
     int had_previous = g_lcd_hooks_active;
     if (had_previous) lut_copy(previous, lcd_brightness_values);
 
-    lcd_release_transaction();
+    int release = lcd_release_transaction();
+    if (release < 0) return release;
+
     int ret = lcd_start_transaction(candidate);
     if (ret >= 0) return ret;
 
@@ -381,7 +411,8 @@ int lcd_enable_hooks(void) {
 }
 
 void lcd_disable_hooks(void) {
-    lcd_release_transaction();
+    int ret = lcd_release_transaction();
+    if (ret < 0) LOG("[LCD] resource release failed during shutdown: 0x%08X\n", ret);
     ksceLcdGetBrightness = NULL;
     ksceLcdSetBrightness = NULL;
 }
