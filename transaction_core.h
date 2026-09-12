@@ -1,4 +1,5 @@
 #pragma once
+#include "source_authority.h"
 
 typedef enum {
     VBE_OWNERSHIP_CLEAN = 0,
@@ -36,6 +37,11 @@ int vbe_txn_should_rollback(int had_previous,
 int vbe_txn_public_result(VbeTxnAttempt requested,
                           int rollback_attempted,
                           VbeTxnAttempt rollback);
+
+void vbe_txn_commit_source(VbeSourceIdentity *committed,
+                           const VbeSourceIdentity *candidate);
+int vbe_txn_file_persistence_allowed(int ownership,
+                                     const VbeSourceIdentity *source);
 
 void vbe_stop_init(VbeStopAccumulator *stop);
 void vbe_stop_stage(VbeStopAccumulator *stop, int stage_result);
