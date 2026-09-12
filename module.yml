@@ -6,7 +6,7 @@ vitabright:
   main:
     start: module_start
     stop: module_stop
-  modules:
+  libraries:
     vitabright:
       syscall: true
       functions:
