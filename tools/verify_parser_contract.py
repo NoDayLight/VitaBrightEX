@@ -26,15 +26,15 @@ ban("lcd/hooks.c", "char line[64]", "LCD fixed physical-line buffer returned")
 ban("oled/parser.c", "PARSER_LINE_MAX", "OLED fixed physical-line buffer returned")
 ban("config.c", "cfg_readline", "legacy config physical-line parser returned")
 
-# Source authority must be shared executable production logic. These are only
-# structural guards; tests/source_authority_host.c is the semantic proof.
 for path in ("config.c", "lcd/hooks.c", "oled/parser.c"):
     need(path, "vbe_source_evaluate", f"{path} bypasses shared source-authority evaluator")
 ban("lcd/hooks.c", "int *opened", "LCD open-success flag authority model returned")
 ban("oled/parser.c", "int *opened", "OLED open-success flag authority model returned")
 ban("oled/parser.c", "int *was_present", "OLED presence flag authority model returned")
-need("source_authority.c", "open_result == SCE_ERROR_ERRNO_ENOENT",
-     "source authority no longer restricts fallback to explicit ENOENT")
+need("source_authority.c", "open_result == VBE_SCE_IO_ERROR_NOT_FOUND",
+     "source authority no longer restricts fallback to project-owned not-found result")
+ban("source_authority.h", "#define SCE_ERROR_ERRNO_ENOENT",
+    "source authority pretends project compatibility knowledge is SDK-owned")
 need("tools/validate_packaged_assets.py", "tests/source_authority_host.c",
      "source authority behavior is no longer host tested")
 
@@ -45,6 +45,20 @@ need("tests/config_parser_host.c", "interior CR rejected", "config CR regression
 need("tests/config_parser_host.c", "suffix garbage rejected", "config numeric strictness regression missing")
 need("tests/config_parser_host.c", "color-space alias pair uses last valid occurrence",
      "config alias precedence regression missing")
+
+need("lcd/hooks.c", "VBE_OWNERSHIP_DEGRADED", "LCD backend lost explicit degraded ownership state")
+need("oled/hooks.c", "VBE_OWNERSHIP_DEGRADED", "OLED backend lost explicit degraded ownership state")
+for path in ("lcd/hooks.c", "oled/hooks.c"):
+    need(path, "vbe_txn_should_rollback", f"{path} bypasses shared rollback legality policy")
+    need(path, "VBE_ERR_RESOURCE_RELEASE", f"{path} no longer reports dirty ownership")
+ban("lcd/hooks.c", "g_lcd_hooks_active", "LCD split active/ownership truth returned")
+ban("oled/hooks.c", "g_active", "OLED split active/ownership truth returned")
+need("main.c", "SCE_KERNEL_STOP_FAIL", "module stop can no longer refuse unsafe unload")
+need("main.c", "state_lock_begin_shutdown", "module stop bypasses serialized stop lifecycle")
+need("tools/validate_packaged_assets.py", "tests/transaction_core_host.c",
+     "production transaction/ownership core is no longer host tested")
+need("tools/validate_packaged_assets.py", "tests/persistence_core_host.c",
+     "production persistence core is no longer host tested")
 
 if errors:
     for error in errors:
