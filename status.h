@@ -68,5 +68,8 @@ void status_set_error_domain(int domain, int error, int detail);
 void status_clear_error_domain(int domain);
 void status_stage_result(int domain, int succeeded, int error, int detail);
 void status_get_error_domain(int domain, int *error, int *detail);
+void status_recovery_result(int domain, int succeeded,
+                            int requested_error, int requested_detail,
+                            int recovery_error, int recovery_detail);
 int vitabrightGetStatus(VitaBrightStatus *out);
 int vitabrightGetDiagnostics(VitaBrightDiagnostics *out);
