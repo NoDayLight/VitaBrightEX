@@ -12,23 +12,14 @@ endif()
 project(vitabright)
 include("${VITASDK}/share/vita.cmake" REQUIRED)
 
-# -----------------------------------------------------------------------
-# Build options
-# -----------------------------------------------------------------------
 option(ENABLE_LOGGING "Enable debug logging to ur0:data/vitabright_log.txt" OFF)
 if(ENABLE_LOGGING)
     add_definitions(-DENABLE_LOGGING=1)
 endif()
 
-# -----------------------------------------------------------------------
-# Compiler flags
-# -----------------------------------------------------------------------
 set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -Wl,-q -Wall -Wextra -O3 -fno-pic -fno-PIC -std=gnu99")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -fno-rtti -fno-exceptions")
 
-# -----------------------------------------------------------------------
-# Sources
-# -----------------------------------------------------------------------
 add_executable(vitabright
     main.c
     main.h
@@ -36,6 +27,8 @@ add_executable(vitabright
     log.h
     config.c
     config.h
+    status.c
+    status.h
     screen_filter.c
     screen_filter.h
     taihen_extra.h
@@ -49,9 +42,6 @@ add_executable(vitabright
     lcd/lcd_lut.h
 )
 
-# -----------------------------------------------------------------------
-# Link libraries
-# -----------------------------------------------------------------------
 target_link_libraries(vitabright
     SceDisplayForDriver_stub
     taihenForKernel_stub
@@ -70,9 +60,6 @@ set_target_properties(vitabright
         COMPILE_FLAGS "-D__VITA_KERNEL__"
 )
 
-# -----------------------------------------------------------------------
-# Package
-# -----------------------------------------------------------------------
 vita_create_self(vitabright.skprx vitabright
     CONFIG ${CMAKE_SOURCE_DIR}/module.yml
     UNSAFE
@@ -87,9 +74,6 @@ install(DIRECTORY ${CMAKE_BINARY_DIR}/vitabright-stubs/
     FILES_MATCHING PATTERN "*.a"
 )
 
-# -----------------------------------------------------------------------
-# Install helper: copy LUT files + config template to vita via FTP
-# -----------------------------------------------------------------------
 set(PSVITAIP "192.168.1.10" CACHE STRING "PS Vita IP address for FTP deploy")
 
 add_custom_target(send
