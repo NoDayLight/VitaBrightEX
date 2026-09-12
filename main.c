@@ -3,6 +3,7 @@
 #include <psp2kern/kernel/sysroot.h>
 #include <taihen.h>
 
+#include "color_space.h"
 #include "config.h"
 #include "lcd/hooks.h"
 #include "log.h"
@@ -37,16 +38,27 @@ int module_start(SceSize argc, const void *args) {
     }
     g_vbe_status.state_lock = VBE_CAP_ACTIVE;
 
-    config_load();
+    (void)config_load();
 
     int ret = is_lcd ? lcd_enable_hooks() : oled_enable_hooks();
     if (ret < 0) {
         LOG("[CORE] selected brightness backend unavailable: 0x%08X\n", ret);
     }
 
-    /* Optional display capabilities are outside the boot-success contract. */
+    /* Optional display capabilities are independent from raw brightness-table
+     * support.  For example a newer firmware may safely expose the documented
+     * color-space export even while its private brightness-table layout is
+     * deliberately unsupported.  Neither capability can block boot. */
+    int color_ret = color_space_apply_config();
+    if (color_ret < 0) {
+        LOG("[CORE] color-space capability unavailable: 0x%08X\n", color_ret);
+    }
+
     screen_filter_load_config();
-    (void)screen_filter_apply(g_is_oled);
+    int filter_ret = screen_filter_apply(g_is_oled);
+    if (filter_ret < 0) {
+        LOG("[CORE] optional filter capability unavailable: 0x%08X\n", filter_ret);
+    }
 
     return SCE_KERNEL_START_SUCCESS;
 }
@@ -60,14 +72,19 @@ int vitabrightReload(void) {
         return ret;
     }
 
-    ret = g_is_oled ? oled_reload_backend() : lcd_reload_backend();
+    int result = g_is_oled ? oled_reload_backend() : lcd_reload_backend();
+
+    int color_ret = color_space_apply_config();
+    if (result >= 0 && color_ret < 0) result = color_ret;
 
     screen_filter_load_config();
-    (void)screen_filter_apply(g_is_oled);
+    int filter_ret = screen_filter_apply(g_is_oled);
+    if (result >= 0 && filter_ret < 0) result = filter_ret;
 
+    if (result >= 0) status_clear_error();
     state_lock_release();
     EXIT_SYSCALL(state);
-    return ret;
+    return result;
 }
 
 int module_stop(SceSize argc, const void *args) {
@@ -76,6 +93,7 @@ int module_stop(SceSize argc, const void *args) {
 
     int locked = state_lock_acquire() >= 0;
     screen_filter_reset(g_is_oled);
+    color_space_shutdown();
     if (g_is_oled) oled_disable_hooks();
     else lcd_disable_hooks();
     if (locked) state_lock_release();
