@@ -22,6 +22,8 @@ jobs:
         run: python3 tools/verify_source_contract.py
       - name: Validate packaged LUT/config assets
         run: python3 tools/validate_packaged_assets.py
+      - name: Validate firmware-audit tooling
+        run: python3 -m py_compile tools/verify_scelcd_layout.py
       - uses: actions/checkout@v7
         with:
           repository: vitasdk/vdpm
