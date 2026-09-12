@@ -20,6 +20,11 @@ static int detect_is_lcd(void) {
     return (*(uint8_t *)(ksceKernelSysrootGetKblParam() + 0xE8) & 9) != 0;
 }
 
+static void keep_first_result(int *result, int stage_result) {
+    if (*result == VBE_RESULT_OK && stage_result != VBE_RESULT_OK)
+        *result = stage_result;
+}
+
 void _start() __attribute__((weak, alias("module_start")));
 int module_start(SceSize argc, const void *args) {
     (void)argc;
@@ -41,20 +46,13 @@ int module_start(SceSize argc, const void *args) {
     g_vbe_status.state_lock = VBE_CAP_ACTIVE;
 
     int config_ret = config_load();
-    if (config_ret < 0) {
-        status_set_error_domain(VBE_ERROR_DOMAIN_CONFIG, VBE_ERR_CONFIG,
-                                config_ret);
+    if (config_ret < 0)
         LOG("[CORE] authoritative config rejected: 0x%08X\n", config_ret);
-    } else {
-        status_clear_error_domain(VBE_ERROR_DOMAIN_CONFIG);
-    }
 
-    int ret = is_lcd ? lcd_enable_hooks() : oled_enable_hooks();
-    if (ret < 0) {
-        LOG("[CORE] selected brightness backend unavailable: 0x%08X\n", ret);
-    } else {
-        status_clear_error_domain(VBE_ERROR_DOMAIN_BRIGHTNESS);
-    }
+    int brightness_ret = is_lcd ? lcd_enable_hooks() : oled_enable_hooks();
+    if (brightness_ret < 0)
+        LOG("[CORE] selected brightness backend unavailable: 0x%08X\n",
+            brightness_ret);
 
     int color_ret = color_space_apply_config();
     if (color_ret < 0)
@@ -62,10 +60,37 @@ int module_start(SceSize argc, const void *args) {
 
     screen_filter_load_config();
     int filter_ret = screen_filter_apply(g_is_oled);
-    if (filter_ret < 0)
-        LOG("[CORE] optional filter capability unavailable: 0x%08X\n", filter_ret);
+    if (filter_ret == VBE_RESULT_UNSUPPORTED)
+        LOG("[CORE] config requests an unsupported filter capability\n");
+    else if (filter_ret < 0)
+        LOG("[CORE] filter runtime failure: 0x%08X\n", filter_ret);
 
+    /* Fail-open module boundary: diagnostics/capabilities retain each stage's
+     * result, but an optional/backend failure never blocks LiveArea. */
     return SCE_KERNEL_START_SUCCESS;
+}
+
+int vitabright_reload_locked(void) {
+    int result = VBE_RESULT_OK;
+
+    /* Each stage owns its own commit and error domain. A config success remains
+     * committed even if a later brightness/color/filter stage fails. A config
+     * failure leaves the previous committed config in place while later stages
+     * can still operate fail-open from that known state. */
+    int config_ret = config_load();
+    keep_first_result(&result, config_ret);
+
+    int brightness_ret = g_is_oled ? oled_reload_backend() : lcd_reload_backend();
+    keep_first_result(&result, brightness_ret);
+
+    int color_ret = color_space_apply_config();
+    keep_first_result(&result, color_ret);
+
+    screen_filter_load_config();
+    int filter_ret = screen_filter_apply(g_is_oled);
+    keep_first_result(&result, filter_ret);
+
+    return result;
 }
 
 int vitabrightReload(void) {
@@ -77,19 +102,7 @@ int vitabrightReload(void) {
         return ret;
     }
 
-    int result = g_is_oled ? oled_reload_backend() : lcd_reload_backend();
-    if (result >= 0) {
-        status_clear_error_domain(VBE_ERROR_DOMAIN_CONFIG);
-        status_clear_error_domain(VBE_ERROR_DOMAIN_BRIGHTNESS);
-    }
-
-    int color_ret = color_space_apply_config();
-    if (result >= 0 && color_ret < 0) result = color_ret;
-
-    screen_filter_load_config();
-    int filter_ret = screen_filter_apply(g_is_oled);
-    if (result >= 0 && filter_ret < 0) result = filter_ret;
-
+    int result = vitabright_reload_locked();
     state_lock_release();
     EXIT_SYSCALL(state);
     return result;
