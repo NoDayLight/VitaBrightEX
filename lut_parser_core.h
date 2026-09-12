@@ -2,9 +2,11 @@
 #include <stdint.h>
 #include "lcd/lcd_lut.h"
 #include "oled/lut.h"
+#include "text_stream.h"
 
 typedef struct {
     uint8_t *out;
+    VbeTextNewlineDecoder newline;
     unsigned int value;
     int count;
     int state;
@@ -18,6 +20,7 @@ int vbe_lcd_lut_values_valid(const uint8_t values[LCD_LUT_LEVELS]);
 
 typedef struct {
     uint8_t *out;
+    VbeTextNewlineDecoder newline;
     uint8_t row[LUT_LINE_SIZE];
     unsigned int high_nibble;
     int rows;
