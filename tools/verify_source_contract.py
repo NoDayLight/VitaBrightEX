@@ -37,6 +37,16 @@ for path in C_SOURCES:
     for symbol in ("ksceRegMgrSetKeyInt", "NID_REGMGR_SET_KEY_INT", "0x23B99BDE"):
         forbid(path, symbol,
                f"{path.relative_to(ROOT)} reintroduces persistent registry mutation ({symbol})")
+    forbid(path, "status_set_error(",
+           f"{path.relative_to(ROOT)} bypasses explicit error-domain ownership")
+    forbid(path, "status_clear_error()",
+           f"{path.relative_to(ROOT)} reintroduces multi-domain generic clearing")
+
+for path in (ROOT / "lcd" / "hooks.c", ROOT / "oled" / "hooks.c"):
+    forbid(path, "g_vbe_status.last_error",
+           f"{path.relative_to(ROOT)} uses derived legacy summary as internal state")
+    forbid(path, "g_vbe_status.last_error_detail",
+           f"{path.relative_to(ROOT)} uses derived legacy detail as internal state")
 
 for symbol in ("normalise_white_point", "apply_color_bias", "apply_night_mode"):
     forbid(ROOT / "oled" / "hooks.c", symbol,
@@ -58,13 +68,22 @@ require(ROOT / "main.c", "color_space_shutdown()", "module stop no longer restor
 
 require(ROOT / "status.c", "s.abi_version = 2", "status ABI v2 changed unexpectedly")
 require(ROOT / "status.c", "vitabrightGetDiagnostics", "per-domain diagnostics syscall missing")
-require(ROOT / "status.c", "status_clear_error_domain", "scoped error clearing missing")
-require(ROOT / "screen_filter.c", "g_vbe_status.csc_filter = VBE_CAP_UNSUPPORTED", "CSC truthfulness missing")
-require(ROOT / "screen_filter.c", "g_vbe_status.transfer_lut = VBE_CAP_UNSUPPORTED", "transfer LUT truthfulness missing")
+require(ROOT / "status.c", "status_recovery_result", "domain-aware rollback recovery primitive missing")
+require(ROOT / "status_error_core.h", "SYNC > BRIGHTNESS > CONFIG > COLOR_SPACE > FILTER > INPUT",
+        "legacy summary precedence is no longer explicit")
+require(ROOT / "filter_policy.c", "VBE_RESULT_UNSUPPORTED",
+        "unsupported filter request no longer uses named capability result")
+require(ROOT / "filter_policy.c", "policy.error = VBE_ERR_NONE",
+        "unsupported filter policy became a runtime error")
+require(ROOT / "screen_filter.c", "vbe_filter_request_policy",
+        "screen filter bypasses production shared unsupported policy")
 require(ROOT / "main.c", "state_lock_init()", "state-transition lock initialization missing")
+require(ROOT / "main.c", "vitabright_reload_locked", "shared reload orchestrator missing")
 require(ROOT / "main.c", "oled_reload_backend()", "generic reload bypasses OLED backend")
 require(ROOT / "main.c", "lcd_reload_backend()", "generic reload bypasses LCD backend")
-require(ROOT / "main.c", "VBE_ERROR_DOMAIN_CONFIG", "startup config error ownership missing")
+for backend in (ROOT / "lcd" / "hooks.c", ROOT / "oled" / "hooks.c"):
+    forbid(backend, "config_load()",
+           f"{backend.relative_to(ROOT)} improperly owns config reload lifecycle")
 
 for symbol in (
     "vitabrightGetDiagnostics", "vitabrightGetBuildId",
@@ -81,6 +100,8 @@ require(root_cmake, 'set(VBE_FTP_UX0 "${VBE_FTP_ROOT}//ux0:")',
 for relative in (":1337/ur0:/", ":1337/ux0:/"):
     forbid(root_cmake, relative, f"relative Vita FTP path returned: {relative}")
 require(root_cmake, "VBE_BUILD_ID", "plugin build identity is not generated")
+require(root_cmake, "source_authority.c", "production source authority core is not linked")
+require(root_cmake, "filter_policy.c", "production filter policy core is not linked")
 require(ROOT / "editor" / "CMakeLists.txt", "VBE_BUILD_ID", "editor build identity is not generated")
 
 editor = ROOT / "editor" / "app.c"
