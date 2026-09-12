@@ -151,8 +151,9 @@ int vitabrightFilterGetParams(ScreenFilterParams *out) {
     }
 
     ScreenFilterParams snapshot = g_screen_filter;
-    (void)state_lock_release();
-    ret = ksceKernelMemcpyKernelToUser((void *)out, &snapshot, sizeof(snapshot));
+    ret = state_lock_release_result(0);
+    if (ret >= 0)
+        ret = ksceKernelMemcpyKernelToUser((void *)out, &snapshot, sizeof(snapshot));
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -166,10 +167,13 @@ int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused) 
     int ret = ksceKernelMemcpyUserToKernel(&candidate, (const void *)in, sizeof(candidate));
     if (ret < 0 || !params_valid(&candidate)) {
         int detail = ret < 0 ? ret : -1;
-        if (state_lock_acquire() >= 0) {
+        int lock = state_lock_acquire();
+        if (lock >= 0) {
             status_stage_result(VBE_ERROR_DOMAIN_INPUT, 0,
                                 VBE_ERR_INVALID_USER_INPUT, detail);
-            (void)state_lock_release();
+            detail = state_lock_release_result(detail);
+        } else {
+            detail = lock;
         }
         EXIT_SYSCALL(state);
         return detail;
@@ -188,9 +192,9 @@ int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused) 
     g_vbe_status.transfer_lut = policy.transfer_state;
     if (policy.result == VBE_RESULT_UNSUPPORTED) {
         status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
-        (void)state_lock_release();
+        ret = state_lock_release_result(VBE_RESULT_UNSUPPORTED);
         EXIT_SYSCALL(state);
-        return VBE_RESULT_UNSUPPORTED;
+        return ret;
     }
 
     ScreenFilterParams previous = g_screen_filter;
@@ -198,7 +202,7 @@ int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused) 
     ret = screen_filter_apply(g_is_oled);
     if (ret < 0) g_screen_filter = previous;
 
-    (void)state_lock_release();
+    ret = state_lock_release_result(ret);
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -218,7 +222,7 @@ int vitabrightFilterReset(int is_oled_unused) {
         status_stage_result(VBE_ERROR_DOMAIN_INPUT, 1,
                             VBE_ERR_INVALID_USER_INPUT, 0);
 
-    (void)state_lock_release();
+    ret = state_lock_release_result(ret);
     EXIT_SYSCALL(state);
     return ret;
 }
