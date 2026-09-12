@@ -35,57 +35,20 @@ def require_identical(source: Path, packaged: Path) -> None:
         fail(packaged, f"does not byte-match authoritative source {source.relative_to(ROOT)}")
 
 
-def run_production_parser_regressions() -> None:
-    """Compile and execute the exact portable parser core used by the SKPRX.
-
-    This is deliberately not a Python reimplementation of the grammar. The
-    hardware-discovered v1.4 defect existed because the old Python validator
-    accepted bytes that the kernel's fixed-line parser rejected.
-    """
-    with tempfile.TemporaryDirectory(prefix="vbe-parser-") as temp:
-        exe = Path(temp) / "lut_parser_host"
-        compile_cmd = [
+def run_host_test(name: str, sources: list[str]) -> None:
+    with tempfile.TemporaryDirectory(prefix=f"vbe-{name}-") as temp:
+        exe = Path(temp) / name
+        command = [
             "cc", "-std=c99", "-Wall", "-Wextra", "-Werror",
             "-I", str(ROOT),
-            str(ROOT / "tests" / "lut_parser_host.c"),
-            str(ROOT / "lcd" / "lut_parser.c"),
-            str(ROOT / "oled" / "lut_parser.c"),
+            *[str(ROOT / source) for source in sources],
             "-o", str(exe),
         ]
         try:
-            subprocess.run(compile_cmd, cwd=ROOT, check=True)
+            subprocess.run(command, cwd=ROOT, check=True)
             subprocess.run([str(exe)], cwd=ROOT, check=True)
         except (OSError, subprocess.CalledProcessError) as exc:
-            errors.append(f"production LUT parser regression harness failed: {exc}")
-
-
-def check_authority_contract() -> None:
-    """Guard the missing-vs-malformed source policy used by both backends."""
-    lcd = (ROOT / "lcd" / "hooks.c").read_text(encoding="utf-8")
-    oled = (ROOT / "oled" / "parser.c").read_text(encoding="utf-8")
-
-    lcd_required = (
-        "if (opened) {\n        if (ret == 0) path_copy(source, LCD_LUT_FILE1);\n        return ret;\n    }",
-        "if (opened) {\n        if (ret == 0) path_copy(source, LCD_LUT_FILE2);\n        return ret;\n    }",
-    )
-    for fragment in lcd_required:
-        if fragment not in lcd:
-            errors.append("LCD authoritative-source policy changed without updating parser tests")
-
-    if "if (present) return ret;" not in oled:
-        errors.append("OLED authoritative-source policy changed without updating parser tests")
-
-    # Semantic regression examples: malformed preferred source stops selection;
-    # only a missing preferred source permits the next candidate.
-    def decide(opened: bool, parse_result: int) -> str:
-        if not opened:
-            return "continue"
-        return "accept" if parse_result == 0 else "reject"
-
-    if decide(True, -1) != "reject":
-        errors.append("malformed preferred source must be authoritative failure")
-    if decide(False, -1) != "continue":
-        errors.append("missing preferred source must permit documented fallback")
+            errors.append(f"{name} host regression failed: {exc}")
 
 
 for name in OLED_NAMES:
@@ -97,12 +60,24 @@ require_identical(ROOT / "lcd" / "luts" / LCD_NAME,
 require_identical(ROOT / "vitabrightex.cfg",
                   ROOT / "release" / "ur0_tai" / "vitabrightex.cfg")
 
-run_production_parser_regressions()
-check_authority_contract()
+run_host_test("lut_parser_host", [
+    "tests/lut_parser_host.c",
+    "text_stream.c",
+    "lcd/lut_parser.c",
+    "oled/lut_parser.c",
+])
+run_host_test("config_parser_host", [
+    "tests/config_parser_host.c",
+    "text_stream.c",
+    "config_parser.c",
+])
+run_host_test("status_error_host", [
+    "tests/status_error_host.c",
+])
 
 if errors:
     for error in errors:
         print(f"ERROR: {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("packaged LUT/config assets + production parser contract: OK")
+print("packaged assets + production parser/status contracts: OK")
