@@ -2,6 +2,7 @@
 #include "config.h"
 #include "log.h"
 #include "main.h"
+#include "state_lock.h"
 #include "status.h"
 #include "taihen_extra.h"
 #include <stdint.h>
@@ -54,10 +55,8 @@ static int params_valid(const ScreenFilterParams *p) {
 }
 
 static int advanced_filter_requested(const ScreenFilterParams *p) {
-    return p->cct != CCT_DEFAULT ||
-           p->gamma != 1.0f ||
-           p->contrast != 1.0f ||
-           p->brightness != 0.0f ||
+    return p->cct != CCT_DEFAULT || p->gamma != 1.0f ||
+           p->contrast != 1.0f || p->brightness != 0.0f ||
            p->panel_enhance != 0;
 }
 
@@ -75,13 +74,9 @@ void screen_filter_load_config(void) {
 int screen_filter_apply(int is_oled) {
     (void)is_oled;
 
-    /*
-     * v1.4 intentionally does not program an LCD CSC here.
-     * The old 0x0FCBF457 call did not match VitaSDK's documented IFTU CSC
-     * ABI. The documented ksceIftuCsc operation converts explicit buffers;
-     * it is not evidence of a persistent active-scanout matrix setter.
-     * Gamma and panel linearisation additionally require a nonlinear stage.
-     */
+    /* No speculative persistent IFTU path.  The documented ksceIftuCsc API
+     * is an explicit buffer conversion API, not an active-scanout setter.
+     * Gamma/panel linearisation additionally require a nonlinear stage. */
     g_vbe_status.csc_filter = VBE_CAP_UNSUPPORTED;
     g_vbe_status.transfer_lut = VBE_CAP_UNSUPPORTED;
 
@@ -100,7 +95,6 @@ int screen_filter_apply(int is_oled) {
         return ret;
     }
     g_vbe_status.invert = g_screen_filter.invert ? VBE_CAP_ACTIVE : VBE_CAP_INACTIVE;
-
     return advanced_filter_requested(&g_screen_filter) ? -2 : 0;
 }
 
@@ -109,7 +103,7 @@ void screen_filter_set_cct(uint16_t cct, int is_oled) {
     candidate.cct = cct;
     if (!params_valid(&candidate)) return;
     g_screen_filter = candidate;
-    screen_filter_apply(is_oled);
+    (void)screen_filter_apply(is_oled);
 }
 
 void screen_filter_reset(int is_oled) {
@@ -122,41 +116,44 @@ void screen_filter_reset(int is_oled) {
         .panel_enhance = 0,
     };
     g_screen_filter = neutral;
-    screen_filter_apply(is_oled);
+    (void)screen_filter_apply(is_oled);
 }
 
 int vitabrightFilterGetParams(ScreenFilterParams *out) {
     int state;
-    int ret;
     ENTER_SYSCALL(state);
-    ret = ksceKernelMemcpyKernelToUser((void *)out, &g_screen_filter,
-                                       sizeof(g_screen_filter));
+    int ret = state_lock_acquire();
+    if (ret < 0) { EXIT_SYSCALL(state); return ret; }
+
+    ScreenFilterParams snapshot = g_screen_filter;
+    state_lock_release();
+    ret = ksceKernelMemcpyKernelToUser((void *)out, &snapshot, sizeof(snapshot));
     EXIT_SYSCALL(state);
     return ret;
 }
 
 int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused) {
     int state;
-    int ret;
     ScreenFilterParams candidate;
     (void)is_oled_unused;
-
     ENTER_SYSCALL(state);
-    ret = ksceKernelMemcpyUserToKernel(&candidate, (const void *)in,
-                                       sizeof(candidate));
-    if (ret < 0) {
-        status_set_error(VBE_ERR_INVALID_USER_INPUT, ret);
+
+    int ret = ksceKernelMemcpyUserToKernel(&candidate, (const void *)in, sizeof(candidate));
+    if (ret < 0 || !params_valid(&candidate)) {
+        int detail = ret < 0 ? ret : -1;
+        if (state_lock_acquire() >= 0) {
+            status_set_error(VBE_ERR_INVALID_USER_INPUT, detail);
+            state_lock_release();
+        }
         EXIT_SYSCALL(state);
-        return ret;
-    }
-    if (!params_valid(&candidate)) {
-        status_set_error(VBE_ERR_INVALID_USER_INPUT, -1);
-        EXIT_SYSCALL(state);
-        return -1;
+        return detail;
     }
 
+    ret = state_lock_acquire();
+    if (ret < 0) { EXIT_SYSCALL(state); return ret; }
     g_screen_filter = candidate;
     ret = screen_filter_apply(g_is_oled);
+    state_lock_release();
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -165,7 +162,10 @@ int vitabrightFilterReset(int is_oled_unused) {
     int state;
     (void)is_oled_unused;
     ENTER_SYSCALL(state);
+    int ret = state_lock_acquire();
+    if (ret < 0) { EXIT_SYSCALL(state); return ret; }
     screen_filter_reset(g_is_oled);
+    state_lock_release();
     EXIT_SYSCALL(state);
     return 0;
 }
