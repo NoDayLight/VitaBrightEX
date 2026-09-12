@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Verify pseudo-v1.4 source contract
+        run: python3 tools/verify_source_contract.py
       - uses: actions/checkout@v7
         with:
           repository: vitasdk/vdpm
@@ -30,10 +32,14 @@ jobs:
         run: |
           vdpm install taihen
           vdpm install libvita2d
-      - name: Configure plugin
+      - name: Configure release plugin
         run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DENABLE_LOGGING=OFF
-      - name: Build plugin and stubs
+      - name: Build release plugin and stubs
         run: cmake --build build --parallel
+      - name: Configure diagnostic plugin
+        run: cmake -S . -B build-diagnostic -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DENABLE_LOGGING=ON
+      - name: Build diagnostic plugin
+        run: cmake --build build-diagnostic --parallel
       - name: Install generated syscall stubs
         run: cmake --install build --prefix "$VITASDK/arm-vita-eabi"
       - name: Configure editor
