@@ -1,9 +1,13 @@
 #include <stdio.h>
+#include <string.h>
 #include "../transaction_core.h"
 
 #define ERR_REQUEST   (-101)
 #define ERR_RELEASE   (-202)
 #define ERR_ROLLBACK  (-303)
+#define ERR_FILTER    (-401)
+#define ERR_COLOR     (-402)
+#define ERR_BACKEND   (-403)
 
 static int check(int condition, const char *name) {
     if (condition) return 0;
@@ -51,6 +55,44 @@ int main(void) {
     failures += check(vbe_txn_public_result(request_dirty, 0, ok) == ERR_RELEASE,
                       "dirty candidate cleanup failure is returned directly");
 
+    VbeSourceIdentity source_a;
+    VbeSourceIdentity source_b;
+    VbeSourceIdentity committed;
+    vbe_source_identity_file(&source_a, "ux0:tai/A.txt");
+    vbe_source_identity_file(&source_b, "ur0:tai/B.txt");
+    vbe_source_identity_copy(&committed, &source_a);
+
+    /* Candidate B fails cleanly. No candidate source is committed. A legal
+     * rollback commits A again, so persistence provenance remains A. */
+    failures += check(vbe_txn_should_rollback(1, VBE_OWNERSHIP_CLEAN, request_clean),
+                      "source rollback is legal only after clean candidate failure");
+    vbe_txn_commit_source(&committed, &source_a);
+    failures += check(committed.kind == VBE_SOURCE_ID_FILE &&
+                      strcmp(committed.path, "ux0:tai/A.txt") == 0,
+                      "successful rollback restores previous committed source A");
+    failures += check(vbe_txn_file_persistence_allowed(VBE_OWNERSHIP_ACTIVE, &committed),
+                      "restored file source A remains persistence eligible");
+
+    /* Dirty candidate B never commits source B and cannot persist even though
+     * the historical committed-source metadata still identifies A. */
+    vbe_source_identity_copy(&committed, &source_a);
+    failures += check(!vbe_txn_should_rollback(1, VBE_OWNERSHIP_DEGRADED, request_dirty),
+                      "dirty source replacement forbids rollback");
+    failures += check(strcmp(committed.path, "ux0:tai/A.txt") == 0,
+                      "dirty failure does not overwrite committed source metadata");
+    failures += check(!vbe_txn_file_persistence_allowed(VBE_OWNERSHIP_DEGRADED, &committed),
+                      "degraded backend cannot persist historical source A");
+
+    vbe_txn_commit_source(&committed, &source_b);
+    failures += check(strcmp(committed.path, "ur0:tai/B.txt") == 0 &&
+                      vbe_txn_file_persistence_allowed(VBE_OWNERSHIP_ACTIVE, &committed),
+                      "successful candidate commits source B and enables persistence");
+
+    VbeSourceIdentity compiled;
+    vbe_source_identity_compiled(&compiled);
+    failures += check(!vbe_txn_file_persistence_allowed(VBE_OWNERSHIP_ACTIVE, &compiled),
+                      "compiled source is never normal file persistence target");
+
     VbeStopAccumulator stop;
     vbe_stop_init(&stop);
     vbe_stop_stage(&stop, 0);
@@ -58,6 +100,27 @@ int main(void) {
     vbe_stop_stage(&stop, 0);
     failures += check(!vbe_stop_can_unload(&stop) && stop.first_error == ERR_RELEASE,
                       "later stop success never erases earlier teardown failure");
+
+    vbe_stop_init(&stop);
+    vbe_stop_stage(&stop, ERR_FILTER);
+    vbe_stop_stage(&stop, 0);
+    vbe_stop_stage(&stop, 0);
+    failures += check(!vbe_stop_can_unload(&stop) && stop.first_error == ERR_FILTER,
+                      "filter restore failure blocks unload despite later success");
+
+    vbe_stop_init(&stop);
+    vbe_stop_stage(&stop, 0);
+    vbe_stop_stage(&stop, ERR_COLOR);
+    vbe_stop_stage(&stop, 0);
+    failures += check(!vbe_stop_can_unload(&stop) && stop.first_error == ERR_COLOR,
+                      "color restore failure blocks unload");
+
+    vbe_stop_init(&stop);
+    vbe_stop_stage(&stop, 0);
+    vbe_stop_stage(&stop, 0);
+    vbe_stop_stage(&stop, ERR_BACKEND);
+    failures += check(!vbe_stop_can_unload(&stop) && stop.first_error == ERR_BACKEND,
+                      "backend teardown failure blocks unload");
 
     vbe_stop_init(&stop);
     vbe_stop_stage(&stop, 0);
