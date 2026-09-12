@@ -52,6 +52,17 @@ int vbe_txn_public_result(VbeTxnAttempt requested,
     return requested.detail != 0 ? requested.detail : -1;
 }
 
+void vbe_txn_commit_source(VbeSourceIdentity *committed,
+                           const VbeSourceIdentity *candidate) {
+    vbe_source_identity_copy(committed, candidate);
+}
+
+int vbe_txn_file_persistence_allowed(int ownership,
+                                     const VbeSourceIdentity *source) {
+    return ownership == VBE_OWNERSHIP_ACTIVE &&
+           vbe_source_identity_is_file(source);
+}
+
 void vbe_stop_init(VbeStopAccumulator *stop) {
     if (stop == 0) return;
     stop->failed = 0;
