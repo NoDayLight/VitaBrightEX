@@ -47,6 +47,12 @@ for path in (ROOT / "lcd" / "hooks.c", ROOT / "oled" / "hooks.c"):
            f"{path.relative_to(ROOT)} uses derived legacy summary as internal state")
     forbid(path, "g_vbe_status.last_error_detail",
            f"{path.relative_to(ROOT)} uses derived legacy detail as internal state")
+    forbid(path, "(void)taiHookReleaseForKernel",
+           f"{path.relative_to(ROOT)} ignores hook-release ownership failure")
+    forbid(path, "(void)taiInjectReleaseForKernel",
+           f"{path.relative_to(ROOT)} ignores injection-release ownership failure")
+    require(path, "VBE_ERR_RESOURCE_RELEASE",
+            f"{path.relative_to(ROOT)} no longer reports incomplete teardown")
 
 for symbol in ("normalise_white_point", "apply_color_bias", "apply_night_mode"):
     forbid(ROOT / "oled" / "hooks.c", symbol,
@@ -112,6 +118,7 @@ require(editor, "vitabrightLcdPersistBrightnessValues()", "editor bypasses autho
 require(editor, "LCD LUT entry %d/%d: %u", "editor mislabels LUT cursor")
 require(editor, "Build plugin=%s editor=%s", "editor no longer exposes plugin/editor provenance")
 require(editor, "vitabrightGetDiagnostics", "editor no longer exposes error domains")
+require(editor, "r == VBE_RESULT_UNSUPPORTED", "editor collapses unsupported capability into generic failure")
 for forbidden in ("fopen(", "vitabright_lut_p4.txt", "vitabright_lcd_lut.txt"):
     forbid(editor, forbidden,
            f"editor reintroduces direct/guessed LUT persistence ({forbidden})")
