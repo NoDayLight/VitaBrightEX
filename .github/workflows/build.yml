@@ -52,13 +52,32 @@ jobs:
         run: cmake -S editor -B editor-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
       - name: Build editor
         run: cmake --build editor-build --parallel
-      - name: Upload plugin
+      - name: Prepare PCH-2000 hardware-test bundle
+        run: |
+          mkdir -p hardware-test/ur0_tai
+          cp build/vitabright.skprx hardware-test/ur0_tai/vitabright.skprx
+          cp release/ur0_tai/vitabright_lcd_lut.txt hardware-test/ur0_tai/vitabright_lcd_lut.txt
+          cp release/ur0_tai/vitabrightex.cfg hardware-test/ur0_tai/vitabrightex.cfg
+          cp editor-build/vitabrightex-editor.vpk hardware-test/vitabrightex-editor.vpk
+          printf '%s\n' "$GITHUB_SHA" > hardware-test/WORKFLOW_COMMIT.txt
+          (cd hardware-test && sha256sum ur0_tai/vitabright.skprx ur0_tai/vitabright_lcd_lut.txt ur0_tai/vitabrightex.cfg vitabrightex-editor.vpk > SHA256SUMS)
+      - name: Upload release plugin
         uses: actions/upload-artifact@v7
         with:
           name: VitaBrightEX-v1.4-plugin
           path: build/vitabright.skprx
+      - name: Upload diagnostic plugin
+        uses: actions/upload-artifact@v7
+        with:
+          name: VitaBrightEX-v1.4-diagnostic-plugin
+          path: build-diagnostic/vitabright.skprx
       - name: Upload editor
         uses: actions/upload-artifact@v7
         with:
           name: VitaBrightEX-v1.4-editor
           path: editor-build/vitabrightex-editor.vpk
+      - name: Upload PCH-2000 hardware-test bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: VitaBrightEX-v1.4-PCH2000-hwtest
+          path: hardware-test/
