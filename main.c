@@ -9,68 +9,79 @@
 #include "log.h"
 #include "oled/hooks.h"
 #include "screen_filter.h"
+#include "status.h"
 
 unsigned int sw_version = 0;
 int g_is_oled = 0;
 
+static int detect_is_lcd(void) {
+    /* Boot type indicator 1: bit 0 + bit 3 identifies LCD hardware. */
+    return (*(uint8_t *)(ksceKernelSysrootGetKblParam() + 0xE8) & 9) != 0;
+}
+
 void _start() __attribute__((weak, alias("module_start")));
 int module_start(SceSize argc, const void *args) {
-    (void)argc; (void)args;
-    LOG("vitabrightex started...\n");
+    (void)argc;
+    (void)args;
 
     sw_version = ksceKernelSysrootGetSystemSwVersion();
-    LOG("[OS] version: %08X\n", sw_version);
-
-    /* Load user configuration first — hooks and filter read g_config */
     config_load();
 
-    /* Boot type indicator 1.
-     * See https://wiki.henkaku.xyz/vita/Sysroot#Boot_type_indicator_1
-     * Bit 0 set + bit 3 set (mask 0x09) = LCD device                 */
-    int is_lcd = *(uint8_t *)(ksceKernelSysrootGetKblParam() + 0xE8) & 9;
-    LOG("[OS] isLcd: %d\n", is_lcd);
+    int is_lcd = detect_is_lcd();
     g_is_oled = !is_lcd;
+    status_init(is_lcd ? VBE_HW_LCD : VBE_HW_OLED, sw_version);
 
+    /* Exactly one brightness backend participates in startup. */
     if (is_lcd) {
-        lcd_enable_hooks();
+        int ret = lcd_enable_hooks();
+        if (ret < 0) {
+            /* Fail open: retain the error in status and still finish boot. */
+            LOG("[CORE] LCD brightness backend unavailable: 0x%08X\n", ret);
+        }
     } else {
         oled_enable_hooks();
+        /* OLED backend predates status-aware return codes; mark selected core. */
+        g_vbe_status.brightness_core = VBE_CAP_ACTIVE;
     }
 
-    /* Apply screen filter (Rosalina-equivalent colour pipeline) */
+    /* Optional display capabilities are never boot-critical. */
     screen_filter_load_config();
-    screen_filter_apply(g_is_oled);
+    (void)screen_filter_apply(g_is_oled);
 
     return SCE_KERNEL_START_SUCCESS;
 }
 
-/* ------------------------------------------------------------------ */
-/* Syscall: reload everything from disk (config + LUT + filter)       */
-/* ------------------------------------------------------------------ */
 int vitabrightReload(void) {
     int state;
+    int ret = 0;
     ENTER_SYSCALL(state);
 
-    oled_disable_hooks();
-    lcd_disable_hooks();
+    /* Stop only the backend that exists on this device. */
+    if (g_is_oled) oled_disable_hooks();
+    else lcd_disable_hooks();
 
     config_load();
 
-    oled_enable_hooks();
-    lcd_enable_hooks();
+    if (g_is_oled) {
+        oled_enable_hooks();
+        g_vbe_status.brightness_core = VBE_CAP_ACTIVE;
+    } else {
+        ret = lcd_enable_hooks();
+    }
 
     screen_filter_load_config();
-    screen_filter_apply(g_is_oled);
+    (void)screen_filter_apply(g_is_oled);
 
     EXIT_SYSCALL(state);
-    return 0;
+    return ret;
 }
 
 int module_stop(SceSize argc, const void *args) {
-    (void)argc; (void)args;
-    /* Restore identity filter before unloading */
+    (void)argc;
+    (void)args;
+
     screen_filter_reset(g_is_oled);
-    oled_disable_hooks();
-    lcd_disable_hooks();
+    if (g_is_oled) oled_disable_hooks();
+    else lcd_disable_hooks();
     return SCE_KERNEL_STOP_SUCCESS;
 }
