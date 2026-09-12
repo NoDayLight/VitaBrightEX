@@ -10,7 +10,7 @@ static VbeSourceOutcome outcome(int decision, int stage, int error) {
 
 VbeSourceOpenClass vbe_source_classify_open(int open_result) {
     if (open_result >= 0) return VBE_SOURCE_OPENED;
-    if (open_result == SCE_ERROR_ERRNO_ENOENT) return VBE_SOURCE_NOT_FOUND;
+    if (open_result == VBE_SCE_IO_ERROR_NOT_FOUND) return VBE_SOURCE_NOT_FOUND;
     return VBE_SOURCE_IO_ERROR;
 }
 
@@ -32,4 +32,51 @@ VbeSourceOutcome vbe_source_evaluate(int open_result,
         return outcome(VBE_SOURCE_FAIL, VBE_SOURCE_STAGE_CLOSE, close_result);
 
     return outcome(VBE_SOURCE_USE, VBE_SOURCE_STAGE_NONE, 0);
+}
+
+void vbe_source_identity_clear(VbeSourceIdentity *identity) {
+    if (identity == 0) return;
+    identity->kind = VBE_SOURCE_ID_NONE;
+    identity->path[0] = '\0';
+}
+
+void vbe_source_identity_compiled(VbeSourceIdentity *identity) {
+    if (identity == 0) return;
+    identity->kind = VBE_SOURCE_ID_COMPILED;
+    identity->path[0] = '\0';
+}
+
+int vbe_source_identity_file(VbeSourceIdentity *identity, const char *path) {
+    if (identity == 0 || path == 0) return -1;
+
+    int i = 0;
+    while (i < VBE_SOURCE_PATH_MAX - 1 && path[i] != '\0') {
+        identity->path[i] = path[i];
+        ++i;
+    }
+    if (path[i] != '\0') {
+        vbe_source_identity_clear(identity);
+        return -1;
+    }
+
+    identity->path[i] = '\0';
+    identity->kind = VBE_SOURCE_ID_FILE;
+    return 0;
+}
+
+void vbe_source_identity_copy(VbeSourceIdentity *dst,
+                              const VbeSourceIdentity *src) {
+    if (dst == 0 || src == 0) return;
+    dst->kind = src->kind;
+    int i = 0;
+    while (i < VBE_SOURCE_PATH_MAX - 1 && src->path[i] != '\0') {
+        dst->path[i] = src->path[i];
+        ++i;
+    }
+    dst->path[i] = '\0';
+}
+
+int vbe_source_identity_is_file(const VbeSourceIdentity *identity) {
+    return identity != 0 && identity->kind == VBE_SOURCE_ID_FILE &&
+           identity->path[0] != '\0';
 }
