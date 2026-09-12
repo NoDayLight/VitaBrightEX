@@ -5,6 +5,7 @@
 #include "../log.h"
 #include "../lut_parser_core.h"
 #include "../main.h"
+#include "../source_authority.h"
 #include "../state_lock.h"
 #include "../status.h"
 #include "../taihen_extra.h"
@@ -41,6 +42,14 @@ static int (*ksceLcdGetBrightness)(void) = NULL;
 static int (*ksceLcdSetBrightness)(unsigned int brightness) = NULL;
 static int g_lcd_hooks_active = 0;
 
+static void brightness_error(int error, int detail) {
+    status_set_error_domain(VBE_ERROR_DOMAIN_BRIGHTNESS, error, detail);
+}
+
+static void brightness_ok(void) {
+    status_clear_error_domain(VBE_ERROR_DOMAIN_BRIGHTNESS);
+}
+
 static void lut_copy(uint8_t *dst, const uint8_t *src) {
     for (int i = 0; i < LCD_LUT_LEVELS; ++i) dst[i] = src[i];
 }
@@ -60,62 +69,74 @@ static int lcd_brightness_to_index(unsigned int brightness) {
     return (int)(16u * (brightness - 2u) / 65534u);
 }
 
-static int lcd_parse_lut_file(const char *path,
-                              uint8_t out[LCD_LUT_LEVELS],
-                              int *opened) {
+static int source_error_code(VbeSourceOutcome source) {
+    return source.stage == VBE_SOURCE_STAGE_PARSE
+        ? VBE_ERR_INVALID_USER_INPUT : VBE_ERR_SOURCE_IO;
+}
+
+static VbeSourceOutcome lcd_parse_lut_file(const char *path,
+                                           uint8_t out[LCD_LUT_LEVELS]) {
     SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
-    if (fd < 0) {
-        *opened = 0;
-        return fd;
-    }
-    *opened = 1;
+    if (fd < 0) return vbe_source_evaluate(fd, 0, 0, 0);
 
     VbeLcdLutParser parser;
     vbe_lcd_lut_parser_init(&parser, out);
     uint8_t buffer[LCD_READ_CHUNK];
-    int ret = 0;
+    int read_result = 0;
+    int parse_result = 0;
 
-    while (1) {
+    while (read_result == 0 && parse_result == 0) {
         int r = ksceIoRead(fd, buffer, sizeof(buffer));
         if (r < 0) {
-            ret = r;
+            read_result = r;
             break;
         }
         if (r == 0) {
-            ret = vbe_lcd_lut_parser_finish(&parser);
+            parse_result = vbe_lcd_lut_parser_finish(&parser);
             break;
         }
         for (int i = 0; i < r; ++i) {
             if (vbe_lcd_lut_parser_feed(&parser, buffer[i]) < 0) {
-                ret = -1;
+                parse_result = -1;
                 break;
             }
         }
-        if (ret < 0) break;
     }
 
-    int close_ret = ksceIoClose(fd);
-    if (ret == 0 && close_ret < 0) ret = close_ret;
-    return ret;
+    int close_result = ksceIoClose(fd);
+    return vbe_source_evaluate(fd, read_result, parse_result, close_result);
 }
 
 static int lcd_load_disk_candidate(uint8_t out[LCD_LUT_LEVELS],
-                                   char source[LCD_SOURCE_PATH_MAX]) {
-    int opened = 0;
-    int ret = lcd_parse_lut_file(LCD_LUT_FILE1, out, &opened);
-    if (opened) {
-        if (ret == 0) path_copy(source, LCD_LUT_FILE1);
-        return ret;
+                                   char source[LCD_SOURCE_PATH_MAX],
+                                   int *error_code) {
+    VbeSourceOutcome primary = lcd_parse_lut_file(LCD_LUT_FILE1, out);
+    if (primary.decision == VBE_SOURCE_USE) {
+        path_copy(source, LCD_LUT_FILE1);
+        *error_code = VBE_ERR_NONE;
+        return 0;
+    }
+    if (primary.decision == VBE_SOURCE_FAIL) {
+        *error_code = source_error_code(primary);
+        return primary.error;
     }
 
-    ret = lcd_parse_lut_file(LCD_LUT_FILE2, out, &opened);
-    if (opened) {
-        if (ret == 0) path_copy(source, LCD_LUT_FILE2);
-        return ret;
+    VbeSourceOutcome fallback = lcd_parse_lut_file(LCD_LUT_FILE2, out);
+    if (fallback.decision == VBE_SOURCE_USE) {
+        path_copy(source, LCD_LUT_FILE2);
+        *error_code = VBE_ERR_NONE;
+        return 0;
+    }
+    if (fallback.decision == VBE_SOURCE_FAIL) {
+        *error_code = source_error_code(fallback);
+        return fallback.error;
     }
 
+    /* LCD has a compiled safe default. Missing both documented sources is the
+     * only case that selects it; any I/O/parse/close failure above is terminal. */
     lut_copy(out, lcd_brightness_default);
     path_copy(source, LCD_LUT_FILE1);
+    *error_code = VBE_ERR_NONE;
     return 0;
 }
 
@@ -221,13 +242,16 @@ static int lcd_resolve_core(tai_module_info_t *info) {
 
 static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
     if (g_lcd_hooks_active) return 0;
-    if (!vbe_lcd_lut_values_valid(candidate)) return -1;
+    if (!vbe_lcd_lut_values_valid(candidate)) {
+        brightness_error(VBE_ERR_INVALID_USER_INPUT, -1);
+        return -1;
+    }
 
     tai_module_info_t info;
     int ret = lcd_resolve_core(&info);
     if (ret < 0) {
         g_vbe_status.brightness_core = VBE_CAP_FAILED;
-        status_set_error(VBE_ERR_EXPORT_RESOLUTION, ret);
+        brightness_error(VBE_ERR_EXPORT_RESOLUTION, ret);
         return ret;
     }
 
@@ -235,7 +259,7 @@ static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
     if (lcd_get_table_offset(sw_version, &table_off) < 0) {
         g_vbe_status.firmware_layout = VBE_CAP_UNSUPPORTED;
         g_vbe_status.brightness_table = VBE_CAP_UNSUPPORTED;
-        status_set_error(VBE_ERR_FIRMWARE_UNSUPPORTED, (int)sw_version);
+        brightness_error(VBE_ERR_FIRMWARE_UNSUPPORTED, (int)sw_version);
         return -1;
     }
 
@@ -243,7 +267,7 @@ static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
     if (ret < 0) {
         g_vbe_status.firmware_layout = VBE_CAP_FAILED;
         g_vbe_status.brightness_table = VBE_CAP_FAILED;
-        status_set_error(VBE_ERR_LAYOUT_MISMATCH, ret);
+        brightness_error(VBE_ERR_LAYOUT_MISMATCH, ret);
         return ret;
     }
     g_vbe_status.firmware_layout = VBE_CAP_ACTIVE;
@@ -252,7 +276,7 @@ static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
         table_off, candidate, LCD_LUT_LEVELS);
     if (lcd_table_inject < 0) {
         ret = (int)lcd_table_inject;
-        status_set_error(VBE_ERR_TABLE_INJECTION, ret);
+        brightness_error(VBE_ERR_TABLE_INJECTION, ret);
         lcd_release_transaction();
         g_vbe_status.brightness_table = VBE_CAP_FAILED;
         return ret;
@@ -266,7 +290,7 @@ static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
         NID_LCD_SET_BRIGHTNESS, hook_ksceLcdSetBrightness);
     if (lcd_set_brightness_hook < 0) {
         ret = (int)lcd_set_brightness_hook;
-        status_set_error(VBE_ERR_BRIGHTNESS_HOOK, ret);
+        brightness_error(VBE_ERR_BRIGHTNESS_HOOK, ret);
         lcd_release_transaction();
         g_vbe_status.brightness_hook = VBE_CAP_FAILED;
         return ret;
@@ -278,7 +302,7 @@ static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
         NID_POWER_SET_MAX_BRIGHT, hook_kscePowerSetDisplayMaxBrightnessForLcd);
     if (power_set_max_bright_hook < 0) {
         ret = (int)power_set_max_bright_hook;
-        status_set_error(VBE_ERR_POWER_HOOK, ret);
+        brightness_error(VBE_ERR_POWER_HOOK, ret);
         lcd_release_transaction();
         g_vbe_status.power_limit_hook = VBE_CAP_FAILED;
         return ret;
@@ -288,7 +312,7 @@ static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
     int current = ksceLcdGetBrightness();
     if (current < 0) {
         ret = current;
-        status_set_error(VBE_ERR_BACKEND, ret);
+        brightness_error(VBE_ERR_BACKEND, ret);
         lcd_release_transaction();
         g_vbe_status.brightness_core = VBE_CAP_FAILED;
         return ret;
@@ -296,7 +320,7 @@ static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
 
     ret = ksceLcdSetBrightness((unsigned int)current);
     if (ret < 0) {
-        status_set_error(VBE_ERR_BACKEND, ret);
+        brightness_error(VBE_ERR_BACKEND, ret);
         lcd_release_transaction();
         g_vbe_status.brightness_core = VBE_CAP_FAILED;
         return ret;
@@ -304,11 +328,15 @@ static int lcd_start_transaction(const uint8_t candidate[LCD_LUT_LEVELS]) {
 
     g_lcd_hooks_active = 1;
     g_vbe_status.brightness_core = VBE_CAP_ACTIVE;
+    brightness_ok();
     return 0;
 }
 
 static int lcd_replace_candidate(const uint8_t candidate[LCD_LUT_LEVELS]) {
-    if (!vbe_lcd_lut_values_valid(candidate)) return -1;
+    if (!vbe_lcd_lut_values_valid(candidate)) {
+        brightness_error(VBE_ERR_INVALID_USER_INPUT, -1);
+        return -1;
+    }
 
     uint8_t previous[LCD_LUT_LEVELS];
     int had_previous = g_lcd_hooks_active;
@@ -318,15 +346,19 @@ static int lcd_replace_candidate(const uint8_t candidate[LCD_LUT_LEVELS]) {
     int ret = lcd_start_transaction(candidate);
     if (ret >= 0) return ret;
 
-    int original_error = g_vbe_status.last_error;
-    int original_detail = g_vbe_status.last_error_detail;
+    int requested_error = VBE_ERR_BACKEND;
+    int requested_detail = ret;
+    status_get_error_domain(VBE_ERROR_DOMAIN_BRIGHTNESS,
+                            &requested_error, &requested_detail);
+
     if (had_previous) {
         int rollback = lcd_start_transaction(previous);
-        if (rollback < 0) {
-            status_set_error(VBE_ERR_LUT_ROLLBACK, rollback);
-            return ret;
-        }
-        status_set_error(original_error, original_detail);
+        status_recovery_result(VBE_ERROR_DOMAIN_BRIGHTNESS, rollback >= 0,
+                               requested_error, requested_detail,
+                               VBE_ERR_LUT_ROLLBACK, rollback);
+        if (rollback < 0)
+            LOG("[LCD] replacement failed 0x%08X and rollback failed 0x%08X\n",
+                ret, rollback);
     }
     return ret;
 }
@@ -336,9 +368,10 @@ int lcd_enable_hooks(void) {
 
     uint8_t candidate[LCD_LUT_LEVELS];
     char source[LCD_SOURCE_PATH_MAX];
-    int ret = lcd_load_disk_candidate(candidate, source);
+    int error_code = VBE_ERR_NONE;
+    int ret = lcd_load_disk_candidate(candidate, source, &error_code);
     if (ret < 0) {
-        status_set_error(VBE_ERR_INVALID_USER_INPUT, ret);
+        brightness_error(error_code, ret);
         return ret;
     }
 
@@ -354,29 +387,18 @@ void lcd_disable_hooks(void) {
 }
 
 int lcd_reload_backend(void) {
-    VitaBrightConfig previous_config = g_config;
     uint8_t candidate[LCD_LUT_LEVELS];
     char candidate_source[LCD_SOURCE_PATH_MAX];
+    int error_code = VBE_ERR_NONE;
 
-    int ret = config_load();
+    int ret = lcd_load_disk_candidate(candidate, candidate_source, &error_code);
     if (ret < 0) {
-        g_config = previous_config;
-        status_set_error(VBE_ERR_CONFIG, ret);
-        return ret;
-    }
-
-    ret = lcd_load_disk_candidate(candidate, candidate_source);
-    if (ret < 0) {
-        g_config = previous_config;
-        status_set_error(VBE_ERR_INVALID_USER_INPUT, ret);
+        brightness_error(error_code, ret);
         return ret;
     }
 
     ret = lcd_replace_candidate(candidate);
-    if (ret < 0) {
-        g_config = previous_config;
-        return ret;
-    }
+    if (ret < 0) return ret;
 
     path_copy(lcd_source_path, candidate_source);
     return 0;
@@ -463,8 +485,8 @@ int vitabrightLcdPersistBrightnessValues(void) {
     }
 
     ret = persist_lcd_locked();
-    if (ret < 0) status_set_error(VBE_ERR_BACKEND, ret);
-    else status_clear_error();
+    status_stage_result(VBE_ERROR_DOMAIN_BRIGHTNESS, ret >= 0,
+                        VBE_ERR_BACKEND, ret);
 
     state_lock_release();
     EXIT_SYSCALL(state);
@@ -500,7 +522,8 @@ int vitabrightLcdSetBrightnessValues(uint8_t in[LCD_LUT_LEVELS]) {
     if (ret < 0 || !vbe_lcd_lut_values_valid(candidate)) {
         int detail = ret < 0 ? ret : -1;
         if (state_lock_acquire() >= 0) {
-            status_set_error(VBE_ERR_INVALID_USER_INPUT, detail);
+            status_stage_result(VBE_ERROR_DOMAIN_INPUT, 0,
+                                VBE_ERR_INVALID_USER_INPUT, detail);
             state_lock_release();
         }
         EXIT_SYSCALL(state);
@@ -509,6 +532,8 @@ int vitabrightLcdSetBrightnessValues(uint8_t in[LCD_LUT_LEVELS]) {
 
     ret = state_lock_acquire();
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
+    status_stage_result(VBE_ERROR_DOMAIN_INPUT, 1,
+                        VBE_ERR_INVALID_USER_INPUT, 0);
     if (g_is_oled || !g_lcd_hooks_active) {
         state_lock_release();
         EXIT_SYSCALL(state);
@@ -516,7 +541,6 @@ int vitabrightLcdSetBrightnessValues(uint8_t in[LCD_LUT_LEVELS]) {
     }
 
     ret = lcd_replace_candidate(candidate);
-    if (ret == 0) status_clear_error();
     state_lock_release();
     EXIT_SYSCALL(state);
     return ret;
