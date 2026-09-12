@@ -41,26 +41,20 @@ void status_set_error_domain(int domain, int error, int detail) {
     refresh_summary();
 }
 
-void status_set_error(int error, int detail) {
-    int domain = VBE_ERROR_DOMAIN_BRIGHTNESS;
-    if (error == VBE_ERR_CONFIG)
-        domain = VBE_ERROR_DOMAIN_CONFIG;
-    else if (error == VBE_ERR_DISPLAY_CAPABILITY)
-        domain = VBE_ERROR_DOMAIN_COLOR_SPACE;
-    else if (error == VBE_ERR_SYNCHRONIZATION)
-        domain = VBE_ERROR_DOMAIN_SYNC;
-    status_set_error_domain(domain, error, detail);
-}
-
 void status_clear_error_domain(int domain) {
     vbe_error_state_clear(&g_error_state, domain);
     refresh_summary();
 }
 
-void status_clear_error(void) {
-    vbe_error_state_clear(&g_error_state, VBE_ERROR_DOMAIN_BRIGHTNESS);
-    vbe_error_state_clear(&g_error_state, VBE_ERROR_DOMAIN_INPUT);
+void status_stage_result(int domain, int succeeded, int error, int detail) {
+    vbe_error_state_stage(&g_error_state, domain, succeeded, error, detail);
     refresh_summary();
+}
+
+void status_get_error_domain(int domain, int *error, int *detail) {
+    VbeErrorSlot slot = vbe_error_state_get(&g_error_state, domain);
+    if (error != 0) *error = slot.error;
+    if (detail != 0) *detail = slot.detail;
 }
 
 int vitabrightGetStatus(VitaBrightStatus *out) {
