@@ -6,9 +6,10 @@ typedef enum { VBE_CAP_UNKNOWN = 0, VBE_CAP_UNAVAILABLE = 1, VBE_CAP_INACTIVE = 
 
 typedef enum {
     VBE_RESULT_OK = 0,
-    /* Positive nonzero capability result: deliberately outside the SCE/taiHEN
-     * negative runtime-error namespace. */
+    /* Positive nonzero capability/control results are deliberately outside the
+     * SCE/taiHEN negative runtime-error namespace. */
     VBE_RESULT_UNSUPPORTED = 1,
+    VBE_RESULT_NO_FILE_SOURCE = 2,
 } VbeResult;
 
 typedef enum {
@@ -19,6 +20,9 @@ typedef enum {
     VBE_ERR_DISPLAY_CAPABILITY = 9, VBE_ERR_LAYOUT_MISMATCH = 10,
     VBE_ERR_SYNCHRONIZATION = 11, VBE_ERR_LUT_ROLLBACK = 12,
     VBE_ERR_SOURCE_IO = 13, VBE_ERR_RESOURCE_RELEASE = 14,
+    VBE_ERR_PERSISTENCE_PREPARE = 15,
+    VBE_ERR_PERSISTENCE_COMMIT = 16,
+    VBE_ERR_PERSISTENCE_CLEANUP = 17,
 } VbeError;
 
 typedef enum {
