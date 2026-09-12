@@ -9,7 +9,7 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     endif()
 endif()
 
-project(vitabright)
+project(vitabright C)
 include("${VITASDK}/share/vita.cmake" REQUIRED)
 
 option(ENABLE_LOGGING "Enable debug logging to ur0:data/vitabright_log.txt" OFF)
@@ -17,8 +17,7 @@ if(ENABLE_LOGGING)
     add_definitions(-DENABLE_LOGGING=1)
 endif()
 
-set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -Wl,-q -Wall -Wextra -O3 -fno-pic -fno-PIC -std=gnu99")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -fno-rtti -fno-exceptions")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -Wall -Wextra -O3 -fno-pic -fno-PIC -std=gnu99")
 
 add_executable(vitabright
     main.c
@@ -29,6 +28,8 @@ add_executable(vitabright
     config.h
     status.c
     status.h
+    state_lock.c
+    state_lock.h
     screen_filter.c
     screen_filter.h
     taihen_extra.h
@@ -47,6 +48,7 @@ target_link_libraries(vitabright
     taihenForKernel_stub
     taihenModuleUtils_stub
     SceIofilemgrForDriver_stub
+    SceThreadmgrForDriver_stub
     gcc
     SceSysclibForDriver_stub
     SceSysmemForDriver_stub
@@ -54,10 +56,9 @@ target_link_libraries(vitabright
     SceSysrootForDriver_stub
 )
 
-set_target_properties(vitabright
-    PROPERTIES
-        LINK_FLAGS    "-nostdlib"
-        COMPILE_FLAGS "-D__VITA_KERNEL__"
+set_target_properties(vitabright PROPERTIES
+    LINK_FLAGS "-nostdlib"
+    COMPILE_FLAGS "-D__VITA_KERNEL__"
 )
 
 vita_create_self(vitabright.skprx vitabright
@@ -65,9 +66,7 @@ vita_create_self(vitabright.skprx vitabright
     UNSAFE
 )
 
-vita_create_stubs(vitabright-stubs vitabright module.yml
-    KERNEL
-)
+vita_create_stubs(vitabright-stubs vitabright module.yml KERNEL)
 
 install(DIRECTORY ${CMAKE_BINARY_DIR}/vitabright-stubs/
     DESTINATION lib
