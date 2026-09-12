@@ -1,73 +1,75 @@
 # SceLcd raw-layout verification
 
-VitaBrightEX uses NID-resolved functions wherever possible, but the PCH-2000 brightness extension still replaces a 17-byte table inside **segment 0 of `SceLcd`**. That makes the raw table offset a separate firmware-layout claim and it must be treated accordingly.
+The PCH-2000 brightness extension replaces a 17-byte table inside **segment 0 of `SceLcd`**. Function NIDs and raw module offsets are separate claims and are tracked separately.
 
-## Production safety rule
+## Production runtime rule
 
-A firmware version being on the source whitelist is never sufficient by itself. Before injection, v1.4 resolves `segment 0 + offset` in the *loaded* `SceLcd` module and requires the exact stock table:
+A firmware version being whitelisted is never sufficient by itself. Before injection, v1.4 resolves `segment 0 + offset` in the loaded `SceLcd` image and requires the exact Sony stock table:
 
 ```text
 31 37 43 50 58 67 77 88 100 114 129 147 166 182 203 227 255
 ```
 
-If any byte differs, the backend reports a layout mismatch and fails open without injecting. This runtime check remains mandatory even after static binary verification because it also detects conflicting pre-patches or an unexpected module build.
+Any mismatch fails open before injection. This guard remains mandatory even after a static binary audit because it also detects an unexpected module build or conflicting pre-patch.
 
-## Current inherited offsets
+## Evidence table
 
-| Firmware | Candidate segment-0 offset | Runtime exact-signature gate | Static decrypted-binary verification |
+| Firmware | Candidate segment-0 offset | Physical runtime exact-signature evidence | Static decrypted-image evidence |
 |---|---:|---|---|
-| 3.60 | `0x1B00` | required | pending binary evidence |
-| 3.65 | `0x1B48` | required | pending binary evidence |
-| 3.67 | `0x1B48` | required | pending binary evidence |
-| 3.68 | `0x1B48` | required | pending binary evidence |
-| 3.69 | `0x1B48` | required | pending binary evidence |
-| 3.70 | `0x1B48` | required | pending binary evidence |
+| 3.60 | `0x1B00` | pending | pending |
+| 3.65 | `0x1B48` | **PASS: PCH-2000 / `0x03650000` / 3.65 Ensō** | pending |
+| 3.67 | `0x1B48` | pending | pending |
+| 3.68 | `0x1B48` | pending | pending |
+| 3.69 | `0x1B48` | pending | pending |
+| 3.70 | `0x1B48` | pending | pending |
 | 3.71–3.74 | not accepted | n/a | unsupported |
 
-The first six candidates come from original VitaBright provenance. Repetition in downstream forks is **not** counted as independent static verification.
+The inherited candidates come from original VitaBright provenance. Repetition in downstream forks is not independent verification.
 
-## Repository verifier
+## 3.65 physical runtime result
 
-`tools/verify_scelcd_layout.py` verifies a decrypted SceLcd image and records its SHA-256. The injection offset is relative to module segment 0, so for ELF input the verifier parses the 32-bit little-endian program headers, selects the first `PT_LOAD` segment and maps:
+On 2026-09-12, the mandatory physical PCH-2000 / 3.65 Ensō target reported firmware `0x03650000` through status ABI v2. The first isolated cold boot reached LiveArea but a separate authoritative-LUT parser defect stopped backend startup before layout validation, leaving `firmware_layout=unknown` and the backend inactive as intended.
+
+For diagnosis only, the same 17 extended values were uploaded without comments. After `vitabrightReload()`, status became:
 
 ```text
-file location = segment0.p_offset + VitaBright table offset
+firmware_layout=active
+brightness_core=active
+brightness_table=active
+brightness_hook=active
+power_limit_hook=active
+last_error=0
 ```
 
-It then requires the exact 17-byte stock signature.
+On this firmware the production path selects segment-0 `0x1B48`; `firmware_layout=active` can only be reached after all 17 stock bytes above match at that loaded-module address. This is therefore **physical runtime exact-signature verification of `0x1B48` on the tested 3.65 console**.
 
-Example:
+It is deliberately **not** labelled static verification. No independently decrypted 3.65 `SceLcd` ELF or exact segment-0 dump has yet been passed through the repository verifier.
+
+The same console also passed stock-vs-extended A/B testing: stock entry 0=`31` produced roughly Sony's normal minimum while extended entry 0=`1` was materially darker; both tables remained active and ended at `255`. This supports the original VitaBright ascending table direction.
+
+## Static verifier
+
+`tools/verify_scelcd_layout.py` accepts a decrypted SceLcd ELF or an explicitly identified raw segment-0 dump, records SHA-256, maps the VitaBright segment-relative offset correctly, and requires the exact stock signature.
+
+For ELF input:
+
+```text
+file location = first PT_LOAD.p_offset + VitaBright table offset
+```
+
+Examples:
 
 ```sh
 python3 tools/verify_scelcd_layout.py --firmware 3.65 SceLcd.elf
-```
-
-For a known exact dump of module segment 0:
-
-```sh
 python3 tools/verify_scelcd_layout.py --firmware 3.65 --raw-segment-0 SceLcd.seg0.bin
 ```
 
-Encrypted SELF/SKPRX data must not be passed off as a decrypted image; the verifier intentionally rejects non-ELF input unless `--raw-segment-0` is explicitly selected.
+Encrypted SELF/SKPRX input is intentionally rejected unless the caller explicitly supplies a known raw segment-0 dump.
 
-## PUP acquisition / extraction path investigated
+## Static acquisition status
 
-Two public routes were checked before hardware testing:
+Public investigation established viable PUP acquisition/extraction routes, but no independently sourced decrypted `SceLcd` image suitable for an auditable repository record was obtained. Team Molecule tooling and current Vita3K both demonstrate the required extraction/decryption machinery, but the repository does not embed firmware/decryption material and does not manufacture a static result from encrypted module bytes.
 
-1. **VitaDeploy firmware payloads.** Current VitaDeploy source publishes split PUP payload names for 3.60, 3.65 and 3.68 (`360.01/.02`, `365.01/.02`, `368.01/.02`) together with CRC32 values and concatenates each pair into `PSP2UPDAT.PUP`. This establishes a reproducible public acquisition route for those three versions.
-2. **Team Molecule `sceutils`.** `pup_fiction.py` can split/decrypt a PUP, build `os0.bin`/`vs0.bin`, extract the filesystem and convert SELF modules to ELF. The public repository deliberately omits `keys.py`, however, so a clean automated checkout does not contain the retail key material required to finish this route.
-3. **Vita3K.** Current Vita3K has a `--firmware <PUP>` installation path and contains current PUP/SELF decryption code/key material internally. Its normal firmware-install CLI extracts the Vita filesystem for the emulator, but it does not expose a documented command that emits an arbitrary decrypted `SceLcd` ELF for this audit. Treating the installed encrypted SKPRX as if it were segment bytes would be invalid.
+A row may be called `static verified` only when an audit record contains firmware/PUP provenance, decrypted image SHA-256, segment mapping, exact expected/actual bytes and surrounding context.
 
-Because this repository does not embed Sony firmware or private decryption keys, and no public checked-in decrypted `SceLcd` image was found, the table above remains explicitly **pending static binary evidence** rather than manufacturing a verification result.
-
-## What counts as completion
-
-For a firmware row to move to `static verified`, commit or attach an audit record containing:
-
-- firmware version and PUP source/digest,
-- decrypted `SceLcd` image SHA-256,
-- verifier output showing the segment-0 mapping,
-- exact 17 expected/actual bytes,
-- surrounding byte context.
-
-The firmware can then proceed to physical hardware regression. Static verification does not replace the runtime signature gate or hardware tests.
+Static verification never replaces the production runtime signature gate; physical runtime success never retroactively becomes a static decrypted-binary audit.
