@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 
 if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     if(DEFINED ENV{VITASDK})
@@ -9,54 +9,77 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     endif()
 endif()
 
-project(vitabright)
+project(vitabright C)
 include("${VITASDK}/share/vita.cmake" REQUIRED)
+include("${CMAKE_SOURCE_DIR}/cmake/VbeBuildId.cmake")
+vbe_resolve_build_id(VBE_BUILD_ID "${CMAKE_SOURCE_DIR}")
+message(STATUS "VitaBrightEX build id: ${VBE_BUILD_ID}")
 
-# -----------------------------------------------------------------------
-# Build options
-# -----------------------------------------------------------------------
 option(ENABLE_LOGGING "Enable debug logging to ur0:data/vitabright_log.txt" OFF)
 if(ENABLE_LOGGING)
     add_definitions(-DENABLE_LOGGING=1)
 endif()
 
-# -----------------------------------------------------------------------
-# Compiler flags
-# -----------------------------------------------------------------------
-set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -Wl,-q -Wall -Wextra -O3 -fno-pic -fno-PIC -std=gnu99")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -fno-rtti -fno-exceptions")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -Wall -Wextra -Werror -O3 -fno-pic -fno-PIC -std=gnu99")
 
-# -----------------------------------------------------------------------
-# Sources
-# -----------------------------------------------------------------------
 add_executable(vitabright
     main.c
     main.h
+    module_lifecycle_core.c
+    module_lifecycle_core.h
     log.c
     log.h
+    build_info.c
+    build_info.h
     config.c
     config.h
+    config_parser.c
+    config_parser.h
+    text_stream.c
+    text_stream.h
+    source_authority.c
+    source_authority.h
+    transaction_core.c
+    transaction_core.h
+    persistence_core.c
+    persistence_core.h
+    persistence_file.c
+    persistence_file.h
+    status.c
+    status.h
+    status_error_core.h
+    state_lock_core.c
+    state_lock_core.h
+    state_lock.c
+    state_lock.h
+    color_space.c
+    color_space.h
+    filter_policy.c
+    filter_policy.h
     screen_filter.c
     screen_filter.h
     taihen_extra.h
+    lut_parser_core.h
+    oled/lut_parser.c
     oled/parser.c
     oled/parser.h
     oled/hooks.c
     oled/hooks.h
     oled/lut.h
+    lcd/lut_parser.c
     lcd/hooks.c
     lcd/hooks.h
     lcd/lcd_lut.h
 )
 
-# -----------------------------------------------------------------------
-# Link libraries
-# -----------------------------------------------------------------------
+target_compile_definitions(vitabright PRIVATE VBE_BUILD_ID="${VBE_BUILD_ID}")
+
 target_link_libraries(vitabright
     SceDisplayForDriver_stub
     taihenForKernel_stub
     taihenModuleUtils_stub
     SceIofilemgrForDriver_stub
+    SceThreadmgrForDriver_stub
     gcc
     SceSysclibForDriver_stub
     SceSysmemForDriver_stub
@@ -64,48 +87,43 @@ target_link_libraries(vitabright
     SceSysrootForDriver_stub
 )
 
-set_target_properties(vitabright
-    PROPERTIES
-        LINK_FLAGS    "-nostdlib"
-        COMPILE_FLAGS "-D__VITA_KERNEL__"
+set_target_properties(vitabright PROPERTIES
+    LINK_FLAGS "-nostdlib"
+    COMPILE_FLAGS "-D__VITA_KERNEL__"
 )
 
-# -----------------------------------------------------------------------
-# Package
-# -----------------------------------------------------------------------
 vita_create_self(vitabright.skprx vitabright
     CONFIG ${CMAKE_SOURCE_DIR}/module.yml
     UNSAFE
 )
 
-vita_create_stubs(vitabright-stubs vitabright module.yml
-    KERNEL
-)
+vita_create_stubs(vitabright-stubs vitabright module.yml KERNEL)
 
 install(DIRECTORY ${CMAKE_BINARY_DIR}/vitabright-stubs/
     DESTINATION lib
     FILES_MATCHING PATTERN "*.a"
 )
 
-# -----------------------------------------------------------------------
-# Install helper: copy LUT files + config template to vita via FTP
-# -----------------------------------------------------------------------
 set(PSVITAIP "192.168.1.10" CACHE STRING "PS Vita IP address for FTP deploy")
+set(VBE_FTP_ROOT "ftp://${PSVITAIP}:1337")
+set(VBE_FTP_UR0 "${VBE_FTP_ROOT}//ur0:")
+set(VBE_FTP_UX0 "${VBE_FTP_ROOT}//ux0:")
+set(VBE_FTP_UR0_TAI "${VBE_FTP_UR0}/tai")
 
 add_custom_target(send
     COMMAND curl --ftp-method nocwd -T vitabright.skprx
-            ftp://${PSVITAIP}:1337/ur0:/tai/vitabright.skprx
+            ${VBE_FTP_UR0_TAI}/vitabright.skprx
     COMMAND curl --ftp-method nocwd -T ${CMAKE_SOURCE_DIR}/oled/luts/vitabright_lut.txt
-            ftp://${PSVITAIP}:1337/ur0:/tai/vitabright_lut.txt
+            ${VBE_FTP_UR0_TAI}/vitabright_lut.txt
     COMMAND curl --ftp-method nocwd -T ${CMAKE_SOURCE_DIR}/oled/luts/vitabright_lut_p4.txt
-            ftp://${PSVITAIP}:1337/ur0:/tai/vitabright_lut_p4.txt
+            ${VBE_FTP_UR0_TAI}/vitabright_lut_p4.txt
     COMMAND curl --ftp-method nocwd -T ${CMAKE_SOURCE_DIR}/oled/luts/vitabright_lut_p5.txt
-            ftp://${PSVITAIP}:1337/ur0:/tai/vitabright_lut_p5.txt
+            ${VBE_FTP_UR0_TAI}/vitabright_lut_p5.txt
     COMMAND curl --ftp-method nocwd -T ${CMAKE_SOURCE_DIR}/oled/luts/vitabright_lut_p6.txt
-            ftp://${PSVITAIP}:1337/ur0:/tai/vitabright_lut_p6.txt
+            ${VBE_FTP_UR0_TAI}/vitabright_lut_p6.txt
     COMMAND curl --ftp-method nocwd -T ${CMAKE_SOURCE_DIR}/lcd/luts/vitabright_lcd_lut.txt
-            ftp://${PSVITAIP}:1337/ur0:/tai/vitabright_lcd_lut.txt
+            ${VBE_FTP_UR0_TAI}/vitabright_lcd_lut.txt
     COMMAND curl --ftp-method nocwd -T ${CMAKE_SOURCE_DIR}/vitabrightex.cfg
-            ftp://${PSVITAIP}:1337/ur0:/tai/vitabrightex.cfg
+            ${VBE_FTP_UR0_TAI}/vitabrightex.cfg
     DEPENDS vitabright.skprx
 )

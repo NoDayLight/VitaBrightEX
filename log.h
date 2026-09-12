@@ -7,7 +7,7 @@
 #define LOG_PATH "ur0:data/"
 #define LOG_FILE LOG_PATH "vitabright_log.txt"
 
-void log_reset();
+void log_reset(void);
 void log_write(const char *buffer, size_t length);
 
 #ifdef ENABLE_LOGGING
@@ -18,6 +18,7 @@ void log_write(const char *buffer, size_t length);
     log_write(buffer, strlen(buffer));                                                             \
   } while (0)
 #else
-#define LOG(...)
+/* Keep release and diagnostic control flow identical. */
+#define LOG(...) do { } while (0)
 #endif
 #endif

@@ -2,28 +2,30 @@
 # 17 decimal values, one per line (range 0-255).
 # Lines starting with '#' are comments.
 #
-# Level 0  = maximum brightness (brightest)
-# Level 16 = minimum on-slider  (dimmest)
+# The SceLcd logical brightness coordinate increases from minimum to maximum,
+# so the injected output table must be monotonic nondecreasing in this order.
+# Index 0  = minimum output
+# Index 16 = maximum output
 #
-# This default table follows an approximate gamma-2.2 perceptual curve,
-# extended below and above the stock slider range.
-# Copy this file to ur0:/tai/vitabright_lcd_lut.txt to activate it.
+# This default table follows an approximate gamma-2.2 perceptual curve and
+# is the same curve compiled into the hardened v1.4 fallback backend.
+# Copy this file to ur0:/tai/vitabright_lcd_lut.txt to override the fallback.
 #
 # --- Values ---
-255
-220
-190
-161
-137
-116
-95
-76
-57
-41
-29
-20
-13
-8
-5
-3
 1
+3
+5
+8
+13
+20
+29
+41
+57
+76
+95
+116
+137
+161
+190
+220
+255

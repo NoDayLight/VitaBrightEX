@@ -1,390 +1,198 @@
-# VitaBrightEX
+# VitaBrightEX pseudo-v1.4
 
-> **Based on [vitabright](https://github.com/devnoname120/vitabright) by [@devnoname120](https://github.com/devnoname120)**
+VitaBrightEX is a hardening/rearchitecture fork of [devnoname120/vitabright](https://github.com/devnoname120/vitabright). This branch exists because VitaBrightEX 1.3 reproducibly hung a PCH-2000 / firmware 3.65 Ensō system at `PS logo → display on → no LiveArea`, while several v1.3 display paths relied on speculative or unverified assumptions.
 
-VitaBrightEX is an enhanced fork of vitabright that:
+> **Development status:** PR #1 remains open, draft and unmerged. The mandatory isolated PCH-2000 / 3.65 Ensō cold boot passed without reproducing the v1.3 hang. Physical 3.65 `SceLcd` runtime validation passed the exact stock-signature gate at segment-0 `0x1B48`. Static decrypted-image verification remains pending. The transaction/ownership/persistence/stop rewrite is software-verified only until a fresh final-bundle cold boot and later controlled fault-path testing.
 
-- Fixes the **OLED red-screen colour shift** at low brightness on affected PCH-1000/1010/1101 units
-- Adds full **PS Vita 2000 (LCD) colour enhancement** — full RGB range + wide gamut, live with no reboot
-- Auto-selects the correct **per-panel LUT** for every known OLED variant
-- Adds a **Rosalina-equivalent screen filter** — colour temperature, gamma, contrast, brightness, hardware invert
-- Works on **every firmware version 3.60–3.74+** via NID-based function resolution (no hardcoded offsets)
-- Ships a **companion LUT editor app** (VitaBrightEX LUT Editor v2.0) that integrates all features
+## Design contract
 
----
+- Optional enhancement failure at boot must never prevent LiveArea from loading.
+- Successful synchronization creation is the runtime-initialization boundary. If mutex creation fails first, the loaded module remains inert/resource-free and has a clean unload path without pretending ABSENT synchronization is generally safe.
+- Exactly one brightness backend is selected: OLED on PCH-1000, LCD on PCH-2000.
+- Runtime mutation starts only from a known ownership state; uncertain resource ownership stops further backend mutation.
+- Backend setup/live replacement uses explicit CLEAN / ACTIVE / DEGRADED ownership and clean-vs-dirty transaction outcomes.
+- taiHEN teardown is dependency-safe and stops at the first failed release.
+- User writes follow checked copy -> validate -> serialized transition -> commit/rollback -> checked unlock.
+- LUT source identity is `NONE`, `FILE + path`, or `COMPILED`; source identity commits only with the hardware transaction.
+- LUT persistence is kernel-authoritative and transactional relative to the committed FILE source.
+- Compiled LCD fallback has no guessed file target; normal Save returns `VBE_RESULT_NO_FILE_SOURCE`.
+- Fallback occurs only when the preferred source is explicitly absent at OPEN; other open errors and all post-open errors are terminal.
+- Independent error domains are authoritative internal state; legacy `last_error/detail` is derived output only.
+- Runtime module unload succeeds only after session display state, backend resources and synchronization ownership are confirmed restored/released. An inert module that never crossed the synchronization boundary owns none of those resources and may unload directly.
+- No polling thread, timer, periodic filesystem read, framebuffer interception or per-frame software processing is introduced.
+- Unknown firmware/layouts do not receive guessed raw offsets.
+- A control is exposed only where the hardware interface is sufficiently verified.
+- Exact shipped bytes and transaction semantics must pass the same production-shared C cores exercised by CI.
 
-## Downloads
+See:
 
-**[Latest release →](https://github.com/Zushikina-kun/VitaBrightEX/releases/latest)**
+- [`docs/V1.4-ARCHITECTURE.md`](docs/V1.4-ARCHITECTURE.md)
+- [`docs/SOURCE-AUTHORITY.md`](docs/SOURCE-AUTHORITY.md)
+- [`docs/DIAGNOSTICS-ERROR-MODEL.md`](docs/DIAGNOSTICS-ERROR-MODEL.md)
+- [`docs/HARDWARE-RESULTS-2026-09-12.md`](docs/HARDWARE-RESULTS-2026-09-12.md)
+- [`docs/HARDWARE-TEST-MATRIX.md`](docs/HARDWARE-TEST-MATRIX.md)
+- [`docs/FIRMWARE-LAYOUT-VERIFICATION.md`](docs/FIRMWARE-LAYOUT-VERIFICATION.md)
 
-| File | What it is |
-|---|---|
-| `VitaBrightEX-v1.2.zip` | Kernel plugin + LUT files + config template |
-| `VitaBrightEX-LUT-Editor-v2.0.vpk` | Companion app (install via VitaShell) |
+## Current capabilities
 
----
-
-## Installation
-
-### Plugin
-1. Download `VitaBrightEX-v1.2.zip` and extract it.
-2. Copy all files inside to `ur0:/tai/` on your Vita.
-3. In `ur0:/tai/config.txt`, add under `*KERNEL`:
-   ```
-   ur0:/tai/vitabright.skprx
-   ```
-4. Reboot.
-
-> If `ux0:/tai/` exists on your memory card, it overrides `ur0:/tai/`. Either put the files there instead, or delete `ux0:/tai/` to use the `ur0` path.
-
-### LUT Editor companion app
-1. Transfer `VitaBrightEX-LUT-Editor-v2.0.vpk` to your Vita.
-2. Install via VitaShell.
-3. Launch from LiveArea. The plugin must be running for the editor to work.
-
-### Release ZIP contents
-
-| File | Purpose |
-|---|---|
-| `vitabright.skprx` | Kernel plugin — the main file to install |
-| `vitabright_lut.txt` | OLED default/fallback gamma LUT |
-| `vitabright_lut_p4.txt` | OLED panel 4 (AMS495QA04) — balanced LUT |
-| `vitabright_lut_p5.txt` | OLED panel 5 (AMS495QA01) — balanced LUT |
-| `vitabright_lut_p6.txt` | OLED replacement/aftermarket panels — balanced LUT |
-| `vitabright_lcd_lut.txt` | Vita 2000 brightness curve (optional, edit to customise) |
-| `vitabrightex.cfg` | Config template (optional — safe defaults used if absent) |
-
----
-
-## What's new vs. original vitabright
-
-| Feature | Original vitabright | VitaBrightEX |
+| Capability | PCH-1000 OLED | PCH-2000 LCD |
 |---|---|---|
-| OLED brightness extension | ✓ | ✓ |
-| LCD brightness extension | ✓ | ✓ + user-editable brightness curve file |
-| Firmware support | 3.60–3.70 | **3.60–3.74+** (NID-based, no hardcoded offsets) |
-| OLED red-screen fix | Partial | ✓ Auto white-point normalisation |
-| Per-panel LUT auto-selection | ✗ | ✓ Reads DDB, loads matching file automatically |
-| Balanced LUT per panel | Single file | ✓ p4 / p5 / p6 / default — separate tuned files |
-| Colour bias tuning (R/G/B) | ✗ | ✓ Config file |
-| Night / warm mode | ✗ | ✓ Amber tint below configurable brightness threshold |
-| Screen filter (Rosalina-equivalent) | ✗ | ✓ CCT + gamma + contrast + brightness + invert |
-| IPS panel colour curve fix | ✗ | ✓ For Vita 2000 LCD |
-| LCD colour space enhancement | ✗ | ✓ Full RGB range + wide gamut, live (no reboot) |
-| LCD brightness curve file | ✗ | ✓ `vitabright_lcd_lut.txt` |
-| Config file | ✗ | ✓ `vitabrightex.cfg` |
-| LUT editor companion app | Original crashes | ✓ Fixed + extended with filter/panel/LCD support |
+| Extended brightness | transactional | transactional |
+| Inactivity-dim workaround | implemented | implemented |
+| Power-mode brightness hook | implemented | implemented |
+| Panel/LUT selection | DDB-based | n/a |
+| Live LUT editing | validation + clean rollback/degraded stop | monotonic validation + clean rollback/degraded stop |
+| Authoritative LUT save | FILE source only | FILE source only; COMPILED explicitly has no save target |
+| Hardware colour invert | when SceDisplay export resolves | when SceDisplay export resolves |
+| Panel color-space Get/Set | read-back verified | read-back verified |
+| Persistent registry RGB-range mutation | not used | not used |
+| Persistent active-scanout CSC | unsupported | unsupported |
+| Gamma/nonlinear panel processing | unsupported | unsupported |
 
----
+The old private `0x0FCBF457` IFTU path remains removed. VitaSDK's documented `ksceIftuCsc()` does not establish the persistent display-head setter assumed by v1.3.
 
-## Fixing the OLED red screen at low brightness
+## Source authority and provenance
 
-The red-screen issue affects PCH-1000/1010/1101 units where the red sub-pixel is
-over-represented in the firmware's gamma table at low brightness levels.
+The production-shared source core distinguishes OPEN success, explicit no-entry, and other I/O errors. Once a file opens, read/parse/close failure is terminal.
 
-VitaBrightEX fixes this in layers:
-
-### 1. Per-panel LUT auto-selection
-
-At startup the plugin reads `supplier_elective_data` from the OLED's Device Descriptor
-Block (DDB) and automatically loads the matching balanced LUT file:
-
-| `supplier_elective_data & 0xFF` | Panel | LUT file |
-|---|---|---|
-| `5` (AMS495QA01) | Most PCH-1000 units | `vitabright_lut_p5.txt` |
-| `4` (AMS495QA04) | Some PCH-1000 units | `vitabright_lut_p4.txt` |
-| `6` | Replacement / aftermarket OLED | `vitabright_lut_p6.txt` |
-| other / unknown | Older or unrecognised panels | `vitabright_lut.txt` |
-
-If a panel-specific file is missing, it falls back to the next option.
-
-### 2. White-point normalisation
-
-After loading the LUT, the plugin normalises the R/B channel ratios against the
-G channel anchor across all brightness rows. This prevents the red sub-pixel from
-being overdriven at low brightness without requiring a custom-tuned LUT.
-
-### 3. Manual colour bias (if a tint remains)
-
-Add to `vitabrightex.cfg`:
-```ini
-color_r_bias = -8
-color_b_bias = 4
-```
-Typical range: ±4 to ±20. Start with small values and adjust.
-
----
-
-## Screen filter — Rosalina-equivalent colour pipeline
-
-Works on **both Vita 1000 (OLED) and Vita 2000 (LCD)**.
-
-Inspired by [Luma3DS Rosalina's screen filter system](https://github.com/LumaTeam/Luma3DS/blob/master/sysmodules/rosalina/source/menus/screen_filters.c).
-
-**How it works on each model:**
-- **OLED:** the filter is baked into the 17-row panel gamma LUT before injection
-- **LCD:** the filter is written as a 3×3 IFTU CSC (Colour Space Conversion) matrix applied in hardware to every pixel before it reaches the panel
-
-**Important:** The filter is bypassed entirely when all parameters are at their defaults
-(`filter_cct=6500`, `filter_gamma=1.0`, `filter_contrast=1.0`, `filter_brightness=0.0`,
-`filter_invert=0`, `filter_panel_enhance=0`). Setting any parameter away from its
-default activates the filter path.
-
-### Parameters
-
-| Parameter | Default | Range | Description |
-|---|---|---|---|
-| `filter_cct` | `6500` | 1000–25100 | Colour temperature in Kelvin |
-| `filter_gamma` | `1.0` | 0.1–8.0 | Gamma exponent |
-| `filter_contrast` | `1.0` | 0.0–4.0 | Contrast multiplier |
-| `filter_brightness` | `0.0` | −1.0–1.0 | Black-level offset |
-| `filter_invert` | `0` | 0/1 | Hardware colour invert |
-| `filter_panel_enhance` | `0` | 0/1/2 | Panel linearisation (0=off, 1=IPS, 2=sRGB) |
-
-### Colour temperature presets
-
-| `filter_cct` value | Name |
-|---|---|
-| 10000 | Aquarium (very cool/blue) |
-| 7500 | Overcast Sky |
-| 6500 | Default neutral |
-| 5500 | Daylight |
-| 4200 | Fluorescent |
-| 3400 | Halogen |
-| 2700 | Incandescent (warm) |
-| 2300 | Warm Incandescent |
-| 1900 | Candle |
-| 1200 | Ember (very warm/amber) |
-
-### IPS panel enhancement (`filter_panel_enhance = 1`)
-
-Applies a measured sRGB linearisation curve to correct the non-linear gamma
-roll-off of IPS LCD panels (Vita 2000). This is the direct equivalent of
-Rosalina's **"[IPS recommended] Enhance screen colors"** option.
-
----
-
-## Vita 2000 (LCD) colour enhancement
-
-The Vita 2000 LCD defaults to limited-range RGB (16–235) and a narrower colour
-gamut than the Vita 1000 OLED. VitaBrightEX activates the SoC's wide-gamut mode:
-
-- **`lcd_color_space_mode = 1`** — writes `color_space_mode=1` to the `/CONFIG/DISPLAY`
-  registry (wider gamut, closer to OLED appearance)
-- **`lcd_rgb_range_mode = 1`** — writes `rgb_range_mode=1` to `/CONFIG/DISPLAY`
-  (full RGB 0–255 instead of limited 16–235)
-- **`lcd_ips_enhance = 1`** — calls `sceLcdSetDisplayColorSpaceModeForDriver` live
-  (takes effect without a reboot)
-- **`lcd_saturation_boost = 1`** — alias for `lcd_ips_enhance`; either one enables
-  the live driver colour-space switch
-
-All four default to `1` (enabled). Set to `0` in `vitabrightex.cfg` to disable.
-
-### Custom LCD brightness curve
-
-Edit `vitabright_lcd_lut.txt` — 17 decimal values (0–255), one per line, from
-brightest (line 1) to dimmest (line 17). Copy to `ur0:/tai/` to activate.
-
----
-
-## Night / warm mode (OLED)
-
-Tints the image amber at low brightness to reduce blue-light output for night use.
-
-```ini
-night_mode_enabled = 1
-night_mode_threshold = 6   # row 0–16; higher = activates at brighter levels
+```text
+OPEN success -> authoritative source
+OPEN VBE_SCE_IO_ERROR_NOT_FOUND -> fallback eligible
+OPEN other error -> terminal
+READ/PARSE/CLOSE after OPEN -> terminal
 ```
 
----
+`VBE_SCE_IO_ERROR_NOT_FOUND` is the project-owned compatibility name for `0x80010002`. Current public VitaSDK generic headers do not expose a generic `SCE_ERROR_ERRNO_ENOENT` symbol used here; the value is corroborated by Vita ecosystem behavior including h-encore/Vita3K. The project does not claim SDK ownership of that symbol.
 
-## LUT Editor companion app — controls
+LCD has a compiled safe table only when both documented LUT files are explicitly absent. That candidate commits as `COMPILED`, not as a fake `ur0` path. OLED does not invent a compiled LUT.
 
-The app has **2 tabs** — switch with **L2 / R2**.
+## Parser / CI contract
 
-**Tab 1: Screen filters menu** (like Rosalina)
+LCD/OLED LUT and config parsing are portable streaming C cores shared by production and host CI. One newline decoder accepts LF/CRLF, rejects lone/interior CR, and never normalizes malformed bytes into valid tokens.
 
-Scrollable list — Up/Down to move the `>` cursor, X to apply.
+LCD remains exactly 17 decimal `0..255` monotonic-nondecreasing values; OLED remains exactly 17 × 21 two-digit hex bytes. Config numerics require complete tokens, clamp safely after parsing, and duplicate known keys use last-valid textual occurrence. `display_color_space_mode` and `lcd_color_space_mode` are compatibility aliases for the same field and follow that same ordering rule.
 
-- The status bar at the bottom shows your **detected hardware** (Vita 1000 OLED with panel model, or Vita 2000 LCD) and the **recommended setting for your specific panel**
-- Items marked `[rec]` are recommended for your detected panel — start there
-- Active setting is marked with `<` on the right
-- `[IPS recommended]` options are for Vita 2000 LCD
-- `[OLED]` options are for Vita 1000 OLED panels
-- `[Night]` reduces blue light and eye strain in dark environments
+## Ownership and rollback
 
-**Tab 2: Advanced configuration** (like Rosalina's advanced screen)
+Backend ownership has three internal states:
 
-Left/Right adjust the selected value. Hold R1 for faster. Up/Down change row.
-
-**Global controls:**
-
-| Button | Action |
-|---|---|
-| Up / Down | Scroll list / change row |
-| Left / Right | Adjust custom CCT (Tab 1) or slider value (Tab 2) |
-| R1 (held) | 10× faster adjustment |
-| L2 / R2 | Switch tab |
-| X | Apply + save to disk — persists across reboots |
-| Triangle | **Factory reset** — restores clean LUT from your panel file, clears all filter settings |
-| Select | Cycle background preview image |
-| Start | Save and exit |
-
-**What the app detects automatically:**
-
-| Hardware | Detection | Recommendation |
-|---|---|---|
-| Vita 1000, panel AMS495QA01 | DDB `0x05` | OLED Boost |
-| Vita 1000, panel AMS495QA04 | DDB `0x04` | OLED Boost |
-| Vita 1000, replacement OLED | DDB `0x06` | sRGB Standard |
-| Vita 1000, unknown panel | Other DDB | OLED Boost |
-| Vita 2000 LCD | Boot type flag | IPS Fix |
-
----
-
-## Full config reference (`vitabrightex.cfg`)
-
-Copy to `ur0:/tai/vitabrightex.cfg`. All keys are optional — safe defaults apply
-when the file is absent.
-
-```ini
-# ============================================================
-# OLED (PS Vita 1000)
-# ============================================================
-
-# 1 = load panel_lut_path instead of auto-detecting from DDB
-oled_panel_lut_override = 0
-
-# Custom LUT path (used only when oled_panel_lut_override = 1)
-# panel_lut_path = ur0:/tai/my_lut.txt
-
-# Per-channel colour bias (−127 to 127)
-# Positive = boost, negative = reduce
-color_r_bias = 0
-color_g_bias = 0
-color_b_bias = 0
-
-# Night/warm mode — amber tint below brightness threshold
-night_mode_enabled = 0
-night_mode_threshold = 6   # 0–16; default 6 = bottom ~3 slider positions
-
-# Prevent auto-dim from paradoxically raising brightness at very low levels
-oled_dim_workaround = 1
-
-# ============================================================
-# LCD (PS Vita 2000)
-# ============================================================
-
-# Wide colour gamut — registry: /CONFIG/DISPLAY/color_space_mode
-lcd_color_space_mode = 1
-
-# Full RGB range (0–255) — registry: /CONFIG/DISPLAY/rgb_range_mode
-lcd_rgb_range_mode = 1
-
-# Live colour-space switch via SceLcd driver (no reboot needed)
-lcd_ips_enhance = 1
-
-# Alias for lcd_ips_enhance — setting either one to 1 enables the live switch
-lcd_saturation_boost = 1
-
-# ============================================================
-# Screen filter (both models — bypassed when all at defaults)
-# ============================================================
-
-# Colour temperature in Kelvin (1000–25100)
-filter_cct = 6500
-
-# Gamma exponent (0.1–8.0) — >1.0 = darker midtones, <1.0 = brighter
-filter_gamma = 1.0
-
-# Contrast multiplier (0.0–4.0)
-filter_contrast = 1.0
-
-# Black-level offset (−1.0–1.0) — positive = raised blacks (washed out)
-filter_brightness = 0.0
-
-# Hardware colour invert (0 = normal, 1 = inverted)
-filter_invert = 0
-
-# Panel colour curve correction
-# 0 = off  |  1 = IPS linearisation  |  2 = sRGB linearisation
-filter_panel_enhance = 0
+```text
+CLEAN     no backend taiHEN resource owned
+ACTIVE    complete committed backend installed
+DEGRADED retained/uncertain ownership; no new transaction may start
 ```
 
----
+Transaction attempts are `TXN_OK`, `TXN_FAILED_CLEAN`, or `TXN_FAILED_DIRTY`. `ret < 0` alone never authorizes rollback.
 
-## OLED gamma table format
+Teardown order is:
 
-17 rows × 21 space-separated uppercase hex bytes. Lines starting with `#` are comments.
-
-```
-Row 0  = maximum brightness (or extra-bright above stock)
-Row 1  = second extra-bright level
-Rows 2–15 = stock brightness slider range (bright → dim)
-Row 16 = inactivity-dim sentinel (not on slider)
+```text
+power hook -> brightness hook -> table injection
 ```
 
-The 21 bytes per row map to the OLED panel's `SET_NORMAL_GAMMA_CONTROL (0xF9)` command.
-See the [original vitabright wiki](https://github.com/devnoname120/vitabright/wiki/What-is-the-format-of-the-OLED-gamma-table%3F)
-for the detailed byte layout.
+and stops at the first failed release. Handles are forgotten only after confirmed release.
 
-Use the **VitaBrightEX LUT Editor** to edit and preview LUT files on-device, or
-transfer files over FTP and reload them with Circle in the editor.
+Clean candidate failure may rollback the previous committed LUT/source. Dirty candidate cleanup immediately leaves DEGRADED ownership and forbids rollback/reinitialization. Clean rollback failure reports `VBE_ERR_LUT_ROLLBACK`; dirty cleanup/recovery failure reports `VBE_ERR_RESOURCE_RELEASE`. Recovery failure dominates the scalar public result.
 
----
+## Persistence
 
-## Firmware compatibility
+Normal Save is legal only for an ACTIVE backend with a FILE source. The persistence transaction tracks fd/temp ownership and performs:
 
-VitaBrightEX uses `module_get_export_func()` from taihenModuleUtils to resolve all
-`SceOled`, `SceLcd`, `ScePower`, `SceDisplay`, and `SceRegMgr` functions by NID.
-No hardcoded byte offsets — the plugin automatically adapts to any firmware version
-that exports the same NIDs, confirmed stable from 3.60 to 3.74.
-
----
-
-## Building from source
-
-### Requirements
-- [VitaSDK](https://vitasdk.org/) with ARM cross-compiler
-- [taiHEN](https://github.com/yifanlu/taiHEN/releases) headers + stubs
-
-```sh
-export VITASDK=/usr/local/vitasdk
-export PATH=$VITASDK/bin:$PATH
-
-# Build plugin
-cd VitaBrightEX
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -G "Unix Makefiles"
-make
-
-# Build LUT editor (requires libvita2d + portlibs also built)
-cd ../../vitabright-lut-editor
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -G "Unix Makefiles"
-make
+```text
+prepare same-directory temp
+-> open
+-> write committed LUT
+-> sync
+-> close
+-> rename to authoritative path
 ```
 
-Enable debug logging (writes to `ur0:data/vitabright_log.txt`):
-```sh
-cmake .. -DENABLE_LOGGING=ON
+Rename is the commit point. Pre-commit failure cannot rename. fd/temp ownership is relinquished only after confirmed close/remove/rename. The committed source remains the authoritative final path; the temp path never becomes source identity.
+
+A committed LCD COMPILED fallback returns positive `VBE_RESULT_NO_FILE_SOURCE` rather than silently creating `ur0:tai/vitabright_lcd_lut.txt`.
+
+## Diagnostics and synchronization
+
+`VitaBrightStatus` remains ABI v2 with unchanged layout. `VitaBrightDiagnostics` ABI v1 remains additive and exposes synchronization, brightness, config, color-space, filter and input domains.
+
+Each subsystem owns its own domain. Runtime operations use one shared operation+unlock result rule: unlock failure dominates the scalar return while the operation's own domain truth remains stored independently.
+
+The compatibility summary precedence remains:
+
+```text
+SYNC > BRIGHTNESS > CONFIG > COLOR_SPACE > FILTER > INPUT
 ```
 
-Deploy plugin + all files to Vita over FTP:
-```sh
-make send PSVITAIP=192.168.1.xxx
+## Stop safety
+
+The module has one orchestration boundary in addition to the existing resource-specific ownership states: `INERT` means startup never crossed successful synchronization creation; `RUNTIME` means it did. This is not a second backend or mutex ownership model.
+
+Startup performs only firmware/model detection, status/error initialization and compiled-safe config defaults before `state_lock_init()`. If mutex creation fails, `module_start()` deliberately returns `SCE_KERNEL_START_SUCCESS` fail-open while the module remains `INERT` and the lock remains `ABSENT`. No config file is loaded, no hook/injection is installed, no invert/color-space mutation occurs and no persistence temporary resource exists. `INERT + ABSENT` therefore has a direct clean `SCE_KERNEL_STOP_SUCCESS` path.
+
+`ABSENT` is not globally interpreted as safe. The production module-lifecycle core permits only:
+
+```text
+INERT + ABSENT     -> clean inert stop
+RUNTIME + RUNNING  -> full serialized stop transaction
+all other pairs    -> unload unsafe
 ```
 
----
+The runtime stop enters STOPPING, restores invert, restores/read-backs original panel color-space, tears down persistence/backend resources, then unlocks/deletes the mutex. A tiny stop accumulator answers only whether unload is safe; detailed failures remain in their subsystem domains.
 
-## Credits
+If any runtime stop-critical restore/release cannot be confirmed, `module_stop()` returns `SCE_KERNEL_STOP_FAIL` and the plugin remains resident. DEGRADED synchronization never takes the inert shortcut. Module lifecycle returns to `INERT` only after confirmed mutex deletion; this also makes an already-clean repeated stop benign without weakening dirty-state safety.
 
-| Contributor | Contribution |
-|---|---|
-| [devnoname120](https://github.com/devnoname120) | Original vitabright plugin and LUT editor, LUT format RE, DDB detection |
-| [SKGleba](https://github.com/SKGleba) | Multi-panel OLED DDB fix |
-| [@buzeak](https://github.com/devnoname120/vitabright/issues/36) | Improved gamma tables |
-| [LumaTeam / Luma3DS](https://github.com/LumaTeam/Luma3DS) | Rosalina screen filter design (CCT algorithm, IPS fix concept) — GPLv3 |
-| [xyz, yifanlu, xerpi](https://github.com/yifanlu/taiHEN) | taiHEN, kernel RE, Vita toolchain, libvita2d |
-| HenriBeyle, Snivy102 | Vita 2000 colour-space registry discovery |
-| vitabright community | LUT research and testing (issues [#36](https://github.com/devnoname120/vitabright/issues/36)–[#52](https://github.com/devnoname120/vitabright/issues/52)) |
+## Unsupported filter semantics
+
+Advanced CCT/gamma/contrast/brightness/panel-enhance requests are explicit unsupported capability outcomes. `VBE_RESULT_UNSUPPORTED` is positive/nonzero, CSC/transfer remain `UNSUPPORTED`, FILTER remains clear, no speculative display write occurs, and the editor reports “unsupported capability” rather than generic failure.
+
+Verified hardware invert remains separately capability-gated.
+
+## Firmware/layout evidence
+
+LCD raw candidates remain 3.60 -> `0x1B00` and 3.65/3.67/3.68/3.69/3.70 -> `0x1B48`. 3.71–3.74 remain unsupported by raw-table injection. Before injection the loaded `SceLcd` must contain the exact Sony stock 17-byte signature at the candidate address.
+
+On the tested physical PCH-2000 / `0x03650000`, the runtime exact-signature gate passed at `0x1B48`. This is physical runtime evidence, not static decrypted-image verification.
+
+OLED requires successful DDB and loaded-module layout validation; DDB failure never becomes an assumed default panel.
+
+## Editor and build provenance
+
+Plugin and editor independently embed an 8-character build ID generated from the build checkout. The editor displays `plugin=<id> editor=<id> MATCH/MISMATCH`; replacing `ur0:tai` files does not update the separately installed editor VPK.
+
+After a LUT mutation the editor refreshes kernel status/diagnostics before choosing wording. It reports “previous committed table restored” only when the backend is operational and recovery diagnostics do not indicate rollback/resource-release failure. Degraded recovery and compiled-source persistence have separate truthful messages.
+
+## Deployment
+
+VitaShell FTP deployment uses absolute mount paths with `curl --ftp-method nocwd`: `...:1337//ur0:/...` and `...:1337//ux0:/...`.
+
+## Build and validation
+
+GitHub Actions compiles/runs production-shared regressions for LUT parser, config parser, source authority, transaction/ownership/source provenance/stop, persistence ownership/sequencing, synchronization lifecycle/result composition, module startup/stop lifecycle symmetry, diagnostics/error lifecycle and unsupported-filter policy. Structural checks remain tripwires only.
+
+Release and diagnostic SKPRX, generated syscall stubs, matching editor and PCH-2000 bundle build under current VitaSDK with warnings treated as errors.
+
+The exact final pre-hardware checkpoint SHA/run/hashes are recorded only after the last documentation/PR write and a fresh branch-exact workflow, avoiding self-invalidating provenance.
+
+## Hardware evidence — unchanged
+
+```text
+A1 isolated cold boot: PASS
+v1.3 hang: not reproduced
+old malformed-LUT fail-open: PASS
+3.65 SceLcd segment 0 / 0x1B48: physical runtime exact-signature PASS
+static decrypted-image verification: PENDING
+stock-vs-extended A/B: PASS
+brightness slider sweep: PASS
+mid inactivity dim: PASS
+very-low behavior: consistent with design
+true maximum inactivity: PENDING
+suspend/resume: PENDING
+normal plugin-stack compatibility: PENDING
+A2 overall: PARTIAL
+```
+
+The next physical gate is a fresh full-power cold boot using one matching final release bundle with the normal commented production LCD LUT and matching editor, with no Circle/reload before inspection.
+
+## Power/performance
+
+The architecture is event-driven. Work occurs at boot, explicit config/editor changes or OS brightness events; no new continuous worker exists. No measured `<0.01 W` claim is made without suitable instrumentation.

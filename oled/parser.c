@@ -1,167 +1,131 @@
 #include "lut.h"
 #include "parser.h"
 #include "../log.h"
+#include "../lut_parser_core.h"
+#include "../source_authority.h"
+#include "../status.h"
 #include <psp2kern/io/fcntl.h>
 
-/* ------------------------------------------------------------------ */
-/* Low-level hex parsing                                               */
-/* ------------------------------------------------------------------ */
+#define OLED_READ_CHUNK 256
 
-static int is_hex(unsigned char c) {
-    return ('0' <= c && c <= '9') || ('A' <= c && c <= 'F') ||
-           ('a' <= c && c <= 'f');
-}
-
-static int parse_hex_digit(unsigned char c) {
-    if (c >= 'a') return c - 'a' + 10;
-    if (c >= 'A') return c - 'A' + 10;
-    return c - '0';
-}
-
-static int hex_to_int(unsigned char c[2]) {
-    if (c[0] == '#') return -2;   /* comment sentinel */
-    if (!is_hex(c[0]) || !is_hex(c[1])) return -1;
-    return 16 * parse_hex_digit(c[0]) + parse_hex_digit(c[1]);
-}
-
-static int parse_hex(SceUID fd) {
-    unsigned char hex_buf[2] = {0};
-    /* Skip Windows CR */
-    unsigned char ch;
-    int r;
-    do {
-        r = ksceIoRead(fd, &ch, 1);
-        if (r != 1) return -3;
-    } while (ch == '\r');
-    hex_buf[0] = ch;
-
-    do {
-        r = ksceIoRead(fd, &ch, 1);
-        if (r != 1) return -3;
-    } while (ch == '\r');
-    hex_buf[1] = ch;
-
-    return hex_to_int(hex_buf);
-}
-
-/* Skip to end-of-line (for comments) */
-static void skip_line(SceUID fd) {
-    unsigned char c = 0;
-    while (c != '\n') {
-        if (ksceIoRead(fd, &c, 1) != 1) return;
+static void path_copy(char dst[LUT_SOURCE_PATH_MAX], const char *src) {
+    int i = 0;
+    while (i < LUT_SOURCE_PATH_MAX - 1 && src[i]) {
+        dst[i] = src[i];
+        ++i;
     }
+    dst[i] = '\0';
 }
 
-/* Parse one 21-byte LUT row.  Returns 0 on success, -2 on comment, <0 on error. */
-static int parse_line(SceUID fd, unsigned char lut_line[LUT_LINE_SIZE]) {
-    for (int i = 0; i < LUT_LINE_SIZE; i++) {
-        int val = parse_hex(fd);
+static int source_error_code(VbeSourceOutcome source) {
+    return source.stage == VBE_SOURCE_STAGE_PARSE
+        ? VBE_ERR_INVALID_USER_INPUT : VBE_ERR_SOURCE_IO;
+}
 
-        if (val == -2) {
-            /* Comment line — skip rest and signal caller */
-            skip_line(fd);
-            return -2;
+static VbeSourceOutcome parse_candidate(const char *path,
+                                        unsigned char out[LUT_SIZE]) {
+    SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 0);
+    if (fd < 0) return vbe_source_evaluate(fd, 0, 0, 0);
+
+    LOG("[LUT] Parsing authoritative source: %s\n", path);
+    VbeOledLutParser parser;
+    vbe_oled_lut_parser_init(&parser, out);
+    unsigned char buffer[OLED_READ_CHUNK];
+    int read_result = 0;
+    int parse_result = 0;
+
+    while (read_result == 0 && parse_result == 0) {
+        int r = ksceIoRead(fd, buffer, sizeof(buffer));
+        if (r < 0) {
+            read_result = r;
+            break;
         }
-        if (val < 0) return val;
-
-        lut_line[i] = (unsigned char)val;
-
-        unsigned char sep = 0;
-        /* Read CR-stripped separator */
-        int r;
-        do {
-            r = ksceIoRead(fd, &sep, 1);
-            if (r != 1) return (i == LUT_LINE_SIZE - 1) ? 0 : -1;
-        } while (sep == '\r');
-
-        if (i != LUT_LINE_SIZE - 1) {
-            /* Expect space between values */
-            if (sep != ' ') return -1;
-        } else {
-            /* Last value: expect newline (or EOF) */
-            if (sep != '\n') return -1;
+        if (r == 0) {
+            parse_result = vbe_oled_lut_parser_finish(&parser);
+            break;
+        }
+        for (int i = 0; i < r; ++i) {
+            if (vbe_oled_lut_parser_feed(&parser, buffer[i]) < 0) {
+                parse_result = -1;
+                break;
+            }
         }
     }
-    return 0;
+
+    int close_result = ksceIoClose(fd);
+    VbeSourceOutcome source = vbe_source_evaluate(fd, read_result,
+                                                   parse_result, close_result);
+    if (source.decision == VBE_SOURCE_USE)
+        LOG("[LUT] Accepted %s (%d rows)\n", path, LUT_ROWS);
+    else
+        LOG("[LUT] Rejected %s at source stage %d: 0x%08X\n",
+            path, source.stage, source.error);
+    return source;
 }
 
-/* ------------------------------------------------------------------ */
-/* Public API                                                          */
-/* ------------------------------------------------------------------ */
-
-/*
- * Try to open and fully parse a LUT file.
- * Returns 0 on success, negative on failure.
- */
-int parse_lut_from_file(const char *path, unsigned char lookupNew[LUT_SIZE]) {
-    SceUID fd = ksceIoOpen(path, SCE_O_RDONLY, 6);
-    if (fd < 0) return fd;
-
-    LOG("[LUT] Parsing: %s\n", path);
-
-    int rows_parsed = 0;
-    while (rows_parsed < LUT_ROWS) {
-        int ret = parse_line(fd, &lookupNew[rows_parsed * LUT_LINE_SIZE]);
-        if (ret == -2) continue; /* comment, try next */
-        if (ret < 0) {
-            ksceIoClose(fd);
-            LOG("[LUT] Parse error at row %d: %d\n", rows_parsed, ret);
-            return ret;
-        }
-        rows_parsed++;
-    }
-
-    ksceIoClose(fd);
-    LOG("[LUT] OK (%d rows)\n", rows_parsed);
-    return 0;
+int parse_lut_from_file(const char *path, unsigned char out[LUT_SIZE]) {
+    VbeSourceOutcome source = parse_candidate(path, out);
+    return source.decision == VBE_SOURCE_USE ? 0 : source.error;
 }
 
-/*
- * Try two paths (primary / fallback) and return 0 when either succeeds.
- */
-static int try_parse(const char *p1, const char *p2, unsigned char out[LUT_SIZE]) {
-    int r = parse_lut_from_file(p1, out);
-    if (r >= 0) return r;
-    return parse_lut_from_file(p2, out);
-}
-
-/*
- * Auto-select a LUT based on panel type, with full fallback chain:
- *   panel-specific -> generic user file -> built-in defaults
- *
- * panel_type: OLED_PANEL_4, OLED_PANEL_5, OLED_PANEL_6, OLED_PANEL_UNKNOWN
- */
-int parse_lut(int panel_type, unsigned char lookupNew[LUT_SIZE]) {
-    int r = -1;
+int parse_lut(int panel_type, unsigned char out[LUT_SIZE],
+              char source_path[LUT_SOURCE_PATH_MAX], int *error_code) {
+    const char *panel_ur0 = NULL;
+    const char *panel_ux0 = NULL;
 
     switch (panel_type) {
     case OLED_PANEL_4:
-        r = try_parse(LUT_FILE_P4_1, LUT_FILE_P4_2, lookupNew);
+        panel_ur0 = LUT_FILE_P4_1;
+        panel_ux0 = LUT_FILE_P4_2;
         break;
     case OLED_PANEL_5:
-        r = try_parse(LUT_FILE_P5_1, LUT_FILE_P5_2, lookupNew);
+        panel_ur0 = LUT_FILE_P5_1;
+        panel_ux0 = LUT_FILE_P5_2;
         break;
     case OLED_PANEL_6:
-        r = try_parse(LUT_FILE_P6_1, LUT_FILE_P6_2, lookupNew);
+        panel_ur0 = LUT_FILE_P6_1;
+        panel_ux0 = LUT_FILE_P6_2;
         break;
     default:
         break;
     }
 
-    /* Fall through to generic user file if panel-specific not found */
-    if (r < 0) {
-        r = try_parse(LUT_FILE1, LUT_FILE2, lookupNew);
+    const char *candidates[4] = { panel_ur0, panel_ux0, LUT_FILE1, LUT_FILE2 };
+    int first = panel_ur0 != NULL ? 0 : 2;
+
+    for (int i = first; i < 4; ++i) {
+        const char *path = candidates[i];
+        if (path == NULL) continue;
+
+        VbeSourceOutcome source = parse_candidate(path, out);
+        if (source.decision == VBE_SOURCE_USE) {
+            path_copy(source_path, path);
+            if (error_code != NULL) *error_code = VBE_ERR_NONE;
+            return 0;
+        }
+        if (source.decision == VBE_SOURCE_FAIL) {
+            source_path[0] = '\0';
+            if (error_code != NULL) *error_code = source_error_code(source);
+            return source.error;
+        }
     }
 
-    if (r < 0) {
-        LOG("[LUT] No LUT file found for panel %d\n", panel_type);
-    }
-    return r;
+    source_path[0] = '\0';
+    if (error_code != NULL) *error_code = VBE_ERR_SOURCE_IO;
+    LOG("[LUT] All documented LUT sources absent for panel %d\n", panel_type);
+    return VBE_SCE_IO_ERROR_NOT_FOUND;
 }
 
-/*
- * Load LUT from an explicit path (for config override).
- */
-int parse_lut_override(const char *path, unsigned char lookupNew[LUT_SIZE]) {
-    return parse_lut_from_file(path, lookupNew);
+int parse_lut_override(const char *path, unsigned char out[LUT_SIZE],
+                       char source_path[LUT_SOURCE_PATH_MAX], int *error_code) {
+    VbeSourceOutcome source = parse_candidate(path, out);
+    if (source.decision == VBE_SOURCE_USE) {
+        path_copy(source_path, path);
+        if (error_code != NULL) *error_code = VBE_ERR_NONE;
+        return 0;
+    }
+
+    source_path[0] = '\0';
+    if (error_code != NULL) *error_code = source_error_code(source);
+    return source.error;
 }
