@@ -51,6 +51,18 @@ static inline void vbe_error_state_restore(VbeErrorState *state, int domain,
     state->slots[domain] = slot;
 }
 
+/* A successful recovery restores the requested-operation failure because the
+ * requested mutation still failed even though the previous committed state is
+ * operational again. A failed recovery supersedes it with the more severe
+ * recovery error. */
+static inline void vbe_error_state_recovery(VbeErrorState *state, int domain,
+                                            int succeeded,
+                                            VbeErrorSlot requested,
+                                            VbeErrorSlot recovery_failure) {
+    if (succeeded) vbe_error_state_restore(state, domain, requested);
+    else vbe_error_state_restore(state, domain, recovery_failure);
+}
+
 /* Intentional ABI-v2 compatibility-summary precedence. Diagnostics ABI v1 is
  * the complete truth; this order only chooses which one appears in the legacy
  * last_error/detail fields:
