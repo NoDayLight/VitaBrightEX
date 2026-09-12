@@ -53,8 +53,7 @@ for path in C_SOURCES:
                f"{path.relative_to(ROOT)} reintroduces persistent registry mutation ({symbol})")
 
 # The OLED row structure is known, but direct arithmetic on driver-specific
-# gamma register codes is still prohibited until their voltage transfer is
-# independently established.
+# gamma register codes is prohibited until their voltage transfer is verified.
 for symbol in ("normalise_white_point", "apply_color_bias", "apply_night_mode"):
     forbid(ROOT / "oled" / "hooks.c", symbol,
            f"OLED backend reintroduces unverified gamma-code transform {symbol}")
@@ -96,10 +95,25 @@ require(ROOT / "main.c", "oled_reload_backend()",
         "generic reload bypasses OLED rollback-aware backend reload")
 require(ROOT / "main.c", "lcd_reload_backend()",
         "generic reload bypasses LCD rollback-aware backend reload")
-require(ROOT / "module.yml", "vitabrightColorSpaceGetMode",
-        "color-space getter syscall is missing from generated ABI")
-require(ROOT / "module.yml", "vitabrightColorSpaceSetMode",
-        "color-space setter syscall is missing from generated ABI")
+
+# Generated ABI and editor persistence must use the same kernel-authoritative
+# transaction; direct editor writes can diverge from override/fallback paths.
+for symbol in (
+    "vitabrightColorSpaceGetMode",
+    "vitabrightColorSpaceSetMode",
+    "vitabrightOledPersistLut",
+    "vitabrightLcdPersistBrightnessValues",
+):
+    require(ROOT / "module.yml", symbol, f"generated ABI is missing {symbol}")
+
+editor = ROOT / "editor" / "main.c"
+require(editor, "vitabrightOledPersistLut()",
+        "editor no longer persists OLED state through the authoritative kernel syscall")
+require(editor, "vitabrightLcdPersistBrightnessValues()",
+        "editor no longer persists LCD state through the authoritative kernel syscall")
+for forbidden in ("fopen(", "vitabright_lut_p4.txt", "vitabright_lcd_lut.txt"):
+    forbid(editor, forbidden,
+           f"editor reintroduces direct/guessed LUT persistence path ({forbidden})")
 
 if errors:
     for error in errors:
