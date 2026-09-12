@@ -1,0 +1,39 @@
+name: VitaSDK build
+
+on:
+  push:
+    branches:
+      - v1.4-rearchitecture
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+
+jobs:
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: vitasdk/vdpm
+          path: vdpm
+      - name: Bootstrap VitaSDK
+        run: |
+          bash vdpm/bootstrap-vitasdk.sh
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+      - name: Install kernel dependencies
+        run: vdpm install taihen
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DENABLE_LOGGING=OFF
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Upload plugin
+        uses: actions/upload-artifact@v7
+        with:
+          name: VitaBrightEX-v1.4-plugin
+          path: build/vitabright.skprx
