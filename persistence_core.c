@@ -1,5 +1,40 @@
 #include "persistence_core.h"
 
+void vbe_persistence_state_init(VbePersistenceState *state) {
+    if (state == 0) return;
+    state->fd_owned = 0;
+    state->temp_owned = 0;
+}
+
+int vbe_persistence_state_can_open(const VbePersistenceState *state) {
+    return state != 0 && !state->fd_owned && !state->temp_owned;
+}
+
+void vbe_persistence_state_opened(VbePersistenceState *state) {
+    if (state == 0) return;
+    state->fd_owned = 1;
+    state->temp_owned = 1;
+}
+
+void vbe_persistence_state_closed(VbePersistenceState *state) {
+    if (state == 0) return;
+    state->fd_owned = 0;
+}
+
+void vbe_persistence_state_renamed(VbePersistenceState *state) {
+    if (state == 0) return;
+    state->temp_owned = 0;
+}
+
+void vbe_persistence_state_temp_removed(VbePersistenceState *state) {
+    if (state == 0) return;
+    state->temp_owned = 0;
+}
+
+int vbe_persistence_state_clean(const VbePersistenceState *state) {
+    return state != 0 && !state->fd_owned && !state->temp_owned;
+}
+
 static VbePersistenceOutcome make_outcome(int stage, int error) {
     VbePersistenceOutcome out;
     out.stage = stage;
