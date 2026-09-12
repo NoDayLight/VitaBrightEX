@@ -22,7 +22,7 @@ jobs:
         run: python3 tools/verify_source_contract.py
       - name: Verify parser/runtime/CI contract
         run: python3 tools/verify_parser_contract.py
-      - name: Validate packaged LUT/config assets with production parser
+      - name: Validate packaged assets with production parsers
         run: python3 tools/validate_packaged_assets.py
       - name: Validate firmware-audit tooling
         run: python3 -m py_compile tools/verify_scelcd_layout.py
@@ -60,7 +60,28 @@ jobs:
           cp release/ur0_tai/vitabrightex.cfg hardware-test/ur0_tai/vitabrightex.cfg
           cp editor-build/vitabrightex-editor.vpk hardware-test/vitabrightex-editor.vpk
           printf '%s\n' "$GITHUB_SHA" > hardware-test/WORKFLOW_COMMIT.txt
-          (cd hardware-test && sha256sum ur0_tai/vitabright.skprx ur0_tai/vitabright_lcd_lut.txt ur0_tai/vitabrightex.cfg vitabrightex-editor.vpk > SHA256SUMS)
+          cat > hardware-test/README.txt <<EOF
+          VitaBrightEX pseudo-v1.4 PCH-2000 hardware-test bundle
+          Commit: $GITHUB_SHA
+
+          Kernel-side files:
+            ur0_tai/vitabright.skprx
+            ur0_tai/vitabright_lcd_lut.txt
+            ur0_tai/vitabrightex.cfg
+
+          Editor-side file (separate Vita application):
+            vitabrightex-editor.vpk
+
+          Install the matching VPK when the test requires the build MATCH/MISMATCH
+          display or the current editor wording. Replacing files under ur0:tai does
+          not update an already-installed editor application. An older ABI-v2 editor
+          may still read the base status structure, but cannot prove component
+          provenance or show diagnostics ABI v1.
+
+          The release SKPRX is the parser cold-boot test binary. The diagnostic
+          SKPRX is deliberately a separate artifact and is not part of this bundle.
+          EOF
+          (cd hardware-test && sha256sum README.txt WORKFLOW_COMMIT.txt ur0_tai/vitabright.skprx ur0_tai/vitabright_lcd_lut.txt ur0_tai/vitabrightex.cfg vitabrightex-editor.vpk > SHA256SUMS)
       - name: Upload release plugin
         uses: actions/upload-artifact@v7
         with:
