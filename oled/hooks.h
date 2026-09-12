@@ -22,5 +22,6 @@ int vitabrightOledGetLevel(void);
 int vitabrightOledSetLevel(unsigned int level);
 int vitabrightOledGetLut(unsigned char oledLut[LUT_SIZE]);
 int vitabrightOledSetLut(unsigned char oledLut[LUT_SIZE]);
+int vitabrightOledPersistLut(void);
 int vitabrightOledReload(void);
 int vitabrightOledGetPanelType(void);
