@@ -46,6 +46,8 @@ add_executable(vitabright
     status.c
     status.h
     status_error_core.h
+    state_lock_core.c
+    state_lock_core.h
     state_lock.c
     state_lock.h
     color_space.c
