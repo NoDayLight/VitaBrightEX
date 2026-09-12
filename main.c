@@ -50,8 +50,11 @@ int module_start(SceSize argc, const void *args) {
     }
 
     int ret = is_lcd ? lcd_enable_hooks() : oled_enable_hooks();
-    if (ret < 0)
+    if (ret < 0) {
         LOG("[CORE] selected brightness backend unavailable: 0x%08X\n", ret);
+    } else {
+        status_clear_error_domain(VBE_ERROR_DOMAIN_BRIGHTNESS);
+    }
 
     int color_ret = color_space_apply_config();
     if (color_ret < 0)
@@ -75,6 +78,10 @@ int vitabrightReload(void) {
     }
 
     int result = g_is_oled ? oled_reload_backend() : lcd_reload_backend();
+    if (result >= 0) {
+        status_clear_error_domain(VBE_ERROR_DOMAIN_CONFIG);
+        status_clear_error_domain(VBE_ERROR_DOMAIN_BRIGHTNESS);
+    }
 
     int color_ret = color_space_apply_config();
     if (result >= 0 && color_ret < 0) result = color_ret;
