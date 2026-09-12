@@ -12,6 +12,8 @@ extern unsigned char lookupNew[LUT_SIZE];
 /* Lifecycle: success is explicit; failure leaves no partial active state. */
 int oled_enable_hooks(void);
 void oled_disable_hooks(void);
+/* Caller must hold the global state lock. */
+int oled_reload_backend(void);
 
 int oled_detect_panel(void);
 int oled_reinject_lut(void);
