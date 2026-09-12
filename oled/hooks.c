@@ -56,7 +56,7 @@ static OledBackend g_oled = {
     .panel_type = OLED_PANEL_UNKNOWN,
     .dim_workaround_enabled = 1,
     .source = { .kind = VBE_SOURCE_ID_NONE, .path = {0} },
-    .persistence = { .fd = -1, .temp_owned = 0, .target = {0}, .temp = {0} },
+    .persistence = { .fd = -1, .fd_owned = 0, .temp_owned = 0, .target = {0}, .temp = {0} },
 };
 
 unsigned char lookupNew[LUT_SIZE];
@@ -407,7 +407,7 @@ static VbeTxnAttempt start_transaction(const OledCandidate *candidate) {
     if (ret < 0) return abort_start(VBE_ERR_BACKEND, ret);
 
     lut_copy(lookupNew, candidate->values);
-    vbe_source_identity_copy(&g_oled.source, &candidate->source);
+    vbe_txn_commit_source(&g_oled.source, &candidate->source);
     g_oled.panel_type = panel_type;
     g_vbe_status.panel_type = panel_type;
     g_oled.ownership = VBE_OWNERSHIP_ACTIVE;
@@ -534,8 +534,7 @@ static int oled_persist_write(void *context) {
 }
 
 static int persist_lut_locked(void) {
-    if (g_oled.ownership != VBE_OWNERSHIP_ACTIVE ||
-        !vbe_source_identity_is_file(&g_oled.source))
+    if (!vbe_txn_file_persistence_allowed(g_oled.ownership, &g_oled.source))
         return -1;
 
     int cleanup = vbe_persist_file_cleanup(&g_oled.persistence);
@@ -630,13 +629,13 @@ int vitabrightOledPersistLut(void) {
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
 
     if (!g_is_oled || g_oled.ownership != VBE_OWNERSHIP_ACTIVE) {
-        (void)state_lock_release();
+        ret = state_lock_release_result(-1);
         EXIT_SYSCALL(state);
-        return -1;
+        return ret;
     }
 
     ret = persist_lut_locked();
-    (void)state_lock_release();
+    ret = state_lock_release_result(ret);
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -649,17 +648,17 @@ int vitabrightOledGetLevel(void) {
 
     if (!g_is_oled || g_oled.ownership != VBE_OWNERSHIP_ACTIVE ||
         g_get_brightness == NULL) {
-        (void)state_lock_release();
+        ret = state_lock_release_result(-1);
         EXIT_SYSCALL(state);
-        return -1;
+        return ret;
     }
 
     int brightness = g_get_brightness();
     if (brightness < 0) {
         brightness_error(VBE_ERR_BACKEND, brightness);
-        (void)state_lock_release();
+        ret = state_lock_release_result(brightness);
         EXIT_SYSCALL(state);
-        return brightness;
+        return ret;
     }
 
     int level;
@@ -673,9 +672,9 @@ int vitabrightOledGetLevel(void) {
         if (level > 14) level = 14;
     }
 
-    (void)state_lock_release();
+    ret = state_lock_release_result(level);
     EXIT_SYSCALL(state);
-    return level;
+    return ret;
 }
 
 int vitabrightOledSetLevel(unsigned int level) {
@@ -686,16 +685,16 @@ int vitabrightOledSetLevel(unsigned int level) {
 
     if (!g_is_oled || g_oled.ownership != VBE_OWNERSHIP_ACTIVE ||
         g_set_brightness == NULL) {
-        (void)state_lock_release();
+        ret = state_lock_release_result(-1);
         EXIT_SYSCALL(state);
-        return -1;
+        return ret;
     }
     if (level > 16u) {
         status_stage_result(VBE_ERROR_DOMAIN_INPUT, 0,
                             VBE_ERR_INVALID_USER_INPUT, (int)level);
-        (void)state_lock_release();
+        ret = state_lock_release_result(-1);
         EXIT_SYSCALL(state);
-        return -1;
+        return ret;
     }
     status_stage_result(VBE_ERROR_DOMAIN_INPUT, 1,
                         VBE_ERR_INVALID_USER_INPUT, 0);
@@ -712,9 +711,9 @@ int vitabrightOledSetLevel(unsigned int level) {
     if (ret < 0) brightness_error(VBE_ERR_BACKEND, ret);
     else brightness_clear_if(VBE_ERR_BACKEND);
 
-    (void)state_lock_release();
+    ret = state_lock_release_result(ret < 0 ? ret : (int)level);
     EXIT_SYSCALL(state);
-    return ret < 0 ? ret : (int)level;
+    return ret;
 }
 
 int vitabrightOledGetLut(unsigned char oledLut[LUT_SIZE]) {
@@ -724,15 +723,16 @@ int vitabrightOledGetLut(unsigned char oledLut[LUT_SIZE]) {
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
 
     if (!g_is_oled || g_oled.ownership != VBE_OWNERSHIP_ACTIVE) {
-        (void)state_lock_release();
+        ret = state_lock_release_result(-1);
         EXIT_SYSCALL(state);
-        return -1;
+        return ret;
     }
 
     unsigned char snapshot[LUT_SIZE];
     lut_copy(snapshot, lookupNew);
-    (void)state_lock_release();
-    ret = ksceKernelMemcpyKernelToUser((void *)oledLut, snapshot, LUT_SIZE);
+    ret = state_lock_release_result(0);
+    if (ret >= 0)
+        ret = ksceKernelMemcpyKernelToUser((void *)oledLut, snapshot, LUT_SIZE);
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -746,10 +746,13 @@ int vitabrightOledSetLut(unsigned char oledLut[LUT_SIZE]) {
                                            (const void *)oledLut, LUT_SIZE);
     if (ret < 0 || !lut_is_sane(candidate.values)) {
         int detail = ret < 0 ? ret : -1;
-        if (state_lock_acquire() >= 0) {
+        int lock = state_lock_acquire();
+        if (lock >= 0) {
             status_stage_result(VBE_ERROR_DOMAIN_INPUT, 0,
                                 VBE_ERR_INVALID_USER_INPUT, detail);
-            (void)state_lock_release();
+            detail = state_lock_release_result(detail);
+        } else {
+            detail = lock;
         }
         EXIT_SYSCALL(state);
         return detail;
@@ -760,15 +763,15 @@ int vitabrightOledSetLut(unsigned char oledLut[LUT_SIZE]) {
     status_stage_result(VBE_ERROR_DOMAIN_INPUT, 1,
                         VBE_ERR_INVALID_USER_INPUT, 0);
     if (!g_is_oled || g_oled.ownership != VBE_OWNERSHIP_ACTIVE) {
-        (void)state_lock_release();
+        ret = state_lock_release_result(-1);
         EXIT_SYSCALL(state);
-        return -1;
+        return ret;
     }
 
     vbe_source_identity_copy(&candidate.source, &g_oled.source);
     candidate.panel_type = g_oled.panel_type;
     ret = replace_candidate(&candidate);
-    (void)state_lock_release();
+    ret = state_lock_release_result(ret);
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -779,13 +782,13 @@ int vitabrightOledReload(void) {
     int ret = state_lock_acquire();
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
     if (!g_is_oled) {
-        (void)state_lock_release();
+        ret = state_lock_release_result(-1);
         EXIT_SYSCALL(state);
-        return -1;
+        return ret;
     }
 
     ret = vitabright_reload_locked();
-    (void)state_lock_release();
+    ret = state_lock_release_result(ret);
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -796,7 +799,7 @@ int vitabrightOledGetPanelType(void) {
     int ret = state_lock_acquire();
     if (ret < 0) { EXIT_SYSCALL(state); return ret; }
     int panel = g_is_oled ? g_oled.panel_type : OLED_PANEL_UNKNOWN;
-    (void)state_lock_release();
+    ret = state_lock_release_result(panel);
     EXIT_SYSCALL(state);
-    return panel;
+    return ret;
 }
