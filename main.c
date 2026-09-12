@@ -29,42 +29,38 @@ int module_start(SceSize argc, const void *args) {
     int is_lcd = detect_is_lcd();
     g_is_oled = !is_lcd;
     status_init(is_lcd ? VBE_HW_LCD : VBE_HW_OLED, sw_version);
+    config_reset_defaults();
 
     int lock_ret = state_lock_init();
     if (lock_ret < 0) {
         g_vbe_status.state_lock = VBE_CAP_FAILED;
-        status_set_error(VBE_ERR_SYNCHRONIZATION, lock_ret);
+        status_set_error_domain(VBE_ERROR_DOMAIN_SYNC,
+                                VBE_ERR_SYNCHRONIZATION, lock_ret);
         return SCE_KERNEL_START_SUCCESS;
     }
     g_vbe_status.state_lock = VBE_CAP_ACTIVE;
 
     int config_ret = config_load();
     if (config_ret < 0) {
-        /* Keep boot fail-open and use the already-initialized safe defaults,
-         * but do not hide an authoritative config parse/I/O failure. */
-        status_set_error(VBE_ERR_CONFIG, config_ret);
+        status_set_error_domain(VBE_ERROR_DOMAIN_CONFIG, VBE_ERR_CONFIG,
+                                config_ret);
         LOG("[CORE] authoritative config rejected: 0x%08X\n", config_ret);
+    } else {
+        status_clear_error_domain(VBE_ERROR_DOMAIN_CONFIG);
     }
 
     int ret = is_lcd ? lcd_enable_hooks() : oled_enable_hooks();
-    if (ret < 0) {
+    if (ret < 0)
         LOG("[CORE] selected brightness backend unavailable: 0x%08X\n", ret);
-    }
 
-    /* Optional display capabilities are independent from raw brightness-table
-     * support. A newer firmware may safely expose the documented color-space
-     * export while its private brightness-table layout remains unsupported.
-     * Neither capability can block boot. */
     int color_ret = color_space_apply_config();
-    if (color_ret < 0) {
+    if (color_ret < 0)
         LOG("[CORE] color-space capability unavailable: 0x%08X\n", color_ret);
-    }
 
     screen_filter_load_config();
     int filter_ret = screen_filter_apply(g_is_oled);
-    if (filter_ret < 0) {
+    if (filter_ret < 0)
         LOG("[CORE] optional filter capability unavailable: 0x%08X\n", filter_ret);
-    }
 
     return SCE_KERNEL_START_SUCCESS;
 }
@@ -87,7 +83,6 @@ int vitabrightReload(void) {
     int filter_ret = screen_filter_apply(g_is_oled);
     if (result >= 0 && filter_ret < 0) result = filter_ret;
 
-    if (result >= 0) status_clear_error();
     state_lock_release();
     EXIT_SYSCALL(state);
     return result;
