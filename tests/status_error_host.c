@@ -20,7 +20,6 @@ int main(void) {
 
     vbe_error_state_init(&state);
 
-    /* Old CONFIG failure -> config fixed -> later BRIGHTNESS failure. */
     vbe_error_state_stage(&state, VBE_ERROR_DOMAIN_CONFIG, 0, VBE_ERR_CONFIG, -10);
     vbe_error_state_stage(&state, VBE_ERROR_DOMAIN_CONFIG, 1, VBE_ERR_CONFIG, 0);
     vbe_error_state_stage(&state, VBE_ERROR_DOMAIN_BRIGHTNESS, 0,
@@ -30,7 +29,6 @@ int main(void) {
     failures += ok(slot(&state, VBE_ERROR_DOMAIN_BRIGHTNESS).error == VBE_ERR_LAYOUT_MISMATCH,
                    "brightness failure remains independently visible");
 
-    /* Old BRIGHTNESS failure -> brightness fixed -> later COLOR failure. */
     vbe_error_state_stage(&state, VBE_ERROR_DOMAIN_BRIGHTNESS, 1,
                           VBE_ERR_BACKEND, 0);
     vbe_error_state_stage(&state, VBE_ERROR_DOMAIN_COLOR_SPACE, 0,
@@ -40,7 +38,6 @@ int main(void) {
     failures += ok(slot(&state, VBE_ERROR_DOMAIN_COLOR_SPACE).error == VBE_ERR_DISPLAY_CAPABILITY,
                    "color failure stays in color domain");
 
-    /* CONFIG remains broken while brightness succeeds. */
     vbe_error_state_stage(&state, VBE_ERROR_DOMAIN_CONFIG, 0, VBE_ERR_CONFIG, -11);
     vbe_error_state_stage(&state, VBE_ERROR_DOMAIN_BRIGHTNESS, 0,
                           VBE_ERR_BACKEND, -31);
@@ -51,8 +48,6 @@ int main(void) {
     failures += ok(slot(&state, VBE_ERROR_DOMAIN_BRIGHTNESS).error == VBE_ERR_NONE,
                    "brightness repair clears only brightness");
 
-    /* A failed requested LUT mutation followed by successful rollback leaves
-     * the previous backend operational but preserves the requested failure. */
     requested.error = VBE_ERR_TABLE_INJECTION;
     requested.detail = -40;
     rollback_failure.error = VBE_ERR_LUT_ROLLBACK;
@@ -71,7 +66,6 @@ int main(void) {
                    slot(&state, VBE_ERROR_DOMAIN_BRIGHTNESS).detail == -41,
                    "failed rollback supersedes with rollback failure");
 
-    /* All relevant domains repair independently. */
     vbe_error_state_stage(&state, VBE_ERROR_DOMAIN_CONFIG, 1, VBE_ERR_CONFIG, 0);
     vbe_error_state_stage(&state, VBE_ERROR_DOMAIN_BRIGHTNESS, 1, VBE_ERR_BACKEND, 0);
     vbe_error_state_stage(&state, VBE_ERROR_DOMAIN_COLOR_SPACE, 1,
@@ -87,7 +81,36 @@ int main(void) {
                    slot(&state, VBE_ERROR_DOMAIN_INPUT).error == VBE_ERR_NONE,
                    "all repaired domains clear independently");
 
-    /* Freeze the ABI-v2 summary precedence intentionally. */
+    /* Stop-domain truth survives unrelated successful teardown stages. */
+    vbe_error_state_set(&state, VBE_ERROR_DOMAIN_FILTER,
+                        VBE_ERR_DISPLAY_CAPABILITY, -60);
+    vbe_error_state_stage(&state, VBE_ERROR_DOMAIN_COLOR_SPACE, 1,
+                          VBE_ERR_DISPLAY_CAPABILITY, 0);
+    vbe_error_state_stage(&state, VBE_ERROR_DOMAIN_BRIGHTNESS, 1,
+                          VBE_ERR_BACKEND, 0);
+    failures += ok(slot(&state, VBE_ERROR_DOMAIN_FILTER).error == VBE_ERR_DISPLAY_CAPABILITY &&
+                   slot(&state, VBE_ERROR_DOMAIN_FILTER).detail == -60,
+                   "filter stop failure survives later color/backend success");
+    vbe_error_state_clear(&state, VBE_ERROR_DOMAIN_FILTER);
+
+    vbe_error_state_set(&state, VBE_ERROR_DOMAIN_COLOR_SPACE,
+                        VBE_ERR_DISPLAY_CAPABILITY, -61);
+    vbe_error_state_stage(&state, VBE_ERROR_DOMAIN_BRIGHTNESS, 1,
+                          VBE_ERR_BACKEND, 0);
+    failures += ok(slot(&state, VBE_ERROR_DOMAIN_COLOR_SPACE).error == VBE_ERR_DISPLAY_CAPABILITY &&
+                   slot(&state, VBE_ERROR_DOMAIN_COLOR_SPACE).detail == -61,
+                   "color stop failure survives backend success");
+    vbe_error_state_clear(&state, VBE_ERROR_DOMAIN_COLOR_SPACE);
+
+    vbe_error_state_set(&state, VBE_ERROR_DOMAIN_BRIGHTNESS,
+                        VBE_ERR_RESOURCE_RELEASE, -62);
+    vbe_error_state_stage(&state, VBE_ERROR_DOMAIN_FILTER, 1,
+                          VBE_ERR_DISPLAY_CAPABILITY, 0);
+    failures += ok(slot(&state, VBE_ERROR_DOMAIN_BRIGHTNESS).error == VBE_ERR_RESOURCE_RELEASE &&
+                   slot(&state, VBE_ERROR_DOMAIN_BRIGHTNESS).detail == -62,
+                   "backend stop release failure survives unrelated teardown success");
+    vbe_error_state_clear(&state, VBE_ERROR_DOMAIN_BRIGHTNESS);
+
     vbe_error_state_set(&state, VBE_ERROR_DOMAIN_INPUT, VBE_ERR_INVALID_USER_INPUT, -50);
     vbe_error_state_set(&state, VBE_ERROR_DOMAIN_FILTER, VBE_ERR_DISPLAY_CAPABILITY, -51);
     vbe_error_state_set(&state, VBE_ERROR_DOMAIN_COLOR_SPACE, VBE_ERR_DISPLAY_CAPABILITY, -52);
