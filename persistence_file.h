@@ -5,7 +5,13 @@
 
 typedef struct {
     SceUID fd;
-    VbePersistenceState state;
+    union {
+        VbePersistenceState state;
+        struct {
+            int fd_owned;
+            int temp_owned;
+        };
+    };
     char target[VBE_SOURCE_PATH_MAX];
     char temp[VBE_SOURCE_PATH_MAX];
 } VbePersistenceFile;
