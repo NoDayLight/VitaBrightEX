@@ -35,6 +35,8 @@ add_executable(vitabright
     config_parser.h
     text_stream.c
     text_stream.h
+    source_authority.c
+    source_authority.h
     status.c
     status.h
     status_error_core.h
@@ -42,6 +44,8 @@ add_executable(vitabright
     state_lock.h
     color_space.c
     color_space.h
+    filter_policy.c
+    filter_policy.h
     screen_filter.c
     screen_filter.h
     taihen_extra.h
