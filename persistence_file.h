@@ -1,10 +1,11 @@
 #pragma once
+#include "persistence_core.h"
 #include "source_authority.h"
 #include <psp2/types.h>
 
 typedef struct {
     SceUID fd;
-    int temp_owned;
+    VbePersistenceState state;
     char target[VBE_SOURCE_PATH_MAX];
     char temp[VBE_SOURCE_PATH_MAX];
 } VbePersistenceFile;
