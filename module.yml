@@ -12,6 +12,8 @@ vitabright:
       functions:
         - vitabrightReload
         - vitabrightGetStatus
+        - vitabrightColorSpaceGetMode
+        - vitabrightColorSpaceSetMode
         - vitabrightOledGetLevel
         - vitabrightOledSetLevel
         - vitabrightOledGetLut
