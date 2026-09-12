@@ -82,10 +82,8 @@ for symbol in ("normalise_white_point", "apply_color_bias", "apply_night_mode"):
 
 require(ROOT / "lcd" / "hooks.c", "lcd_validate_layout", "LCD runtime signature validation missing")
 require(ROOT / "lcd" / "hooks.c", "lcd_stock_signature", "LCD stock signature missing")
-require(ROOT / "lcd" / "hooks.c", "VBE_SOURCE_ID_COMPILED",
-        "LCD compiled fallback source identity missing")
-forbid(ROOT / "lcd" / "hooks.c", "vbe_source_identity_file(&candidate->source, LCD_LUT_FILE1);\n    *error_code = VBE_ERR_NONE;\n    return 0;\n}\n\n    lut_copy(candidate->values, lcd_brightness_default);\n    vbe_source_identity_file",
-       "LCD compiled fallback fabricates a file-backed source")
+require(ROOT / "lcd" / "hooks.c", "vbe_source_identity_compiled(&candidate->source)",
+        "LCD compiled fallback no longer carries explicit COMPILED source identity")
 require(ROOT / "oled" / "hooks.c", "validate_layout", "OLED layout plausibility validation missing")
 require(ROOT / "oled" / "hooks.c", "module_get_offset", "OLED inherited offset is no longer resolved")
 for version in ("0x371", "0x372", "0x373", "0x374"):
@@ -146,6 +144,14 @@ for path in (ROOT / "source_authority.h", ROOT / "source_authority.c"):
            "project reintroduced SDK-looking ENOENT ownership")
 require(ROOT / "source_authority.h", "VBE_SCE_IO_ERROR_NOT_FOUND",
         "project-owned Vita not-found compatibility constant missing")
+
+validator = ROOT / "tools" / "validate_packaged_assets.py"
+for test_source in (
+    "tests/transaction_core_host.c",
+    "tests/persistence_core_host.c",
+    "tests/state_lock_core_host.c",
+):
+    require(validator, test_source, f"production semantic host suite not executed: {test_source}")
 
 editor = ROOT / "editor" / "app.c"
 require(ROOT / "editor" / "CMakeLists.txt", "add_executable(vitabrightex-editor.elf app.c)",
