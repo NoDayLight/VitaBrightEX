@@ -38,7 +38,13 @@ int module_start(SceSize argc, const void *args) {
     }
     g_vbe_status.state_lock = VBE_CAP_ACTIVE;
 
-    (void)config_load();
+    int config_ret = config_load();
+    if (config_ret < 0) {
+        /* Keep boot fail-open and use the already-initialized safe defaults,
+         * but do not hide an authoritative config parse/I/O failure. */
+        status_set_error(VBE_ERR_CONFIG, config_ret);
+        LOG("[CORE] authoritative config rejected: 0x%08X\n", config_ret);
+    }
 
     int ret = is_lcd ? lcd_enable_hooks() : oled_enable_hooks();
     if (ret < 0) {
@@ -46,9 +52,9 @@ int module_start(SceSize argc, const void *args) {
     }
 
     /* Optional display capabilities are independent from raw brightness-table
-     * support.  For example a newer firmware may safely expose the documented
-     * color-space export even while its private brightness-table layout is
-     * deliberately unsupported.  Neither capability can block boot. */
+     * support. A newer firmware may safely expose the documented color-space
+     * export while its private brightness-table layout remains unsupported.
+     * Neither capability can block boot. */
     int color_ret = color_space_apply_config();
     if (color_ret < 0) {
         LOG("[CORE] color-space capability unavailable: 0x%08X\n", color_ret);
