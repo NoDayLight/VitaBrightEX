@@ -10,6 +10,7 @@
 #include "lut.h"
 #include "parser.h"
 #include <stdint.h>
+#include <psp2kern/io/fcntl.h>
 #include <psp2kern/kernel/cpu.h>
 #include <psp2kern/kernel/modulemgr.h>
 #include <psp2kern/kernel/sysmem.h>
@@ -20,8 +21,6 @@
 #define NID_OLED_GET_DDB         0xC9D5987C
 #define NID_POWER_SET_MAX_BRIGHT 0x77027B6B
 
-/* Provenance: devnoname120/vitabright PR #39. These are selected only after
- * a successful DDB read and on an explicitly whitelisted firmware family. */
 #define OLED_LUT_OFF_P4      0x1AB8u
 #define OLED_LUT_OFF_P5      0x1C20u
 #define OLED_LUT_OFF_DEFAULT 0x1E00u
@@ -34,6 +33,7 @@ static tai_hook_ref_t g_power_ref = 0;
 static int g_active = 0;
 static int g_panel_type = OLED_PANEL_UNKNOWN;
 static int g_dim_workaround_enabled = 1;
+static char g_lut_source_path[LUT_SOURCE_PATH_MAX];
 
 unsigned char lookupNew[LUT_SIZE];
 
@@ -45,10 +45,15 @@ static void lut_copy(unsigned char *dst, const unsigned char *src) {
     for (int i = 0; i < LUT_SIZE; ++i) dst[i] = src[i];
 }
 
-/* The row format is documented as seven RGB gamma-reference triplets, but the
- * D53E6EA8966 register-code -> reference-voltage transfer is not public. Do
- * not invent per-byte arithmetic. Whole-object sanity is still useful for
- * rejecting unmistakable corruption and obviously wrong module offsets. */
+static void path_copy(char dst[LUT_SOURCE_PATH_MAX], const char *src) {
+    int i = 0;
+    while (i < LUT_SOURCE_PATH_MAX - 1 && src[i]) {
+        dst[i] = src[i];
+        ++i;
+    }
+    dst[i] = '\0';
+}
+
 static int lut_is_sane(const unsigned char lut[LUT_SIZE]) {
     int any_nonzero = 0;
     int any_not_ff = 0;
@@ -120,8 +125,6 @@ static int read_panel(int *panel_type, uint32_t *lut_offset) {
         *lut_offset = OLED_LUT_OFF_DEFAULT;
         break;
     default:
-        /* Upstream PR #39 deliberately maps other successfully identified DDB
-         * types to the default table. A failed DDB read never reaches here. */
         *panel_type = OLED_PANEL_UNKNOWN;
         *lut_offset = OLED_LUT_OFF_DEFAULT;
         break;
@@ -129,10 +132,6 @@ static int read_panel(int *panel_type, uint32_t *lut_offset) {
     return 0;
 }
 
-/* OLED lacks an independent public byte-for-byte firmware signature like the
- * stock SceLcd table. Still require the inherited offset to resolve inside the
- * loaded module and point at a plausible 357-byte gamma object before writing.
- * This converts a bad/stale raw offset into a fail-open capability failure. */
 static int validate_layout(const tai_module_info_t *info, uint32_t lut_offset) {
     uintptr_t address = 0;
     int ret = module_get_offset(KERNEL_PID, info->modid, 0, lut_offset, &address);
@@ -151,12 +150,13 @@ int oled_detect_panel(void) {
     return panel;
 }
 
-static int load_disk_candidate(int panel_type, unsigned char out[LUT_SIZE]) {
+static int load_disk_candidate(int panel_type, unsigned char out[LUT_SIZE],
+                               char source_path[LUT_SOURCE_PATH_MAX]) {
     int ret;
     if (g_config.oled_panel_lut_override && g_config.panel_lut_path[0] != '\0')
-        ret = parse_lut_override(g_config.panel_lut_path, out);
+        ret = parse_lut_override(g_config.panel_lut_path, out, source_path);
     else
-        ret = parse_lut(panel_type, out);
+        ret = parse_lut(panel_type, out, source_path);
 
     if (ret < 0) return ret;
     return lut_is_sane(out) ? 0 : -1;
@@ -182,7 +182,6 @@ int hook_kscePowerSetDisplayMaxBrightnessForOled(int limit) {
 }
 
 static void release_transaction(void) {
-    /* Remove hooks before invalidating anything they may observe. */
     if (g_power_hook >= 0) {
         (void)taiHookReleaseForKernel(g_power_hook, g_power_ref);
         g_power_hook = -1;
@@ -245,10 +244,12 @@ static int start_transaction(const unsigned char supplied[LUT_SIZE]) {
     g_vbe_status.firmware_layout = VBE_CAP_ACTIVE;
 
     unsigned char candidate[LUT_SIZE];
+    char source_path[LUT_SOURCE_PATH_MAX];
+    source_path[0] = '\0';
     if (supplied != NULL) {
         lut_copy(candidate, supplied);
     } else {
-        ret = load_disk_candidate(panel_type, candidate);
+        ret = load_disk_candidate(panel_type, candidate, source_path);
         if (ret < 0) {
             status_set_error(VBE_ERR_INVALID_USER_INPUT, ret);
             return ret;
@@ -313,6 +314,7 @@ static int start_transaction(const unsigned char supplied[LUT_SIZE]) {
     }
 
     lut_copy(lookupNew, candidate);
+    if (supplied == NULL) path_copy(g_lut_source_path, source_path);
     g_panel_type = panel_type;
     g_vbe_status.panel_type = panel_type;
     g_active = 1;
@@ -395,7 +397,8 @@ int oled_reload_backend(void) {
     }
 
     unsigned char candidate[LUT_SIZE];
-    ret = load_disk_candidate(panel_type, candidate);
+    char candidate_path[LUT_SOURCE_PATH_MAX];
+    ret = load_disk_candidate(panel_type, candidate, candidate_path);
     if (ret < 0) {
         g_config = previous_config;
         status_set_error(VBE_ERR_INVALID_USER_INPUT, ret);
@@ -403,14 +406,100 @@ int oled_reload_backend(void) {
     }
 
     ret = replace_candidate(candidate);
-    if (ret < 0) g_config = previous_config;
-    return ret;
+    if (ret < 0) {
+        g_config = previous_config;
+        return ret;
+    }
+
+    path_copy(g_lut_source_path, candidate_path);
+    return 0;
 }
 
 int oled_reinject_lut(void) {
     unsigned char candidate[LUT_SIZE];
     lut_copy(candidate, lookupNew);
     return replace_candidate(candidate);
+}
+
+static int build_temp_path(char out[LUT_SOURCE_PATH_MAX], const char *path) {
+    int i = 0;
+    while (i < LUT_SOURCE_PATH_MAX - 5 && path[i]) {
+        out[i] = path[i];
+        ++i;
+    }
+    if (path[i] != '\0') return -1;
+    out[i++] = '.';
+    out[i++] = 't';
+    out[i++] = 'm';
+    out[i++] = 'p';
+    out[i] = '\0';
+    return 0;
+}
+
+static int persist_lut_locked(void) {
+    if (!g_active || g_lut_source_path[0] == '\0') return -1;
+
+    char temp_path[LUT_SOURCE_PATH_MAX];
+    if (build_temp_path(temp_path, g_lut_source_path) < 0) return -1;
+
+    (void)ksceIoRemove(temp_path);
+    SceUID fd = ksceIoOpen(temp_path, SCE_O_WRONLY | SCE_O_CREAT | SCE_O_TRUNC, 0666);
+    if (fd < 0) return fd;
+
+    static const char hex[] = "0123456789ABCDEF";
+    int ret = 0;
+    for (int row = 0; row < LUT_ROWS; ++row) {
+        char line[LUT_LINE_SIZE * 3];
+        int pos = 0;
+        for (int col = 0; col < LUT_LINE_SIZE; ++col) {
+            unsigned char value = lookupNew[row * LUT_LINE_SIZE + col];
+            line[pos++] = hex[value >> 4];
+            line[pos++] = hex[value & 0x0F];
+            line[pos++] = col == LUT_LINE_SIZE - 1 ? '\n' : ' ';
+        }
+        int written = ksceIoWrite(fd, line, (SceSize)pos);
+        if (written != pos) {
+            ret = written < 0 ? written : -1;
+            break;
+        }
+    }
+
+    if (ret == 0) {
+        int sync_status = 0;
+        int sync_ret = ksceIoSyncByFd(fd, &sync_status);
+        if (sync_ret < 0 || sync_status < 0)
+            ret = sync_ret < 0 ? sync_ret : sync_status;
+    }
+
+    int close_ret = ksceIoClose(fd);
+    if (ret == 0 && close_ret < 0) ret = close_ret;
+
+    if (ret == 0) {
+        ret = ksceIoRename(temp_path, g_lut_source_path);
+    }
+    if (ret < 0) (void)ksceIoRemove(temp_path);
+    return ret;
+}
+
+int vitabrightOledPersistLut(void) {
+    int state;
+    ENTER_SYSCALL(state);
+    int ret = state_lock_acquire();
+    if (ret < 0) { EXIT_SYSCALL(state); return ret; }
+
+    if (!g_is_oled || !g_active) {
+        state_lock_release();
+        EXIT_SYSCALL(state);
+        return -1;
+    }
+
+    ret = persist_lut_locked();
+    if (ret < 0) status_set_error(VBE_ERR_BACKEND, ret);
+    else status_clear_error();
+
+    state_lock_release();
+    EXIT_SYSCALL(state);
+    return ret;
 }
 
 int vitabrightOledGetLevel(void) {
