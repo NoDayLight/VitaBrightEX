@@ -4,17 +4,24 @@
 #include <psp2/kernel/processmgr.h>
 #include <vita2d.h>
 
+#include "../build_info.h"
 #include "../status.h"
 #include "../screen_filter.h"
 #include "../lcd/lcd_lut.h"
 #include "../oled/lut.h"
 
+#ifndef VBE_BUILD_ID
+#define VBE_BUILD_ID "unknown"
+#endif
+
 #define WHITE RGBA8(255,255,255,255)
-#define DIM   RGBA8(170,170,170,255)
-#define BAD   RGBA8(255,150,150,255)
-#define OK    RGBA8(160,255,180,255)
+#define DIM RGBA8(170,170,170,255)
+#define BAD RGBA8(255,150,150,255)
+#define OK RGBA8(160,255,180,255)
 
 int vitabrightReload(void);
+int vitabrightGetDiagnostics(VitaBrightDiagnostics *out);
+int vitabrightGetBuildId(char out[VBE_BUILD_ID_SIZE]);
 int vitabrightColorSpaceGetMode(void);
 int vitabrightColorSpaceSetMode(int mode);
 int vitabrightOledGetLut(unsigned char out[LUT_SIZE]);
@@ -25,10 +32,13 @@ int vitabrightLcdSetBrightnessValues(unsigned char in[LCD_LUT_LEVELS]);
 int vitabrightLcdPersistBrightnessValues(void);
 
 static VitaBrightStatus status;
+static VitaBrightDiagnostics diagnostics;
 static ScreenFilterParams filter;
 static unsigned char oled_lut[LUT_SIZE];
 static unsigned char lcd_lut[LCD_LUT_LEVELS];
-static int status_ok, filter_ok, lut_ok, color_ok, color_mode = -1, cursor;
+static char plugin_build[VBE_BUILD_ID_SIZE];
+static int status_ok, diagnostics_ok, build_ok, build_match;
+static int filter_ok, lut_ok, color_ok, color_mode = -1, cursor;
 static char msg[96];
 
 static const char *cap(int s) {
@@ -46,14 +56,23 @@ static void set_msg(const char *s) { snprintf(msg, sizeof(msg), "%s", s); }
 
 static int refresh(void) {
     memset(&status, 0, sizeof(status));
+    memset(&diagnostics, 0, sizeof(diagnostics));
+    memset(plugin_build, 0, sizeof(plugin_build));
     status_ok = vitabrightGetStatus(&status) >= 0 && status.abi_version >= 2;
     if (!status_ok) {
-        filter_ok = lut_ok = color_ok = 0; color_mode = -1;
+        diagnostics_ok = build_ok = build_match = 0;
+        filter_ok = lut_ok = color_ok = 0;
+        color_mode = -1;
         set_msg("Cannot read VitaBrightEX v1.4 status ABI.");
         return -1;
     }
+    diagnostics_ok = vitabrightGetDiagnostics(&diagnostics) >= 0 && diagnostics.abi_version == 1;
+    build_ok = vitabrightGetBuildId(plugin_build) >= 0;
+    plugin_build[VBE_BUILD_ID_SIZE - 1] = '\0';
+    build_match = build_ok && strcmp(plugin_build, VBE_BUILD_ID) == 0;
     filter_ok = vitabrightFilterGetParams(&filter) >= 0;
-    color_ok = 0; color_mode = -1;
+    color_ok = 0;
+    color_mode = -1;
     if (usable(status.display_color_space)) {
         int m = vitabrightColorSpaceGetMode();
         if (m == 0 || m == 1) { color_mode = m; color_ok = 1; }
@@ -99,7 +118,8 @@ static void edit(int delta) {
         int v = (int)oled_lut[cursor] + delta;
         if (v < 0) v = 0;
         if (v > 255) v = 255;
-        unsigned char old = oled_lut[cursor]; oled_lut[cursor] = (unsigned char)v;
+        unsigned char old = oled_lut[cursor];
+        oled_lut[cursor] = (unsigned char)v;
         if (vitabrightOledSetLut(oled_lut) < 0) { oled_lut[cursor] = old; set_msg("OLED LUT update rejected; previous table retained."); }
         else set_msg("OLED LUT updated in RAM; Square atomically persists it.");
     } else if (status.hardware == VBE_HW_LCD) {
@@ -108,7 +128,8 @@ static void edit(int delta) {
         int hi = cursor == LCD_LUT_LEVELS - 1 ? 255 : lcd_lut[cursor + 1];
         if (v < lo) v = lo;
         if (v > hi) v = hi;
-        unsigned char old = lcd_lut[cursor]; lcd_lut[cursor] = (unsigned char)v;
+        unsigned char old = lcd_lut[cursor];
+        lcd_lut[cursor] = (unsigned char)v;
         if (vitabrightLcdSetBrightnessValues(lcd_lut) < 0) { lcd_lut[cursor] = old; set_msg("LCD LUT update rejected; previous table retained."); }
         else set_msg("LCD LUT updated in RAM; Square atomically persists it.");
     }
@@ -118,24 +139,30 @@ static void edit(int delta) {
 static void line(vita2d_pgf *font, float y, unsigned c, const char *s) { vita2d_pgf_draw_text(font, 24.0f, y, c, 1.0f, s); }
 
 static void draw(vita2d_pgf *font) {
-    char b[160]; float y = 35.0f;
+    char b[180]; float y = 31.0f;
     vita2d_start_drawing(); vita2d_clear_screen();
-    line(font, y, WHITE, "VitaBrightEX pseudo-v1.4 capability editor"); y += 28;
-    if (!status_ok) { line(font, y, BAD, "Plugin status ABI unavailable."); y += 28; line(font, y, DIM, msg); goto out; }
-    snprintf(b, sizeof(b), "Hardware: %s  firmware: 0x%08X  ABI: %u", status.hardware == VBE_HW_OLED ? "PCH-1000 OLED" : status.hardware == VBE_HW_LCD ? "PCH-2000 LCD" : "unknown", (unsigned)status.firmware, (unsigned)status.abi_version); line(font, y, WHITE, b); y += 24;
-    snprintf(b, sizeof(b), "Core=%s  table=%s  layout=%s  lock=%s", cap(status.brightness_core), cap(status.brightness_table), cap(status.firmware_layout), cap(status.state_lock)); line(font, y, WHITE, b); y += 24;
-    snprintf(b, sizeof(b), "Brightness hook=%s  power hook=%s  invert=%s", cap(status.brightness_hook), cap(status.power_limit_hook), cap(status.invert)); line(font, y, WHITE, b); y += 24;
-    snprintf(b, sizeof(b), "Panel color-space=%s mode=%s  CSC=%s transfer=%s", cap(status.display_color_space), color_ok ? (color_mode ? "1" : "0") : "n/a", cap(status.csc_filter), cap(status.transfer_lut)); line(font, y, color_ok ? WHITE : DIM, b); y += 24;
-    snprintf(b, sizeof(b), "Last kernel error: %d detail: 0x%08X", status.last_error, (unsigned)status.last_error_detail); line(font, y, status.last_error ? BAD : OK, b); y += 32;
-    if (status.hardware == VBE_HW_OLED) {
-        snprintf(b, sizeof(b), "Panel type: %d", status.panel_type); line(font, y, WHITE, b); y += 24;
-        if (lut_ok) { snprintf(b, sizeof(b), "OLED LUT byte %d/%d (row %d col %d): 0x%02X", cursor + 1, LUT_SIZE, cursor / LUT_LINE_SIZE, cursor % LUT_LINE_SIZE, oled_lut[cursor]); line(font, y, WHITE, b); y += 24; }
-    } else if (status.hardware == VBE_HW_LCD && lut_ok) {
-        snprintf(b, sizeof(b), "LCD LUT entry %d/%d: %u", cursor, LCD_LUT_LEVELS - 1, (unsigned)lcd_lut[cursor]); line(font, y, WHITE, b); y += 24;
+    line(font, y, WHITE, "VitaBrightEX pseudo-v1.4 capability editor"); y += 23;
+    if (!status_ok) { line(font, y, BAD, "Plugin status ABI unavailable."); y += 24; line(font, y, DIM, msg); goto out; }
+    snprintf(b, sizeof(b), "Build plugin=%s editor=%s  %s", build_ok ? plugin_build : "unavailable", VBE_BUILD_ID, build_match ? "MATCH" : "MISMATCH");
+    line(font, y, build_match ? OK : BAD, b); y += 23;
+    snprintf(b, sizeof(b), "Hardware: %s  firmware: 0x%08X  ABI: %u", status.hardware == VBE_HW_OLED ? "PCH-1000 OLED" : status.hardware == VBE_HW_LCD ? "PCH-2000 LCD" : "unknown", (unsigned)status.firmware, (unsigned)status.abi_version); line(font, y, WHITE, b); y += 23;
+    snprintf(b, sizeof(b), "Core=%s  table=%s  layout=%s  lock=%s", cap(status.brightness_core), cap(status.brightness_table), cap(status.firmware_layout), cap(status.state_lock)); line(font, y, WHITE, b); y += 23;
+    snprintf(b, sizeof(b), "Brightness hook=%s  power hook=%s  invert=%s", cap(status.brightness_hook), cap(status.power_limit_hook), cap(status.invert)); line(font, y, WHITE, b); y += 23;
+    snprintf(b, sizeof(b), "Panel color-space=%s mode=%s  CSC=%s transfer=%s", cap(status.display_color_space), color_ok ? (color_mode ? "1" : "0") : "n/a", cap(status.csc_filter), cap(status.transfer_lut)); line(font, y, color_ok ? WHITE : DIM, b); y += 23;
+    snprintf(b, sizeof(b), "Last kernel error: %d detail: 0x%08X", status.last_error, (unsigned)status.last_error_detail); line(font, y, status.last_error ? BAD : OK, b); y += 23;
+    if (diagnostics_ok) {
+        snprintf(b, sizeof(b), "Errors cfg=%d bright=%d color=%d filter=%d input=%d sync=%d", diagnostics.config_error, diagnostics.brightness_error, diagnostics.color_space_error, diagnostics.filter_error, diagnostics.input_error, diagnostics.synchronization_error);
+        line(font, y, WHITE, b); y += 23;
     }
-    line(font, y, DIM, "Left/Right select | Up/Down edit | X invert | Triangle color-space | Square save"); y += 24;
-    line(font, y, DIM, "Circle reload | Select refresh | Start exit"); y += 24;
-    line(font, y, DIM, "CCT/gamma/contrast/panel curves stay disabled when status reports unsupported."); y += 30;
+    if (status.hardware == VBE_HW_OLED) {
+        snprintf(b, sizeof(b), "Panel type: %d", status.panel_type); line(font, y, WHITE, b); y += 23;
+        if (lut_ok) { snprintf(b, sizeof(b), "OLED LUT byte %d/%d (row %d col %d): 0x%02X", cursor + 1, LUT_SIZE, cursor / LUT_LINE_SIZE, cursor % LUT_LINE_SIZE, oled_lut[cursor]); line(font, y, WHITE, b); y += 23; }
+    } else if (status.hardware == VBE_HW_LCD && lut_ok) {
+        snprintf(b, sizeof(b), "LCD LUT entry %d/%d: %u", cursor, LCD_LUT_LEVELS - 1, (unsigned)lcd_lut[cursor]); line(font, y, WHITE, b); y += 23;
+    }
+    line(font, y, DIM, "Left/Right select | Up/Down edit | X invert | Triangle color-space | Square save"); y += 23;
+    line(font, y, DIM, "Circle reload | Select refresh | Start exit"); y += 23;
+    line(font, y, DIM, "CCT/gamma/contrast/panel curves stay disabled when unsupported."); y += 26;
     if (msg[0]) line(font, y, WHITE, msg);
 out:
     vita2d_end_drawing(); vita2d_swap_buffers();
