@@ -33,45 +33,39 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y \
-            xvfb unzip p7zip-full binutils file \
-            qt6-base-dev libqt6svg6 libqt6multimedia6 libsdl2-2.0-0
+          sudo apt-get install -y p7zip-full binutils file
 
-      - name: Download current Vita3K Linux build
+      - name: Extract and decrypt the os0 filesystem only
         shell: bash
         run: |
           set -euxo pipefail
-          curl -fL --retry 5 --retry-delay 2 \
-            https://github.com/Vita3K/Vita3K/releases/download/continuous/ubuntu-latest.zip \
-            -o vita3k.zip
-          unzip -q vita3k.zip -d vita3k-bin
-          exe="$(find vita3k-bin -type f \( -name 'Vita3K' -o -name 'vita3k' \) | head -n1)"
-          test -n "$exe"
-          chmod +x "$exe"
-          printf '%s\n' "$exe" > vita3k-exe.txt
-          echo '=== Vita3K dynamic dependencies ==='
-          ldd "$exe"
-          if ldd "$exe" | grep -q 'not found'; then
-            echo 'Vita3K has unresolved host libraries' >&2
-            exit 1
-          fi
-
-      - name: Install 3.65 into isolated Vita3K filesystem
-        shell: bash
-        run: |
-          set -euxo pipefail
-          exe="$(cat vita3k-exe.txt)"
-          mkdir -p isolated-home isolated-config
-          export HOME="$PWD/isolated-home"
-          export QT_QPA_PLATFORM=offscreen
-          xvfb-run -a "$exe" \
-            --firmware "$PWD/PSP2UPDAT-365.PUP" \
-            --config-location "$PWD/isolated-config" \
-            >vita3k-install.log 2>&1
-          cat vita3k-install.log
-          find "$PWD" "$HOME" -type f \
-            \( -iname '*lowio*.skprx' -o -iname '*sceLowio*.skprx' \) \
-            -print | tee lowio-paths.txt
+          git clone --depth 1 https://github.com/RealYoti/sceutils.git sceutils-audit
+          cp sceutils-audit/keys_external.py sceutils-audit/keys.py
+          # pup_fiction imports require the unarzl path to exist even though the
+          # os0-only path below never executes SLB2/unarzl processing.
+          mkdir -p sceutils-audit/unarzl
+          : > sceutils-audit/unarzl/unarzl
+          cat > extract_os0.py <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, 'sceutils-audit')
+          import pup_fiction
+          os.makedirs('fw/PUP')
+          os.makedirs('fw/PUP_dec')
+          pup_fiction.pup_extract_files('PSP2UPDAT-365.PUP', 'fw/PUP')
+          pup_fiction.pup_decrypt_packages('fw/PUP', 'fw/PUP_dec')
+          if not os.path.isfile('fw/PUP_dec/os0.bin'):
+              raise SystemExit('os0.bin was not produced')
+          PY
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            python:2.7-buster \
+            bash -lc "pip install --disable-pip-version-check 'pycryptodome<3.10' enum34 && python extract_os0.py"
+          file fw/PUP_dec/os0.bin
+          sha256sum fw/PUP_dec/os0.bin
+          mkdir -p fw/os0
+          7z x -y fw/PUP_dec/os0.bin -ofw/os0 >/dev/null
+          find fw/os0 -type f \( -iname '*lowio*.skprx' -o -iname '*sceLowio*.skprx' \) -print | tee lowio-paths.txt
           test -s lowio-paths.txt
           test "$(wc -l < lowio-paths.txt)" -eq 1
 
@@ -79,8 +73,6 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          git clone --depth 1 https://github.com/RealYoti/sceutils.git sceutils-audit
-          cp sceutils-audit/keys_external.py sceutils-audit/keys.py
           raw="$(cat lowio-paths.txt)"
           echo "raw SceLowio: $raw"
           file "$raw"
@@ -128,4 +120,4 @@ jobs:
         if: always()
         shell: bash
         run: |
-          rm -rf PSP2UPDAT-365.PUP SceLowio-365.elf isolated-home isolated-config vita3k-bin vita3k.zip sceutils-audit
+          rm -rf PSP2UPDAT-365.PUP SceLowio-365.elf fw sceutils-audit extract_os0.py
