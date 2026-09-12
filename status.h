@@ -33,6 +33,16 @@ typedef enum {
     VBE_ERR_LUT_ROLLBACK = 12,
 } VbeError;
 
+typedef enum {
+    VBE_ERROR_DOMAIN_CONFIG = 0,
+    VBE_ERROR_DOMAIN_BRIGHTNESS = 1,
+    VBE_ERROR_DOMAIN_COLOR_SPACE = 2,
+    VBE_ERROR_DOMAIN_FILTER = 3,
+    VBE_ERROR_DOMAIN_INPUT = 4,
+    VBE_ERROR_DOMAIN_SYNC = 5,
+    VBE_ERROR_DOMAIN_COUNT = 6,
+} VbeErrorDomain;
+
 typedef struct {
     uint32_t abi_version;
     uint32_t firmware;
@@ -46,9 +56,6 @@ typedef struct {
     int brightness_hook;
     int power_limit_hook;
     int invert;
-    /* ABI v2 keeps this slot and struct size unchanged.  The old member name
-     * was lcd_color_space; v1.4 now uses the same slot for the selected
-     * panel's matched Get/SetDisplayColorSpaceMode capability on OLED or LCD. */
     union {
         int display_color_space;
         int lcd_color_space;
@@ -61,10 +68,31 @@ typedef struct {
     int last_error_detail;
 } VitaBrightStatus;
 
+/* Additive diagnostics ABI: VitaBrightStatus remains ABI v2 and unchanged in
+ * size. This structure makes independent subsystem failures observable without
+ * allowing an unrelated successful operation to erase them. */
+typedef struct {
+    uint32_t abi_version;
+    int config_error;
+    int config_detail;
+    int brightness_error;
+    int brightness_detail;
+    int color_space_error;
+    int color_space_detail;
+    int filter_error;
+    int filter_detail;
+    int input_error;
+    int input_detail;
+    int synchronization_error;
+    int synchronization_detail;
+} VitaBrightDiagnostics;
+
 extern VitaBrightStatus g_vbe_status;
 
 void status_init(int hardware, uint32_t firmware);
 void status_set_error(int error, int detail);
-void status_clear_error(void);
+void status_set_error_domain(int domain, int error, int detail);
+void status_clear_error_domain(int domain);
 
 int vitabrightGetStatus(VitaBrightStatus *out);
+int vitabrightGetDiagnostics(VitaBrightDiagnostics *out);
