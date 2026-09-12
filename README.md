@@ -123,6 +123,8 @@ VitaShell FTP deployment uses absolute mount paths with `curl --ftp-method nocwd
 
 GitHub Actions gates production-shared LUT parsing, config parsing, source authority, error lifecycle/rollback and unsupported-filter policy; structural source invariants; firmware audit tooling; release/diagnostic SKPRX under warnings-as-errors; generated syscall stubs; matching editor; and a PCH-2000 hardware bundle. The branch-exact workflow also prints SHA-256 for release SKPRX, diagnostic SKPRX, editor VPK and the bundle manifest.
 
+The final pre-hardware software checkpoint is commit `1b1d3b47552b79358fa0b3a2ad59aa381ea9be12`, push workflow #331 / run `34711327763`. It passed all semantic/structural tests and all release, diagnostic, editor and bundle build/upload stages. Plugin and editor both embed build ID `1b1d3b47`.
+
 ## Hardware evidence — do not over-promote
 
 ```text
