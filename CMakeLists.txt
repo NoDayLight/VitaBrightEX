@@ -25,6 +25,8 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -Wall -Wextra -Werror -O3 -fno-pic -f
 add_executable(vitabright
     main.c
     main.h
+    module_lifecycle_core.c
+    module_lifecycle_core.h
     log.c
     log.h
     build_info.c

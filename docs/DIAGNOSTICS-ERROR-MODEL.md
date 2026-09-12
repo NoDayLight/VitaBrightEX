@@ -38,6 +38,24 @@ operation fails + unlock fails
 
 A failed unlock changes internal lock lifecycle to `DEGRADED`; ordinary runtime acquisition is no longer legal. A later confirmed synchronization cycle may clear a repaired SYNC fault. Status/LUT getters do not copy their snapshot to userland when unlock ownership cannot be confirmed.
 
+## Module lifecycle boundary
+
+Module orchestration records only whether startup crossed successful synchronization creation:
+
+```text
+INERT
+    runtime initialization never committed, or clean stop completed
+
+RUNTIME
+    synchronization creation succeeded; normal runtime teardown responsibility exists
+```
+
+This is deliberately not another resource-ownership model. Mutex, backend, filter, color-space and persistence ownership remain authoritative in their existing subsystems.
+
+If `state_lock_init()` fails, it records the SYNC failure and leaves lock lifecycle ABSENT. Startup returns fail-open `SCE_KERNEL_START_SUCCESS` before config-file loading, backend hooks/injection, invert/color-space programming or persistence resource creation. The resulting `INERT + ABSENT` module is clean and may unload directly.
+
+That does not make ABSENT a generic success condition. `RUNTIME + ABSENT`, either module state with DEGRADED, and other inconsistent pairs are unload-unsafe.
+
 ## Legacy summary precedence
 
 For compatibility, `last_error/detail` is derived deterministically from the domain state using this fixed precedence:
@@ -117,7 +135,21 @@ Detailed failing stages remain available to diagnostic logging/production outcom
 
 ## Stop transaction
 
-Module stop first enters a quiesced synchronization state so ordinary user operations cannot start. It then attempts, under serialization:
+Stop first classifies module orchestration state together with the lock lifecycle:
+
+```text
+INERT + ABSENT
+    -> no runtime teardown responsibility
+    -> SCE_KERNEL_STOP_SUCCESS
+
+RUNTIME + RUNNING
+    -> enter the serialized runtime stop transaction
+
+all other pairs
+    -> SCE_KERNEL_STOP_FAIL
+```
+
+The runtime stop then attempts, under STOPPING serialization:
 
 ```text
 invert/filter restoration
@@ -126,9 +158,11 @@ invert/filter restoration
 -> mutex unlock/delete
 ```
 
-Each subsystem retains its own error domain. A tiny stop accumulator answers only whether unload is safe. Any unresolved stop-critical failure returns `SCE_KERNEL_STOP_FAIL`; the module remains resident. Successful later teardown stages do not erase earlier domain failures.
+Each subsystem retains its own error domain. A tiny stop accumulator answers only whether unload is safe. Any unresolved runtime stop-critical failure returns `SCE_KERNEL_STOP_FAIL`; the module remains resident. Successful later teardown stages do not erase earlier domain failures.
 
-Color-space ownership is relinquished only after original mode is confirmed by read-back. Invert has no verified getter; therefore setter failure is treated as unconfirmed restoration and blocks successful unload. Mutex ID/lifecycle are relinquished only after confirmed unlock/delete.
+Color-space ownership is relinquished only after original mode is confirmed by read-back. Invert has no verified getter; therefore setter failure is treated as unconfirmed restoration and blocks successful unload. Mutex ID/lifecycle are relinquished only after confirmed unlock/delete. Module orchestration returns to INERT only after confirmed mutex deletion.
+
+If stop teardown fails and cancellation unlock also fails, SYNC remains failed/DEGRADED and future unload cannot take the inert path. If mutex deletion fails after a successful stop unlock, runtime responsibility remains rather than being discarded.
 
 ## Unsupported filter requests
 
@@ -143,7 +177,8 @@ Production-shared host suites cover distinct layers:
 - `tests/transaction_core_host.c` — ownership transitions, rollback legality/result dominance, source commit/persistence eligibility and stop accumulator;
 - `tests/persistence_core_host.c` — persistence sequence plus fd/temp ownership under injected failures;
 - `tests/state_lock_core_host.c` — runtime/STOPPING/DEGRADED mutex lifecycle and operation+unlock precedence;
+- `tests/module_lifecycle_core_host.c` — inert startup/stop symmetry, runtime stop eligibility, DEGRADED rejection, failed-delete responsibility and clean-stop idempotence using the production module/lock lifecycle cores;
 - `tests/status_error_host.c` — independent domains, stop-domain preservation, rollback diagnostics and summary precedence;
 - `tests/filter_policy_host.c` — unsupported-capability policy.
 
-Structural CI guards obvious regressions but is not semantic proof.
+Structural CI guards the startup ordering and stop classification boundary in addition to the existing ownership tripwires; it remains a guardrail rather than semantic proof.

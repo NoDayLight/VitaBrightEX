@@ -7,6 +7,7 @@ VitaBrightEX is a hardening/rearchitecture fork of [devnoname120/vitabright](htt
 ## Design contract
 
 - Optional enhancement failure at boot must never prevent LiveArea from loading.
+- Successful synchronization creation is the runtime-initialization boundary. If mutex creation fails first, the loaded module remains inert/resource-free and has a clean unload path without pretending ABSENT synchronization is generally safe.
 - Exactly one brightness backend is selected: OLED on PCH-1000, LCD on PCH-2000.
 - Runtime mutation starts only from a known ownership state; uncertain resource ownership stops further backend mutation.
 - Backend setup/live replacement uses explicit CLEAN / ACTIVE / DEGRADED ownership and clean-vs-dirty transaction outcomes.
@@ -17,7 +18,7 @@ VitaBrightEX is a hardening/rearchitecture fork of [devnoname120/vitabright](htt
 - Compiled LCD fallback has no guessed file target; normal Save returns `VBE_RESULT_NO_FILE_SOURCE`.
 - Fallback occurs only when the preferred source is explicitly absent at OPEN; other open errors and all post-open errors are terminal.
 - Independent error domains are authoritative internal state; legacy `last_error/detail` is derived output only.
-- Module unload succeeds only after session display state, backend resources and synchronization ownership are confirmed restored/released.
+- Runtime module unload succeeds only after session display state, backend resources and synchronization ownership are confirmed restored/released. An inert module that never crossed the synchronization boundary owns none of those resources and may unload directly.
 - No polling thread, timer, periodic filesystem read, framebuffer interception or per-frame software processing is introduced.
 - Unknown firmware/layouts do not receive guessed raw offsets.
 - A control is exposed only where the hardware interface is sufficiently verified.
@@ -124,9 +125,21 @@ SYNC > BRIGHTNESS > CONFIG > COLOR_SPACE > FILTER > INPUT
 
 ## Stop safety
 
-Module stop enters a quiesced synchronization state, restores invert, restores/read-backs original panel color-space, tears down persistence/backend resources, then unlocks/deletes the mutex. A tiny stop accumulator answers only whether unload is safe; detailed failures remain in their subsystem domains.
+The module has one orchestration boundary in addition to the existing resource-specific ownership states: `INERT` means startup never crossed successful synchronization creation; `RUNTIME` means it did. This is not a second backend or mutex ownership model.
 
-If any stop-critical restore/release cannot be confirmed, `module_stop()` returns `SCE_KERNEL_STOP_FAIL` and the plugin remains resident. Mutex identity is forgotten only after confirmed delete.
+Startup performs only firmware/model detection, status/error initialization and compiled-safe config defaults before `state_lock_init()`. If mutex creation fails, `module_start()` deliberately returns `SCE_KERNEL_START_SUCCESS` fail-open while the module remains `INERT` and the lock remains `ABSENT`. No config file is loaded, no hook/injection is installed, no invert/color-space mutation occurs and no persistence temporary resource exists. `INERT + ABSENT` therefore has a direct clean `SCE_KERNEL_STOP_SUCCESS` path.
+
+`ABSENT` is not globally interpreted as safe. The production module-lifecycle core permits only:
+
+```text
+INERT + ABSENT     -> clean inert stop
+RUNTIME + RUNNING  -> full serialized stop transaction
+all other pairs    -> unload unsafe
+```
+
+The runtime stop enters STOPPING, restores invert, restores/read-backs original panel color-space, tears down persistence/backend resources, then unlocks/deletes the mutex. A tiny stop accumulator answers only whether unload is safe; detailed failures remain in their subsystem domains.
+
+If any runtime stop-critical restore/release cannot be confirmed, `module_stop()` returns `SCE_KERNEL_STOP_FAIL` and the plugin remains resident. DEGRADED synchronization never takes the inert shortcut. Module lifecycle returns to `INERT` only after confirmed mutex deletion; this also makes an already-clean repeated stop benign without weakening dirty-state safety.
 
 ## Unsupported filter semantics
 
@@ -154,7 +167,7 @@ VitaShell FTP deployment uses absolute mount paths with `curl --ftp-method nocwd
 
 ## Build and validation
 
-GitHub Actions compiles/runs production-shared regressions for LUT parser, config parser, source authority, transaction/ownership/source provenance/stop, persistence ownership/sequencing, synchronization lifecycle/result composition, diagnostics/error lifecycle and unsupported-filter policy. Structural checks remain tripwires only.
+GitHub Actions compiles/runs production-shared regressions for LUT parser, config parser, source authority, transaction/ownership/source provenance/stop, persistence ownership/sequencing, synchronization lifecycle/result composition, module startup/stop lifecycle symmetry, diagnostics/error lifecycle and unsupported-filter policy. Structural checks remain tripwires only.
 
 Release and diagnostic SKPRX, generated syscall stubs, matching editor and PCH-2000 bundle build under current VitaSDK with warnings treated as errors.
 

@@ -8,6 +8,7 @@
 #include "lcd/hooks.h"
 #include "log.h"
 #include "main.h"
+#include "module_lifecycle_core.h"
 #include "oled/hooks.h"
 #include "screen_filter.h"
 #include "state_lock.h"
@@ -16,6 +17,8 @@
 
 unsigned int sw_version = 0;
 int g_is_oled = 0;
+
+static int g_module_lifecycle = VBE_MODULE_INERT;
 
 static int detect_is_lcd(void) {
     return (*(uint8_t *)(ksceKernelSysrootGetKblParam() + 0xE8) & 9) != 0;
@@ -37,13 +40,12 @@ int module_start(SceSize argc, const void *args) {
     status_init(is_lcd ? VBE_HW_LCD : VBE_HW_OLED, sw_version);
     config_reset_defaults();
 
-    int lock_ret = state_lock_init();
-    if (lock_ret < 0) {
-        g_vbe_status.state_lock = VBE_CAP_FAILED;
+    if (state_lock_init() < 0)
         return SCE_KERNEL_START_SUCCESS;
-    }
-    g_vbe_status.state_lock = VBE_CAP_ACTIVE;
-    status_clear_error_domain(VBE_ERROR_DOMAIN_SYNC);
+
+    /* Successful synchronization creation is the runtime-init commit point.
+     * Everything below may acquire session/backend ownership. */
+    g_module_lifecycle = VBE_MODULE_RUNTIME;
 
     int config_ret = config_load();
     if (config_ret < 0)
@@ -106,6 +108,13 @@ int module_stop(SceSize argc, const void *args) {
     (void)argc;
     (void)args;
 
+    int stop_mode = vbe_module_stop_mode(g_module_lifecycle,
+                                         state_lock_lifecycle());
+    if (stop_mode == VBE_MODULE_STOP_INERT)
+        return SCE_KERNEL_STOP_SUCCESS;
+    if (stop_mode != VBE_MODULE_STOP_RUNTIME)
+        return SCE_KERNEL_STOP_FAIL;
+
     if (state_lock_begin_shutdown() < 0)
         return SCE_KERNEL_STOP_FAIL;
 
@@ -118,16 +127,13 @@ int module_stop(SceSize argc, const void *args) {
 
     if (!vbe_stop_can_unload(&stop)) {
         if (state_lock_cancel_shutdown() < 0)
-            g_vbe_status.state_lock = VBE_CAP_FAILED;
+            return SCE_KERNEL_STOP_FAIL;
         return SCE_KERNEL_STOP_FAIL;
     }
 
-    if (state_lock_finish_shutdown() < 0) {
-        g_vbe_status.state_lock = VBE_CAP_FAILED;
+    if (state_lock_finish_shutdown() < 0)
         return SCE_KERNEL_STOP_FAIL;
-    }
 
-    g_vbe_status.state_lock = VBE_CAP_INACTIVE;
-    status_clear_error_domain(VBE_ERROR_DOMAIN_SYNC);
+    g_module_lifecycle = VBE_MODULE_INERT;
     return SCE_KERNEL_STOP_SUCCESS;
 }

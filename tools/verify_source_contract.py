@@ -24,6 +24,14 @@ def forbid(path: Path, needle: str, message: str) -> None:
         errors.append(message)
 
 
+def require_before(path: Path, first: str, second: str, message: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    first_pos = text.find(first)
+    second_pos = text.find(second)
+    if first_pos < 0 or second_pos < 0 or first_pos >= second_pos:
+        errors.append(message)
+
+
 for path in C_SOURCES:
     forbid(path, "0x0FCBF457",
            f"{path.relative_to(ROOT)} reintroduces speculative IFTU NID")
@@ -95,11 +103,33 @@ for nid in ("0x17F66722", "0xD40968FB", "0x4F8A1D4A", "0xDABBD9D3"):
 require(ROOT / "color_space.c", "g_original_mode", "color-space original state snapshot missing")
 require(ROOT / "color_space.c", "current = g_get_mode()", "color-space read-back verification missing")
 require(ROOT / "main.c", "color_space_shutdown()", "module stop no longer restores color-space state")
-require(ROOT / "main.c", "state_lock_begin_shutdown()", "module stop no longer quiesces runtime operations")
-require(ROOT / "main.c", "state_lock_cancel_shutdown()", "failed stop cannot return to resident runtime")
+require(ROOT / "main.c", "state_lock_begin_shutdown()", "runtime module stop no longer quiesces operations")
+require(ROOT / "main.c", "state_lock_cancel_shutdown()", "failed runtime stop cannot return to resident state")
 require(ROOT / "main.c", "state_lock_finish_shutdown()", "module stop bypasses confirmed mutex teardown")
 require(ROOT / "main.c", "vbe_stop_can_unload", "module stop no longer uses explicit unload-safety accumulator")
 require(ROOT / "main.c", "SCE_KERNEL_STOP_FAIL", "stop-critical failures no longer cancel unload")
+require(ROOT / "main.c", "vbe_module_stop_mode",
+        "module stop no longer distinguishes inert startup from runtime teardown")
+require(ROOT / "main.c", "g_module_lifecycle = VBE_MODULE_RUNTIME",
+        "successful synchronization creation no longer commits runtime lifecycle")
+require(ROOT / "main.c", "g_module_lifecycle = VBE_MODULE_INERT",
+        "confirmed normal stop no longer returns module lifecycle to inert")
+forbid(ROOT / "main.c", "state_lock_lifecycle() == VBE_LOCK_ABSENT",
+       "module stop special-cases ABSENT without the module lifecycle contract")
+forbid(ROOT / "main.c", "g_vbe_status.state_lock =",
+       "main.c duplicates synchronization status ownership from state_lock.c")
+require_before(ROOT / "main.c", "state_lock_init()", "config_load()",
+               "authoritative config load occurs before synchronization commit boundary")
+require_before(ROOT / "main.c", "state_lock_init()", "lcd_enable_hooks()",
+               "LCD backend can initialize before synchronization commit boundary")
+require_before(ROOT / "main.c", "state_lock_init()", "oled_enable_hooks()",
+               "OLED backend can initialize before synchronization commit boundary")
+require_before(ROOT / "main.c", "state_lock_init()", "color_space_apply_config()",
+               "color-space mutation can begin before synchronization commit boundary")
+require_before(ROOT / "main.c", "state_lock_init()", "screen_filter_apply(",
+               "filter mutation can begin before synchronization commit boundary")
+require_before(ROOT / "main.c", "vbe_module_stop_mode", "state_lock_begin_shutdown()",
+               "module stop enters runtime shutdown before classifying inert/runtime lifecycle")
 
 require(ROOT / "status.c", "s.abi_version = 2", "status ABI v2 changed unexpectedly")
 require(ROOT / "status.c", "vitabrightGetDiagnostics", "per-domain diagnostics syscall missing")
@@ -135,7 +165,8 @@ require(root_cmake, 'set(VBE_FTP_UX0 "${VBE_FTP_ROOT}//ux0:")',
 for relative in (":1337/ur0:/", ":1337/ux0:/"):
     forbid(root_cmake, relative, f"relative Vita FTP path returned: {relative}")
 require(root_cmake, "VBE_BUILD_ID", "plugin build identity is not generated")
-for core in ("source_authority.c", "transaction_core.c", "persistence_core.c", "state_lock_core.c", "filter_policy.c"):
+for core in ("source_authority.c", "transaction_core.c", "persistence_core.c",
+             "state_lock_core.c", "module_lifecycle_core.c", "filter_policy.c"):
     require(root_cmake, core, f"production shared core is not linked: {core}")
 require(ROOT / "editor" / "CMakeLists.txt", "VBE_BUILD_ID", "editor build identity is not generated")
 
@@ -150,6 +181,7 @@ for test_source in (
     "tests/transaction_core_host.c",
     "tests/persistence_core_host.c",
     "tests/state_lock_core_host.c",
+    "tests/module_lifecycle_core_host.c",
 ):
     require(validator, test_source, f"production semantic host suite not executed: {test_source}")
 

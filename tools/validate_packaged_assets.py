@@ -88,6 +88,11 @@ run_host_test("state_lock_core_host", [
     "tests/state_lock_core_host.c",
     "state_lock_core.c",
 ])
+run_host_test("module_lifecycle_core_host", [
+    "tests/module_lifecycle_core_host.c",
+    "module_lifecycle_core.c",
+    "state_lock_core.c",
+])
 run_host_test("status_error_host", [
     "tests/status_error_host.c",
 ])
@@ -101,4 +106,4 @@ if errors:
         print(f"ERROR: {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("packaged assets + production parser/authority/transaction/persistence/synchronization/status/filter contracts: OK")
+print("packaged assets + production parser/authority/transaction/persistence/synchronization/module-lifecycle/status/filter contracts: OK")
