@@ -82,6 +82,16 @@ jobs:
           SKPRX is deliberately a separate artifact and is not part of this bundle.
           EOF
           (cd hardware-test && sha256sum README.txt WORKFLOW_COMMIT.txt ur0_tai/vitabright.skprx ur0_tai/vitabright_lcd_lut.txt ur0_tai/vitabrightex.cfg vitabrightex-editor.vpk > SHA256SUMS)
+      - name: Report branch-exact payload hashes
+        run: |
+          echo "release vitabright.skprx"
+          sha256sum build/vitabright.skprx
+          echo "diagnostic vitabright.skprx"
+          sha256sum build-diagnostic/vitabright.skprx
+          echo "editor VPK"
+          sha256sum editor-build/vitabrightex-editor.vpk
+          echo "hardware-test manifest"
+          cat hardware-test/SHA256SUMS
       - name: Upload release plugin
         uses: actions/upload-artifact@v7
         with:
