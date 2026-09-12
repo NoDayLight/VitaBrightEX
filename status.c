@@ -57,6 +57,16 @@ void status_get_error_domain(int domain, int *error, int *detail) {
     if (detail != 0) *detail = slot.detail;
 }
 
+void status_recovery_result(int domain, int succeeded,
+                            int requested_error, int requested_detail,
+                            int recovery_error, int recovery_detail) {
+    VbeErrorSlot requested = { requested_error, requested_detail };
+    VbeErrorSlot recovery = { recovery_error, recovery_detail };
+    vbe_error_state_recovery(&g_error_state, domain, succeeded,
+                             requested, recovery);
+    refresh_summary();
+}
+
 int vitabrightGetStatus(VitaBrightStatus *out) {
     int state;
     int ret;
