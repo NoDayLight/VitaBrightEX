@@ -239,7 +239,7 @@ int vitabrightColorSpaceGetMode(void) {
         color_error(ret);
     }
 
-    (void)state_lock_release();
+    ret = state_lock_release_result(ret);
     EXIT_SYSCALL(state);
     return ret;
 }
@@ -255,17 +255,16 @@ int vitabrightColorSpaceSetMode(int mode) {
 
     if (!valid_mode(mode)) {
         status_stage_result(VBE_ERROR_DOMAIN_INPUT, 0,
-                            VBE_ERR_INVALID_USER_INPUT, mode);
-        (void)state_lock_release();
+                        VBE_ERR_INVALID_USER_INPUT, mode);
+        ret = state_lock_release_result(-1);
         EXIT_SYSCALL(state);
-        return -1;
+        return ret;
     }
 
     status_stage_result(VBE_ERROR_DOMAIN_INPUT, 1,
                         VBE_ERR_INVALID_USER_INPUT, 0);
     ret = set_mode_locked(mode);
-
-    (void)state_lock_release();
+    ret = state_lock_release_result(ret);
     EXIT_SYSCALL(state);
     return ret;
 }
