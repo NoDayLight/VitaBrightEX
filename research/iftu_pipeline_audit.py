@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse, json
-from collections import defaultdict
 from pathlib import Path
 from capstone.arm import ARM_OP_IMM, ARM_OP_MEM, ARM_OP_REG
 from vita_elf_audit import FunctionCFG, Reachability, VitaElf
@@ -15,7 +14,6 @@ IFTU_PRIVATE={0x0FCBF457:"private_csc_cache_A",0x357EAE24:"private_control",0xD6
 DISPLAY_PUBLIC={0x9E3C6DC6:"ksceDisplaySetBrightness",0x19140ACD:"ksceDisplaySetInvertColors"}
 EXPECTED_IFTU_VA={0x0D7C02F7:0x8100639C,0x0FCBF457:0x81005D48,0x357EAE24:0x810062B4,0x67E37EFC:0x8100678C,0x7CE0C4DA:0x81005FEC,0xAF19FD85:0x81006338,0xC11F30B3:0x81006714,0xD64F4C6B:0x81005E24,0xE6EE2C6B:0x81005F20}
 INSTANCE_BASE=0x8100B37C
-INSTANCE_STRIDE=0x214
 
 
 def die(x): raise SystemExit(x)
@@ -23,13 +21,11 @@ def load(path,sha):
     e=VitaElf(path)
     if e.sha256!=sha: die(f"SHA mismatch {e.modinfo['name']}: {e.sha256}")
     return e
-
 def find_export(e,nid):
     for lib in e.exports():
         for fn in lib['functions']:
             if fn['nid']==nid:return lib,fn
     return None,None
-
 def insns(cfg):
     d={}
     for b in cfg.blocks.values():
@@ -43,8 +39,6 @@ def read_words(e,va,n):
     return [int.from_bytes(e.data[off+4*i:off+4*i+4],'little') for i in range(n)]
 def signed32(x):return x-(1<<32) if x&0x80000000 else x
 def s3_9(w):
-    # Sony's retail YCbCr matrices prove that this field is a signed 12-bit
-    # fixed-point quantity with 9 fractional bits: e.g. 0xF93 = -109/512.
     if w&0xFFFFF000 in (0,0xFFFFF000):
         v=w&0xFFF
         if v&0x800:v-=0x1000
@@ -108,8 +102,11 @@ def main():
         _,f=find_export(disp,n)
         if f:dm[nm]=f
     gens=[display_gen(disp,dr,0x81000A2C,'internal_0x81000A2C')]+[display_gen(disp,dr,dm[nm]['va'],nm) for nm in ('ksceDisplaySetBrightness','ksceDisplaySetInvertColors')]
-    plane_slots={hex(va):read_words(disp,va,1)[0] for va in (0x8100B020,0x8100B024,0x8100B0B8,0x8100B0BC)}
-    result={'schema':2,'firmware':'3.65','elf_sha256':{'SceLowio':low.sha256,'SceDisplay':disp.sha256},'iftu_exports':ex,'instance_refs':exact_instance_refs(lr),'private_calls':{f"0x{n:08X}":private_calls(dr,n) for n in IFTU_PRIVATE},'display_generators':gens,'display_static_plane_slots':plane_slots,'proven_structural_mapping':{
+    # The plane-selection globals used by SceDisplay live in a runtime/BSS mapping
+    # not backed by bytes in this decrypted ELF. Treat that as a runtime fact to
+    # observe, never as a static zero/default inferred from absent file data.
+    plane_slots={hex(va):None for va in (0x8100B020,0x8100B024,0x8100B0B8,0x8100B0BC)}
+    result={'schema':2,'firmware':'3.65','elf_sha256':{'SceLowio':low.sha256,'SceDisplay':disp.sha256},'iftu_exports':ex,'instance_refs':exact_instance_refs(lr),'private_calls':{f"0x{n:08X}":private_calls(dr,n) for n in IFTU_PRIVATE},'display_generators':gens,'display_runtime_plane_slots':plane_slots,'proven_structural_mapping':{
       'SceIftuCscParams_size':0x3c,
       'private_cache_A':{'offset':0x10c,'live_block':[0x104,0x12c],'matches_public_conv_field':'csc_params2 (+0x0C)'},
       'private_cache_B':{'offset':0x148,'live_block':[0x130,0x168],'matches_public_conv_field':'csc_params1 (+0x08)'},
@@ -126,8 +123,8 @@ def main():
     print('  csc_control (+0x10) -> live +0x100')
     print('  private 0x357EAE24 cache +0x1F8 -> live +0x8C/+0xA0; it is NOT public csc_control')
     print('  0x8100639C -> ksceIftuEnable, which reapplies cached CSC blocks on enable')
-    print('DISPLAY_STATIC_PLANE_SLOTS')
-    for k,v in plane_slots.items():print(f'  {k} = 0x{v:08X}')
+    print('DISPLAY_RUNTIME_PLANE_SLOTS')
+    for k in plane_slots:print(f'  {k} = RUNTIME/BSS; requires read-only physical snapshot')
     print('SONY_CSC_NUMERIC_TABLES')
     seen=set()
     for g in gens:
