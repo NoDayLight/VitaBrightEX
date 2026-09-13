@@ -99,6 +99,19 @@ run_host_test("status_error_host", [
 run_host_test("filter_policy_host", [
     "tests/filter_policy_host.c",
     "filter_policy.c",
+    "filter_state_core.c",
+])
+run_host_test("filter_state_host", [
+    "tests/filter_state_host.c",
+    "filter_state_core.c",
+])
+run_host_test("oled_transform_host", [
+    "tests/oled_transform_host.c",
+    "oled/transform_core.c",
+])
+run_host_test("affine_core_host", [
+    "tests/affine_core_host.c",
+    "affine_core.c",
 ])
 
 if errors:
@@ -106,4 +119,4 @@ if errors:
         print(f"ERROR: {error}", file=sys.stderr)
     raise SystemExit(1)
 
-print("packaged assets + production parser/authority/transaction/persistence/synchronization/module-lifecycle/status/filter contracts: OK")
+print("packaged assets + production contracts: OK")
