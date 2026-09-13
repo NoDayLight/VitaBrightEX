@@ -57,7 +57,7 @@ static void copy_bytes(uint8_t *dst, const volatile uint8_t *src, uint32_t n) {
 }
 
 static void zero_bytes(void *dst, uint32_t n) {
-    uint8_t *p = (uint8_t *)dst;
+    volatile uint8_t *p = (volatile uint8_t *)dst;
     uint32_t i;
     for (i = 0; i < n; ++i) p[i] = 0;
 }
@@ -523,7 +523,8 @@ int vbeTraceSnapshot(VbeTraceSnapshot *out) {
     snap.available_mask = available;
     snap.flags = bytes_equal(&a, &b, (uint32_t)sizeof(a)) ?
                  VBE_TRACE_SNAPSHOT_STABLE : 0u;
-    snap.data = b;
+    copy_bytes((uint8_t *)&snap.data, (const volatile uint8_t *)&b,
+               (uint32_t)sizeof(b));
     ENTER_SYSCALL(cpu_state);
     ret = ksceKernelMemcpyKernelToUser(out, &snap, sizeof(snap));
     EXIT_SYSCALL(cpu_state);
