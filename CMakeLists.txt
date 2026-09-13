@@ -12,7 +12,9 @@ include("${CMAKE_SOURCE_DIR}/cmake/VbeBuildId.cmake")
 vbe_resolve_build_id(VBE_BUILD_ID "${CMAKE_SOURCE_DIR}")
 message(STATUS "VitaBrightEX build id: ${VBE_BUILD_ID}")
 option(ENABLE_LOGGING "Enable debug logging to ur0:data/vitabright_log.txt" OFF)
-if(ENABLE_LOGGING) add_definitions(-DENABLE_LOGGING=1) endif()
+if(ENABLE_LOGGING)
+    add_definitions(-DENABLE_LOGGING=1)
+endif()
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -Wall -Wextra -Werror -O3 -fno-pic -fno-PIC -std=gnu99")
 add_executable(vitabright
  main.c main.h module_lifecycle_core.c module_lifecycle_core.h result_core.c result_core.h
