@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Focused retail-3.65 display-state audit.
 
-This consumes the proof-grade reachable CFG model from vita_elf_audit.py and
-emits only derived evidence needed for ownership/restoration decisions.  Raw
-firmware bytes are never written by this tool.
+This consumes the reachable-CFG model from vita_elf_audit.py and emits derived
+evidence needed for ownership/restoration decisions. On these retail modules
+there is no exidx boundary data, so the CFG walker is not claimed as a generic
+proof-grade function-boundary recovery system. Raw firmware bytes are never
+written by this tool.
 """
 from pathlib import Path
 from collections import defaultdict
@@ -97,6 +99,12 @@ def verify_iftu_setter(lowio, reach):
         0x81005D76: 'add.w r2, r6, #0x10c',
         0x81005D7A: 'add.w r0, r4, #0x30',
         0x81005D7E: 'ldr.w sl, [r3]',
+        0x81005DA6: 'ldr.w lr, [r3]',
+        0x81005DAA: 'ldr r0, [r3, #4]',
+        0x81005DAC: 'ldr r3, [r3, #8]',
+        0x81005DAE: 'str.w lr, [r2]',
+        0x81005DB2: 'str r0, [r2, #4]',
+        0x81005DB4: 'str r3, [r2, #8]',
         0x81005DB8: 'add.w r4, r6, #0x10c',
         0x81005DBC: 'ldr.w r3, [r6, #0x1e8]',
         0x81005DC0: 'cbz r3, #0x81005e0c',
@@ -104,19 +112,23 @@ def verify_iftu_setter(lowio, reach):
         0x81005DDC: 'str.w fp, [r3, #0x104]',
         0x81005E04: 'str.w r4, [r3, #0x12c]',
         0x81005E12: 'movs r0, #0',
+        0x81005E18: 'mov.w r0, #0x700',
+        0x81005E1C: 'movt r0, #0x803f',
     }
     for va, want in required.items():
         got = by.get(va)
         if got != want:
             raise SystemExit('IFTU invariant mismatch at 0x%08X: %r != %r' % (va, got, want))
     print('IFTU_0FCBF457_RECONSTRUCTION')
-    print('  r0: indexed instance, accepted range 0..4')
-    print('  r1: optional pointer to UNKNOWN_IFTU_STATE_30; non-NULL copies exactly 0x30 bytes')
-    print('  r1=NULL: does not create identity/default state; reuses cached instance+0x10C state')
+    print('  r0: IFTU plane index, accepted range 0..4; r0>4 returns 0x803F0700 (SCE_IFTU_ERROR_INVALID_PLANE)')
+    print('  r1: optional pointer to a 0x3C / 15-word CSC parameter object')
+    print('  non-NULL: three 16-byte loop copies + three trailing 32-bit words = exactly 0x3C bytes')
+    print('  object layout: strongly corroborated as SceIftuCscParams by pinned VitaSDK 0x3C definition')
+    print('  r1=NULL: selects cached instance+0x10C object; external reapply semantics are not yet proven')
     print('  r2/r3: not consumed as entry arguments before being overwritten internally')
-    print('  active gate: instance+0x1E8; when active cached words are copied to object+0x104..0x12C')
-    print('  return: 0 on accepted instance path; invalid r0 follows dedicated error return')
-    print('  production ABI status: BLOCKED — state field meanings/original-state restoration unresolved')
+    print('  active gate: instance+0x1E8; cached values feed hardware-state object writes')
+    print('  private NID semantic name/complete prototype: NOT YET PROVEN')
+    print('  production ABI status: BLOCKED — original-state acquisition/restoration/power lifecycle unresolved')
 
 
 def print_iftu_state_machine(lowio, reach):
@@ -131,7 +143,6 @@ def print_iftu_state_machine(lowio, reach):
             if x.mnemonic.lower() in ('bl', 'blx'):
                 interesting.append((x.address, text))
                 continue
-            # Keep only memory/state operations around the known object/state range.
             if ('#0x10' in text or '#0x11' in text or '#0x12' in text or
                 '#0x13' in text or '#0x14' in text or '#0x15' in text or
                 '#0x16' in text or '#0x1e8' in text or '#0x1f8' in text or
@@ -155,7 +166,6 @@ def audit_invert(display, reach):
         raise SystemExit('invert export missing')
     cfg = reach.functions.get((target['va'], target['thumb'])) or FunctionCFG(display, target['va'], target['thumb'], reach.import_stubs)
     lines = {x.address: f'{x.mnemonic} {x.op_str}'.strip() for x in insns(cfg)}
-    # Exact setter-state writes observed on the two accepted head/index paths.
     required_fragments = ((0x8100303C, '#0xe4]'), (0x81003088, '#0x4c]'))
     for va, fragment in required_fragments:
         if va not in lines or fragment not in lines[va]:
