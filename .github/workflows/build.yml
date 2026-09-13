@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - v1.4-rearchitecture
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,100 +15,154 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - name: Verify pseudo-v1.4 source contract
-        run: python3 tools/verify_source_contract.py
-      - name: Verify parser/runtime/CI contract
-        run: python3 tools/verify_parser_contract.py
-      - name: Validate packaged assets with production parsers
-        run: python3 tools/validate_packaged_assets.py
-      - name: Validate firmware-audit tooling
-        run: python3 -m py_compile tools/verify_scelcd_layout.py
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Verify exact-head semantic contracts
+        run: |
+          printf 'WORKFLOW_HEAD=%s\n' "$GITHUB_SHA"
+          python3 tools/verify_source_contract.py
+          python3 tools/verify_parser_contract.py
+          python3 tools/generate_cct_table.py --check
+          python3 tools/validate_packaged_assets.py
+          python3 -m py_compile tools/verify_scelcd_layout.py
+
+      - name: Run display production-shared regressions explicitly
+        run: |
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/result_core_host.c result_core.c -o /tmp/result-test
+          /tmp/result-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/config_source_state_host.c config_state_core.c source_authority.c -o /tmp/config-source-test
+          /tmp/config-source-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/filter_policy_host.c filter_policy.c filter_state_core.c -o /tmp/filter-policy-test
+          /tmp/filter-policy-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/filter_state_host.c filter_state_core.c -o /tmp/filter-state-test
+          /tmp/filter-state-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/oled_transform_host.c oled/transform_core.c -o /tmp/oled-transform-test
+          /tmp/oled-transform-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/oled_state_host.c oled/state_core.c oled/transform_core.c source_authority.c -o /tmp/oled-state-test
+          /tmp/oled-state-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/affine_core_host.c affine_core.c -o /tmp/affine-test
+          /tmp/affine-test
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: vitasdk/vdpm
+          ref: c83b88a54ec13372515eeb8b3bdca4b10c36d721
           path: vdpm
-      - name: Bootstrap VitaSDK
+
+      - name: Bootstrap pinned VitaSDK package manager
         run: |
+          printf 'VDPM_CHECKOUT=%s\n' "$(git -C vdpm rev-parse HEAD)"
           bash vdpm/bootstrap-vitasdk.sh
           echo "$VITASDK/bin" >> "$GITHUB_PATH"
-      - name: Install dependencies
+          "$VITASDK/bin/vdpm" install taihen libvita2d
+          echo '--- VitaSDK package state ---'
+          "$VITASDK/bin/vdpm" status
+          "$VITASDK/bin/vdpm" list
+          echo '--- compiler identity ---'
+          "$VITASDK/bin/arm-vita-eabi-gcc" --version | head -n 1
+
+      - name: Build release and diagnostic with -Werror
         run: |
-          vdpm install taihen
-          vdpm install libvita2d
-      - name: Configure release plugin
-        run: cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DENABLE_LOGGING=OFF
-      - name: Build release plugin and stubs
-        run: cmake --build build --parallel
-      - name: Configure diagnostic plugin
-        run: cmake -S . -B build-diagnostic -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DENABLE_LOGGING=ON
-      - name: Build diagnostic plugin
-        run: cmake --build build-diagnostic --parallel
-      - name: Install generated syscall stubs
-        run: cmake --install build --prefix "$VITASDK/arm-vita-eabi"
-      - name: Configure editor
-        run: cmake -S editor -B editor-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
-      - name: Build editor
-        run: cmake --build editor-build --parallel
-      - name: Prepare PCH-2000 hardware-test bundle
+          cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DENABLE_LOGGING=OFF
+          cmake --build build --parallel
+          cmake -S . -B build-diagnostic -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DENABLE_LOGGING=ON
+          cmake --build build-diagnostic --parallel
+
+      - name: Generate and install syscall stubs
         run: |
+          test -d build/vitabright-stubs
+          cmake --install build --prefix "$VITASDK/arm-vita-eabi"
+
+      - name: Build editor against generated stubs
+        run: |
+          cmake -S editor -B editor-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          cmake --build editor-build --parallel
+
+      - name: Verify plugin/editor build identity
+        run: |
+          BUILD_ID="${GITHUB_SHA:0:8}"
+          printf 'EXPECTED_BUILD_ID=%s\n' "$BUILD_ID"
+          "$VITASDK/bin/arm-vita-eabi-strings" build/vitabright.skprx | grep -F "$BUILD_ID"
+          unzip -p editor-build/vitabrightex-editor.vpk eboot.bin > /tmp/vbe-editor-eboot.bin
+          "$VITASDK/bin/arm-vita-eabi-strings" /tmp/vbe-editor-eboot.bin | grep -F "$BUILD_ID"
+          printf '%s\n' "$BUILD_ID" > BUILD_ID.txt
+
+      - name: Prepare exact PCH-2000 hardware-test bundle
+        run: |
+          rm -rf hardware-test hardware-bundle.zip
           mkdir -p hardware-test/ur0_tai
           cp build/vitabright.skprx hardware-test/ur0_tai/vitabright.skprx
-          cp release/ur0_tai/vitabright_lcd_lut.txt hardware-test/ur0_tai/vitabright_lcd_lut.txt
-          cp release/ur0_tai/vitabrightex.cfg hardware-test/ur0_tai/vitabrightex.cfg
+          cp lcd/luts/vitabright_lcd_lut.txt hardware-test/ur0_tai/vitabright_lcd_lut.txt
+          cp vitabrightex.cfg hardware-test/ur0_tai/vitabrightex.cfg
           cp editor-build/vitabrightex-editor.vpk hardware-test/vitabrightex-editor.vpk
+          cp BUILD_ID.txt hardware-test/BUILD_ID.txt
           printf '%s\n' "$GITHUB_SHA" > hardware-test/WORKFLOW_COMMIT.txt
           cat > hardware-test/README.txt <<EOF
-          VitaBrightEX pseudo-v1.4 PCH-2000 hardware-test bundle
+          VitaBrightEX pseudo-v1.4 controlled PCH-2000 hardware gate
           Commit: $GITHUB_SHA
+          Build ID: ${GITHUB_SHA:0:8}
 
-          Kernel-side files:
-            ur0_tai/vitabright.skprx
-            ur0_tai/vitabright_lcd_lut.txt
-            ur0_tai/vitabrightex.cfg
-
-          Editor-side file (separate Vita application):
-            vitabrightex-editor.vpk
-
-          Install the matching VPK when the test requires the build MATCH/MISMATCH
-          display or the current editor wording. Replacing files under ur0:tai does
-          not update an already-installed editor application. An older ABI-v2 editor
-          may still read the base status structure, but cannot prove component
-          provenance or show diagnostics ABI v1.
-
-          The release SKPRX is the parser cold-boot test binary. The diagnostic
-          SKPRX is deliberately a separate artifact and is not part of this bundle.
+          This bundle contains the release SKPRX, normal commented production
+          LCD LUT, production config and matching editor VPK. The diagnostic
+          SKPRX is intentionally kept as a separate CI artifact.
           EOF
-          (cd hardware-test && sha256sum README.txt WORKFLOW_COMMIT.txt ur0_tai/vitabright.skprx ur0_tai/vitabright_lcd_lut.txt ur0_tai/vitabrightex.cfg vitabrightex-editor.vpk > SHA256SUMS)
-      - name: Report branch-exact payload hashes
+          (
+            cd hardware-test
+            sha256sum \
+              README.txt \
+              WORKFLOW_COMMIT.txt \
+              BUILD_ID.txt \
+              ur0_tai/vitabright.skprx \
+              ur0_tai/vitabright_lcd_lut.txt \
+              ur0_tai/vitabrightex.cfg \
+              vitabrightex-editor.vpk > SHA256SUMS
+            sha256sum -c SHA256SUMS
+          )
+          zip -X -r hardware-bundle.zip hardware-test >/dev/null
+
+      - name: Report exact-head payload hashes
         run: |
-          echo "release vitabright.skprx"
-          sha256sum build/vitabright.skprx
-          echo "diagnostic vitabright.skprx"
-          sha256sum build-diagnostic/vitabright.skprx
-          echo "editor VPK"
-          sha256sum editor-build/vitabrightex-editor.vpk
-          echo "hardware-test manifest"
+          printf 'HEAD=%s\n' "$GITHUB_SHA"
+          sha256sum \
+            build/vitabright.skprx \
+            build-diagnostic/vitabright.skprx \
+            editor-build/vitabrightex-editor.vpk \
+            vitabrightex.cfg \
+            lcd/luts/vitabright_lcd_lut.txt \
+            oled/luts/vitabright_lut.txt \
+            oled/luts/vitabright_lut_p4.txt \
+            oled/luts/vitabright_lut_p5.txt \
+            oled/luts/vitabright_lut_p6.txt \
+            hardware-bundle.zip
+          echo '--- bundle manifest ---'
           cat hardware-test/SHA256SUMS
+          echo '--- workflow commit ---'
+          cat hardware-test/WORKFLOW_COMMIT.txt
+          echo '--- build id ---'
+          cat hardware-test/BUILD_ID.txt
+
       - name: Upload release plugin
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: VitaBrightEX-v1.4-plugin
           path: build/vitabright.skprx
+
       - name: Upload diagnostic plugin
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: VitaBrightEX-v1.4-diagnostic-plugin
           path: build-diagnostic/vitabright.skprx
+
       - name: Upload editor
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: VitaBrightEX-v1.4-editor
           path: editor-build/vitabrightex-editor.vpk
-      - name: Upload PCH-2000 hardware-test bundle
-        uses: actions/upload-artifact@v7
+
+      - name: Upload controlled PCH-2000 hardware bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: VitaBrightEX-v1.4-PCH2000-hwtest
-          path: hardware-test/
+          path: hardware-bundle.zip

@@ -1,253 +1,206 @@
 # Pseudo-v1.4 hardware validation matrix
 
-No physical-hardware row is passed from source review or CI alone. Kernel/display behaviour must be observed on real hardware before draft PR #1 is merged. Detailed first-unit evidence remains in [`HARDWARE-RESULTS-2026-09-12.md`](HARDWARE-RESULTS-2026-09-12.md).
+Hardware rows are never passed by source review or CI alone. The purpose of the final software checkpoint is to make one exact build safe and coherent enough for controlled physical validation.
 
 ## Software gate
 
-The exact commit installed for hardware testing must have a fresh branch-exact green workflow for:
+The exact hardware-test commit must have branch-exact green CI covering:
 
-- architectural/source structural contracts;
-- parser/runtime/deployment structural contracts;
-- byte-identical packaged LUT/config assets;
-- compiled production LUT parser regressions;
-- compiled production config parser regressions;
-- compiled production source-authority regressions;
-- compiled production transaction/ownership/source-provenance/stop regressions;
-- compiled production persistence sequencing/ownership regressions;
-- compiled production synchronization lifecycle/result regressions;
-- compiled error lifecycle/domain/rollback/stop-domain regressions;
-- compiled unsupported-filter policy regressions;
-- firmware-audit tooling;
-- release plugin/stubs under `-Werror`;
-- diagnostic plugin under `-Werror`;
-- generated-stub installation;
-- matching editor build;
-- PCH-2000 hardware-test bundle generation;
-- branch-exact payload SHA-256 reporting and artifact uploads.
+- source/parser structural contracts;
+- packaged-asset byte identity;
+- production LUT/config parsers;
+- source authority and config-source rollback;
+- transaction ownership and result severity;
+- persistence ownership/sequencing;
+- synchronization and module lifecycle;
+- diagnostics/error domains;
+- filter requested/committed/unsupported truth;
+- OLED register transform and complete base/runtime state;
+- reproducible CCT generation and pure affine host tests;
+- release SKPRX under `-Werror`;
+- diagnostic SKPRX under `-Werror`;
+- generated/installed syscall stubs;
+- matching editor against those stubs;
+- exact checkout/toolchain/package reporting;
+- exact payload SHA-256 and one PCH-2000 hardware-bundle ZIP containing its own commit/manifest.
 
-Semantic proof comes from compiled production-shared C cores, not Python shadow logic or source-text grep. Structural scripts are tripwires only.
+Semantic tests compile the production-shared C cores. Source greps are structural guardrails only.
 
-## Source-authority rule
+## Proven pre-existing PCH-2000 evidence
 
-See [`SOURCE-AUTHORITY.md`](SOURCE-AUTHORITY.md).
-
-```text
-OPEN VBE_SCE_IO_ERROR_NOT_FOUND (0x80010002)
-    -> fallback eligible
-
-OPEN any other failure
-    -> terminal
-
-OPEN success, then READ/PARSE/CLOSE failure
-    -> terminal
-```
-
-`VBE_SCE_IO_ERROR_NOT_FOUND` is project-owned compatibility knowledge, not a claimed current VitaSDK generic symbol.
-
-Committed LUT source identity is `FILE`, `COMPILED`, or `NONE`. Only ACTIVE + FILE is normal persistence-eligible. A failed candidate never changes persistence destination; successful rollback restores the previous source identity. A degraded backend cannot persist historical source metadata.
-
-## Ownership/diagnostics rule
-
-See [`DIAGNOSTICS-ERROR-MODEL.md`](DIAGNOSTICS-ERROR-MODEL.md).
-
-Backend ownership:
+Target: PCH-2000 Slim / LCD, firmware `0x03650000`, 3.65 Ensō.
 
 ```text
-CLEAN      no backend taiHEN resources owned
-ACTIVE     complete committed backend installed
-DEGRADED   ownership/recovery not proven clean; no new start
-```
-
-A clean failed candidate may be rolled back. A dirty candidate cleanup may not. taiHEN teardown is power hook -> brightness hook -> table injection and stops at the first failed release.
-
-Error domains are independent. `last_error/detail` is only the derived compatibility summary. Runtime unlock failure belongs to SYNC and dominates the scalar syscall return while preserving the operation's own domain error.
-
-## Safety and provenance prerequisites
-
-1. Preserve the exact known-good `ur0:tai/config.txt` and existing plugin/LUT/config backups. Do not reconstruct the normal stack manually.
-2. Confirm the Vita boots with that known-good stack and the established recovery/bypass path remains available.
-3. Test release SKPRX first. Diagnostic SKPRX is used only when an observed failure needs trace data.
-4. Use VitaShell FTP absolute mount syntax with `curl --ftp-method nocwd`: `//ur0:/...` or `//ux0:/...`.
-5. Treat kernel plugin and editor VPK as separate components.
-6. For diagnostics/provenance/UI gates, install the matching VPK and require `plugin=<sha8> editor=<sha8> MATCH`.
-7. Record `WORKFLOW_COMMIT.txt`, workflow/run number and SHA-256 values before transfer; round-trip/hash Vita copies where practical.
-8. Never mark firmware supported merely because LiveArea boots; required capability and diagnostic state must also match.
-9. Do not use an engineering-intermediate commit when a later known software fix exists.
-
-## Gate A — PCH-2000 / 3.65 Ensō
-
-Target: physical PCH-2000, system software `0x03650000`, 3.65 Ensō.
-
-### Recorded evidence — unchanged
-
-```text
-A1 isolated cold boot: PASS
-v1.3 hang: not reproduced
-old malformed-LUT fail-open: PASS
-3.65 SceLcd segment 0 / 0x1B48: physical runtime exact-signature PASS
-static decrypted-image verification: PENDING
-stock-vs-extended A/B: PASS
+isolated hardened cold boot: PASS
+v1.3 boot hang: not reproduced
+malformed-LUT fail-open: PASS
+SceLcd segment 0 / 0x1B48 runtime signature: PROVEN
+SceLcd segment 0 / 0x1B48 retail static signature: PROVEN
+stock-vs-extended LUT A/B: PASS
 brightness slider sweep: PASS
-mid inactivity dim: PASS
+mid-brightness inactivity dim: PASS
 very-low behavior: consistent with design
-true maximum inactivity: PENDING
+true-maximum inactivity behavior: PENDING
 suspend/resume: PENDING
 normal plugin-stack compatibility: PENDING
-A2 overall: PARTIAL
+RGB-range pattern behavior: PENDING
 ```
 
-The `0x1B48` observation is physical runtime exact-signature evidence only, not static decrypted-image verification.
+Static provenance is documented separately in [`FIRMWARE-LAYOUT-VERIFICATION.md`](FIRMWARE-LAYOUT-VERIFICATION.md).
 
-### A1. Boot isolation / compatibility progression
+## Gate A — final safe-default cold boot
 
-Progression remains:
-
-`v1.4 isolated (passed) -> + ioPlus -> + VitaGrafix 5.0.2 + ioPlus -> exact preserved normal plugin stack`
-
-Each stage must reach LiveArea, report LCD/firmware correctly, keep lock/layout/core/table/hooks active with valid input, and keep CSC/transfer explicitly unsupported.
-
-### A2. LCD brightness regression
-
-The real system-slider min -> max -> min sweep is passed. Remaining: true maximum inactivity behavior, application brightness transitions, explicit suspend/resume and repeated reloads.
-
-The editor LUT cursor is not current system brightness. If true-maximum dim differs from prediction, use the separately built diagnostic SKPRX and inspect `[LCD:DIM]` / `[LCD:POWER]` before changing release behavior.
-
-### A3. Final commented-LUT cold-boot checkpoint
-
-Use one exact final green bundle containing matching release SKPRX, normal commented production LCD LUT, production config and matching editor VPK. Full power-off, normal cold boot, and **do not press Circle/reload before inspection**.
-
-Required initial result:
+Use exactly one authoritative CI bundle containing:
 
 ```text
-Build plugin=<sha8> editor=<sha8> MATCH
-Hardware: PCH-2000 LCD
-firmware: 0x03650000
-ABI: 2
+release vitabright.skprx
+normal commented vitabright_lcd_lut.txt
+production vitabrightex.cfg
+matching editor VPK
+WORKFLOW_COMMIT.txt
+SHA256SUMS
+```
+
+First capture is deliberately narrow:
+
+```text
+full power off
+normal boot
+no L bypass
+no Circle/reload before first inspection
+```
+
+Expected state:
+
+```text
+Build plugin=<same sha8> editor=<same sha8> MATCH
+Hardware PCH-2000 LCD
+firmware 0x03650000
+ABI 2
 Core=active
-table=active
-layout=active
-lock=active
+Table=active
+Layout=active
+Lock=active
 Brightness hook=active
-power hook=active
-Last kernel error: 0
-detail: 0x00000000
-Errors cfg=0 bright=0 color=0 filter=0 input=0 sync=0
+Power hook=active
+Last kernel error=0
+detail=0
+cfg=0 bright=0 color=0 filter=0 input=0 sync=0
 ```
 
-Any mismatch/unresolved error stops the gate. Circle must not be used to hide startup state.
+Generic filter capabilities may display `unsupported`; that is capability truth, not an error.
 
-### A4. Live LCD transaction / source provenance / persistence
+## Gate B — LCD high-contrast/color-space mode
 
-After A3 passes:
+After Gate A, toggle only the verified panel color-space/high-contrast mode. Record original mode, request the alternate mode, require read-back equality, then return to original and verify. Repeat around app launch and suspend/resume before claiming lifecycle coverage.
 
-- make one valid monotonic RAM edit and verify immediate transactional apply;
-- press Square and verify kernel-authoritative FILE persistence;
-- reload and cold reboot, confirming exact value/source returns;
-- test compiled fallback separately: Square must report no authoritative file rather than materializing one;
-- test invalid user input;
-- test preferred missing + fallback valid;
-- test preferred malformed;
-- where practical, distinguish preferred open/read/close failure from absence;
-- exercise candidate failure with clean rollback success;
-- exercise rollback/dirty cleanup failure only through a controlled safe fault-injection mechanism.
+Historical config keys `lcd_color_space_mode`, `lcd_ips_enhance` and `lcd_saturation_boost` all target this same one hardware state. They are not tested as independent effects.
 
-Pass semantics:
+## Gate C — brightness lifecycle
 
-- malformed/unreadable opened authority never falls through;
-- only OPEN-stage explicit absence permits fallback;
-- invalid user input mutates no table and belongs to INPUT;
-- candidate B failure + rollback A leaves active LUT/source/persistence identity A;
-- dirty candidate cleanup forbids rollback/reinit and disables persistence;
-- persistence failure leaves committed source identity unchanged and does not report Save success;
-- clean rollback failure reports `VBE_ERR_LUT_ROLLBACK`;
-- dirty cleanup/recovery reports `VBE_ERR_RESOURCE_RELEASE`;
-- editor says previous table restored only when kernel status confirms it.
+Exercise:
 
-### A5. Persistence failure stages
+- min -> max -> min system-slider sweep;
+- true maximum followed by inactivity dim;
+- mid and very-low brightness inactivity behavior;
+- app-driven brightness/power transitions;
+- suspend/resume cycles;
+- repeated explicit reloads after initial capture.
 
-Where safe fault injection exists, exercise temp open/write/sync/close/rename/cleanup failures. Required invariants:
+The diagnostic SKPRX is used only if an observed release-build failure needs logs.
+
+## Gate D — source/persistence/rollback
+
+After safe-default boot:
+
+- make one valid monotonic LCD RAM edit and verify immediate apply;
+- persist a FILE source and verify reboot/reload identity;
+- separately exercise COMPILED fallback: save must report no file source rather than materialize one;
+- preferred missing + fallback valid;
+- preferred malformed: terminal, no fallback;
+- candidate replacement failure with clean rollback;
+- controlled dirty/fault paths only when a safe injection mechanism exists.
+
+Required invariant:
 
 ```text
-pre-commit failure -> authoritative file not replaced
-rename failure -> authoritative file not reported committed
-failed close -> fd ownership retained until confirmed cleanup
-failed temp cleanup -> temp ownership remains unresolved and Save fails
-successful rename -> source identity remains final FILE path, never .tmp
+committed FILE ux0:A
+candidate FILE ur0:B
+candidate backend fails cleanly
+rollback succeeds
+=> authoritative source remains ux0:A
 ```
 
-### A6. Error-domain and synchronization lifecycle
+## Gate E — generic filters
 
-Induce only safe/recoverable faults and verify:
+For pseudo-v1.4 generic filter mutation is intentionally unsupported:
 
 ```text
-old CONFIG error
--> fix config
--> later BRIGHTNESS failure
-=> cfg=0, bright!=0
-
-old BRIGHTNESS error
--> brightness repair
--> later COLOR_SPACE failure
-=> bright=0, color!=0
-
-CONFIG still broken
--> brightness succeeds
-=> cfg!=0, bright=0
-
-operation failure + successful unlock
-=> operation failure returned
-
-operation success + unlock failure
-=> SYNC failure returned
-
-operation failure + unlock failure
-=> SYNC scalar result dominates while operation domain remains visible
+invert       UNSUPPORTED
+AFFINE_CSC   UNSUPPORTED
+TRANSFER     UNSUPPORTED
 ```
 
-`last_error` follows documented summary precedence; diagnostics remain full truth.
+No invert on/off hardware test is requested because original-state ownership was not proven. Instead verify that a non-neutral request is retained in `GetState.requested`, appears in `unsupported_domains`, leaves committed state neutral, produces no FILTER runtime error and causes no display mutation.
 
-### A7. Layout conflict
+If a requested unsupported CCT is present, changing only the invert request in the editor must preserve that requested CCT rather than silently erase it.
 
-Where safely reproducible, changed stock SceLcd signature must produce layout mismatch before injection.
+## Gate F — PCH-1000 OLED
 
-### A8. Panel color-space transaction / restoration
+Use at least one known DDB P4 or P5 device before declaring OLED RGB-bias behavior physically validated.
 
-When capability is usable, record mode, toggle 0 <-> 1 repeatedly, require read-back equality, cover suspend/resume/apps, then perform controlled teardown restoration. Original-state metadata must not be relinquished until restoration read-back confirms the original mode.
+Required ordinary backend coverage:
 
-### A9. Invert / stop safety
+- DDB/panel detection;
+- layout plausibility validation;
+- base/runtime state commit;
+- brightness and inactivity behavior;
+- FILE source authority and base-only persistence;
+- rollback/degraded ownership;
+- panel color-space restoration.
 
-Verify normal invert on/off first. Later controlled stop/fault testing must ensure a failed neutralizing setter cannot be represented as successful unload. No invented invert getter is part of the contract.
+For P4/P5 RGB register bias, test small single-channel offsets first and verify the intended direction visually before stronger values. The feature is defined only as saturating register-code offsets over all seven RGB triplets per row.
 
-### A10. Unsupported filter semantics
+For P6/unknown, a non-neutral bias request must return unsupported while runtime remains the base LUT and brightness remains ACTIVE.
 
-Advanced CCT/gamma/contrast/brightness/panel-enhance requests must produce `VBE_RESULT_UNSUPPORTED`, keep CSC/transfer `unsupported`, keep FILTER error zero, and be described by the editor as unsupported rather than generic failure. No speculative framebuffer/IFTU mutation may occur.
+Warm/night mode is not a v1.4 hardware test: no calibrated profile is shipped, so the request must remain unsupported.
 
-## Gate B — PCH-1000 OLED
+## Gate G — RGB-range evidence
 
-Use at least one known DDB type 4 or 5; type 6/other successful DDB is desirable. Require correct DDB/panel detection, loaded-module layout plausibility validation, complete transaction, brightness/auto-dim sweep, invalid >16 level rejection, panel/override FILE persistence, strict source authority, clean-vs-dirty rollback semantics, dependency-safe release and color-space read-back/restore.
+Do not restore v1.3 registry mutation. On PCH-2000 use controlled test patterns containing at least:
 
-Panel-specific source order must be tested semantically: absent panel file may advance; malformed/unreadable opened panel file may not fall through to generic. Explicit override never falls back. DDB failure never becomes an assumed default panel.
+```text
+0
+16
+235
+255
+```
 
-## Gate C — capability/editor/provenance truthfulness
+If the internal LCD path already preserves full range, no feature is needed. Only demonstrated range compression plus a separately proven safe hardware transform could justify future expansion.
 
-On both hardware families verify unsupported controls stay disabled; invert/color-space are capability-gated; inactive/degraded backend operations are isolated; Square uses kernel source authority; diagnostics match induced failures; and matching components report `MATCH`. A deliberate old-editor or old-plugin pairing during a non-destructive provenance test must report mismatch.
+## Gate H — plugin-stack compatibility
 
-## Gate D — parser and authority behavior
+Reintroduce the preserved normal plugin stack incrementally after isolated release behavior is clean. Every stage must still reach LiveArea and keep brightness/layout/hooks/lock active with zero runtime diagnostics.
 
-Host CI is authoritative for exhaustive grammar/decision semantics; hardware is a spot-check. Confirm normal commented LUT cold boot, CRLF acceptance, lone/interior CR rejection, EOF without final newline, long comments, malformed/range/count/non-monotonic failure, malformed preferred no-fallback, explicit missing preferred fallback, and fail-open LiveArea behavior.
+## Gate I — stop/unload ownership
 
-Config hardware fault injection should remain conservative. Failed config parsing leaves prior committed config unchanged and sets CONFIG. A later successful config parse clears CONFIG immediately even if a later brightness stage fails.
+Where safe to exercise, confirm panel color-space original state is restored and taiHEN resources are released before clean unload. Any unresolved resource or synchronization ownership must refuse unload rather than claim success.
 
-## Gate E — firmware layouts
-
-Raw-layout attempts remain limited to 3.60, 3.65, 3.67, 3.68, 3.69 and 3.70. **3.65 has physical runtime exact-signature evidence at `0x1B48`; static decrypted-binary evidence remains pending.** 3.71–3.74 remain unsupported.
-
-## Power/performance observation
-
-No continuous worker exists by design. Compare idle behaviour under equivalent screen/radio conditions, but do not publish a `<0.01 W` or similar bound without suitable instrumentation.
+There is no generic invert restore stage because production no longer mutates invert.
 
 ## Result recording
 
-For every target record model/panel DDB, firmware/exploit, exact plugin stack, commit/build IDs, artifact hashes, release/diagnostic identity, full status + diagnostics snapshot, source identity/fault stage where relevant, runtime/static layout evidence separately, gate results and recovery action.
+Record for every physical target:
 
-PR #1 remains draft until representative physical coverage is complete.
+- model/panel DDB;
+- firmware/exploit;
+- exact plugin stack;
+- commit/build IDs;
+- workflow/run number;
+- artifact and payload hashes;
+- full status + diagnostics + filter state;
+- source identity/fault stage where relevant;
+- runtime/static layout evidence separately;
+- recovery action and final gate result.
+
+PR #1 remains draft/unmerged during this validation. No measured sub-watt bound is claimed without suitable instrumentation.

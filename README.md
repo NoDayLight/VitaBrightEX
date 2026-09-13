@@ -1,198 +1,164 @@
 # VitaBrightEX pseudo-v1.4
 
-VitaBrightEX is a hardening/rearchitecture fork of [devnoname120/vitabright](https://github.com/devnoname120/vitabright). This branch exists because VitaBrightEX 1.3 reproducibly hung a PCH-2000 / firmware 3.65 Ensō system at `PS logo → display on → no LiveArea`, while several v1.3 display paths relied on speculative or unverified assumptions.
+VitaBrightEX pseudo-v1.4 is a hardening and display-pipeline fork of VitaBrightEX. Its release rule is deliberately narrower than v1.3 marketing: a feature is writable only when the hardware mechanism, ownership, rollback, persistence and unload semantics are defensible. Optional enhancement failure must not prevent LiveArea from loading, while uncertain runtime ownership must stop further mutation.
 
-> **Development status:** PR #1 remains open, draft and unmerged. The mandatory isolated PCH-2000 / 3.65 Ensō cold boot passed without reproducing the v1.3 hang. Physical 3.65 `SceLcd` runtime validation passed the exact stock-signature gate at segment-0 `0x1B48`. Static decrypted-image verification remains pending. The transaction/ownership/persistence/stop rewrite is software-verified only until a fresh final-bundle cold boot and later controlled fault-path testing.
+> **Development state:** PR #1 remains open, draft and unmerged. PCH-2000 / firmware 3.65 Ensō has already passed the hardened brightness backend cold-boot and runtime layout gate. Retail 3.65 static analysis independently confirms the same `SceLcd` segment-0 `0x1B48` stock table. The next hardware work uses one exact final CI-built bundle after the display-pipeline checkpoint is frozen.
 
-## Design contract
+## Current capability truth
 
-- Optional enhancement failure at boot must never prevent LiveArea from loading.
-- Successful synchronization creation is the runtime-initialization boundary. If mutex creation fails first, the loaded module remains inert/resource-free and has a clean unload path without pretending ABSENT synchronization is generally safe.
-- Exactly one brightness backend is selected: OLED on PCH-1000, LCD on PCH-2000.
-- Runtime mutation starts only from a known ownership state; uncertain resource ownership stops further backend mutation.
-- Backend setup/live replacement uses explicit CLEAN / ACTIVE / DEGRADED ownership and clean-vs-dirty transaction outcomes.
-- taiHEN teardown is dependency-safe and stops at the first failed release.
-- User writes follow checked copy -> validate -> serialized transition -> commit/rollback -> checked unlock.
-- LUT source identity is `NONE`, `FILE + path`, or `COMPILED`; source identity commits only with the hardware transaction.
-- LUT persistence is kernel-authoritative and transactional relative to the committed FILE source.
-- Compiled LCD fallback has no guessed file target; normal Save returns `VBE_RESULT_NO_FILE_SOURCE`.
-- Fallback occurs only when the preferred source is explicitly absent at OPEN; other open errors and all post-open errors are terminal.
-- Independent error domains are authoritative internal state; legacy `last_error/detail` is derived output only.
-- Runtime module unload succeeds only after session display state, backend resources and synchronization ownership are confirmed restored/released. An inert module that never crossed the synchronization boundary owns none of those resources and may unload directly.
-- No polling thread, timer, periodic filesystem read, framebuffer interception or per-frame software processing is introduced.
-- Unknown firmware/layouts do not receive guessed raw offsets.
-- A control is exposed only where the hardware interface is sufficiently verified.
-- Exact shipped bytes and transaction semantics must pass the same production-shared C cores exercised by CI.
+| Capability | PCH-1000 OLED | PCH-2000 LCD |
+|---|---|---|
+| Extended brightness | transactional | transactional; physically proven on 3.65 |
+| Inactivity/power brightness hooks | implemented | implemented |
+| LUT editing and authoritative save | base LUT; FILE source only | FILE source; COMPILED has no fake save target |
+| OLED RGB register bias | **P4/P5 supported** | n/a |
+| OLED RGB bias on P6/unknown | **unsupported; base runtime retained** | n/a |
+| Warm/night profile | **unsupported; no calibration fabricated** | n/a |
+| Panel color-space/high-contrast mode | read-back verified | read-back verified |
+| Generic hardware invert | **unsupported for safe ownership** | **unsupported for safe ownership** |
+| Persistent affine CSC / CCT / contrast / brightness offset | **unsupported for v1.4** | **unsupported for v1.4** |
+| Gamma/nonlinear transfer | **unsupported** | **unsupported** |
+| True panel linearisation | **unsupported** | **unsupported** |
+| Persistent registry RGB-range mutation | not used | not used |
+
+### Why generic invert is unsupported
+
+Retail analysis verifies `ksceDisplaySetInvertColors` (`0x19140ACD`) and cached invert-related state, but no trustworthy original-state getter has been established. The previously suspected export `0x9E3C6DC6` is identified by the pinned VitaSDK headers as `ksceDisplaySetBrightness`, not an invert getter. Pseudo-v1.4 therefore does not assume the original state is zero and performs no generic invert mutation.
+
+### Why persistent CSC is unsupported
+
+Retail 3.65 analysis proves the relevant private IFTU object is **0x3C bytes**, strongly identifies it as `SceIftuCscParams`, proves `r0` is an IFTU plane index, and proves the legacy v1.3 three-argument ABI was wrong. That is not enough for ownership: original-state acquisition, active CSC-set selection, power-transition behavior and exact restoration are not sufficiently proven. No private IFTU setter is called by production v1.4.
+
+### OLED RGB-bias semantics
+
+For DDB panel types P4/P5, `color_r_bias`, `color_g_bias` and `color_b_bias` are saturating **register-code offsets**. Each offset is applied to the matching channel byte of all seven documented RGB reference triplets in every 21-byte LUT row.
+
+```text
+authoritative base LUT
+        -> panel capability decision
+        -> pure register-domain transform
+        -> derived runtime LUT
+        -> transactional injection
+```
+
+The base LUT is the only editable/persisted authority. A transform change always re-derives from base and never compounds runtime onto runtime. On P6/unknown, a non-neutral bias request returns `VBE_RESULT_UNSUPPORTED`, the applied transform is neutral, runtime remains bit-identical to base, and ordinary brightness remains healthy. These offsets are not described as linear-light gains, calibrated white balance or Kelvin CCT.
+
+## Ownership and result model
+
+Brightness backends use exactly:
+
+```text
+CLEAN     no backend taiHEN resource owned
+ACTIVE    complete committed backend installed
+DEGRADED uncertain/retained ownership; no new mutation or rollback
+```
+
+Transaction results are `TXN_OK`, `TXN_FAILED_CLEAN`, or `TXN_FAILED_DIRTY`. Rollback is legal only after a clean candidate failure when a prior committed state existed and ownership is CLEAN.
+
+Multi-stage public results compose by severity:
+
+```text
+negative runtime failure
+    > positive capability/partial result
+    > zero success
+```
+
+Synchronization release is a stricter ownership boundary: an unlock/release failure dominates the scalar syscall result while the operation's own domain error remains independently recorded.
+
+## Requested versus committed filter state
+
+`VitaBrightStatus` remains ABI v2 and `VitaBrightDiagnostics` remains additive ABI v1. `VitaBrightDisplayFilterState` ABI v1 exposes:
+
+```text
+requested parameters
+committed parameters
+requested domains
+committed domains
+unsupported domains
+failed domains
+```
+
+`GetParams` returns committed hardware state. `GetState` preserves requested intent even when unsupported. The editor clones `GetState.requested` before changing one field, so changing an invert request cannot silently erase a requested-but-unsupported CCT.
+
+## Source authority and persistence
+
+Config and LUT sources use explicit `NONE`, `FILE + exact path`, or `COMPILED + no path` identity. Only OPEN-stage explicit not-found permits fallback; once a file opens, read/parse/close failure is terminal.
+
+A candidate identity commits only with its corresponding committed state. Failed reload restores the preceding config/source snapshot. In particular:
+
+```text
+committed FILE ux0:A
+candidate FILE ur0:B
+backend replacement fails cleanly
+rollback succeeds
+=> config/source remains FILE ux0:A
+```
+
+Normal LUT persistence requires `ACTIVE + FILE`. OLED serializes the **base** LUT, never the derived runtime LUT. LCD compiled fallback returns positive `VBE_RESULT_NO_FILE_SOURCE` rather than inventing `ur0:tai/...`.
+
+## Firmware/layout evidence
+
+PCH-2000 production injection always requires the exact loaded-module Sony stock signature before mutation:
+
+```text
+31 37 43 50 58 67 77 88 100 114 129 147 166 182 203 227 255
+```
+
+For retail firmware 3.65, segment 0 + `0x1B48` is both:
+
+```text
+STATICALLY PROVEN
++
+PHYSICALLY PROVEN
+```
+
+Static provenance:
+
+```text
+retail 3.65 PUP SHA-256
+86859b3071681268b6d0beb5ef691da874b6726e85b6f06a1cdf6a0e183e77c6
+
+decrypted os0 SHA-256
+35480a01ea783df859326d8698831afd3e850717f5b7785ab9964eab23712856
+
+SceLcd ELF SHA-256
+24752bb4c69f0c241701cab0364cde9cbe5c95128b6bfe02bf3263aad524246e
+```
+
+The exact research/audit provenance is documented in [`docs/FIRMWARE-LAYOUT-VERIFICATION.md`](docs/FIRMWARE-LAYOUT-VERIFICATION.md). 3.71–3.74 remain unsupported for raw-table injection rather than receiving guessed offsets.
+
+## Performance contract
+
+No polling thread, periodic timer, framebuffer interception, CPU pixel processing, per-frame LUT recomputation or unnecessary steady-state filesystem activity is introduced. Computation occurs only at boot, explicit reload/editor mutation, or a genuinely required OS reapply path; rendering remains hardware-driven.
+
+## Validation
+
+The repository executes production-shared host tests for parsers, source authority, config-source rollback, transaction ownership, result severity, persistence, synchronization/module lifecycle, diagnostics, filter requested/committed truth, OLED transform/state ownership and the retained pure affine math core. CCT anchors are reproducibly generated and checked even though affine CSC is not linked into the production SKPRX.
+
+Release and diagnostic SKPRX are built with `-Werror`; syscall stubs are generated/installed before the matching editor is built. Final authoritative CI records toolchain/package versions, exact checkout SHA, payload hashes and a PCH-2000 hardware-test ZIP containing `WORKFLOW_COMMIT.txt` and `SHA256SUMS`.
 
 See:
 
 - [`docs/V1.4-ARCHITECTURE.md`](docs/V1.4-ARCHITECTURE.md)
 - [`docs/SOURCE-AUTHORITY.md`](docs/SOURCE-AUTHORITY.md)
 - [`docs/DIAGNOSTICS-ERROR-MODEL.md`](docs/DIAGNOSTICS-ERROR-MODEL.md)
-- [`docs/HARDWARE-RESULTS-2026-09-12.md`](docs/HARDWARE-RESULTS-2026-09-12.md)
-- [`docs/HARDWARE-TEST-MATRIX.md`](docs/HARDWARE-TEST-MATRIX.md)
 - [`docs/FIRMWARE-LAYOUT-VERIFICATION.md`](docs/FIRMWARE-LAYOUT-VERIFICATION.md)
+- [`docs/HARDWARE-TEST-MATRIX.md`](docs/HARDWARE-TEST-MATRIX.md)
 
-## Current capabilities
-
-| Capability | PCH-1000 OLED | PCH-2000 LCD |
-|---|---|---|
-| Extended brightness | transactional | transactional |
-| Inactivity-dim workaround | implemented | implemented |
-| Power-mode brightness hook | implemented | implemented |
-| Panel/LUT selection | DDB-based | n/a |
-| Live LUT editing | validation + clean rollback/degraded stop | monotonic validation + clean rollback/degraded stop |
-| Authoritative LUT save | FILE source only | FILE source only; COMPILED explicitly has no save target |
-| Hardware colour invert | when SceDisplay export resolves | when SceDisplay export resolves |
-| Panel color-space Get/Set | read-back verified | read-back verified |
-| Persistent registry RGB-range mutation | not used | not used |
-| Persistent active-scanout CSC | unsupported | unsupported |
-| Gamma/nonlinear panel processing | unsupported | unsupported |
-
-The old private `0x0FCBF457` IFTU path remains removed. VitaSDK's documented `ksceIftuCsc()` does not establish the persistent display-head setter assumed by v1.3.
-
-## Source authority and provenance
-
-The production-shared source core distinguishes OPEN success, explicit no-entry, and other I/O errors. Once a file opens, read/parse/close failure is terminal.
+## Physical evidence already recorded
 
 ```text
-OPEN success -> authoritative source
-OPEN VBE_SCE_IO_ERROR_NOT_FOUND -> fallback eligible
-OPEN other error -> terminal
-READ/PARSE/CLOSE after OPEN -> terminal
-```
-
-`VBE_SCE_IO_ERROR_NOT_FOUND` is the project-owned compatibility name for `0x80010002`. Current public VitaSDK generic headers do not expose a generic `SCE_ERROR_ERRNO_ENOENT` symbol used here; the value is corroborated by Vita ecosystem behavior including h-encore/Vita3K. The project does not claim SDK ownership of that symbol.
-
-LCD has a compiled safe table only when both documented LUT files are explicitly absent. That candidate commits as `COMPILED`, not as a fake `ur0` path. OLED does not invent a compiled LUT.
-
-## Parser / CI contract
-
-LCD/OLED LUT and config parsing are portable streaming C cores shared by production and host CI. One newline decoder accepts LF/CRLF, rejects lone/interior CR, and never normalizes malformed bytes into valid tokens.
-
-LCD remains exactly 17 decimal `0..255` monotonic-nondecreasing values; OLED remains exactly 17 × 21 two-digit hex bytes. Config numerics require complete tokens, clamp safely after parsing, and duplicate known keys use last-valid textual occurrence. `display_color_space_mode` and `lcd_color_space_mode` are compatibility aliases for the same field and follow that same ordering rule.
-
-## Ownership and rollback
-
-Backend ownership has three internal states:
-
-```text
-CLEAN     no backend taiHEN resource owned
-ACTIVE    complete committed backend installed
-DEGRADED retained/uncertain ownership; no new transaction may start
-```
-
-Transaction attempts are `TXN_OK`, `TXN_FAILED_CLEAN`, or `TXN_FAILED_DIRTY`. `ret < 0` alone never authorizes rollback.
-
-Teardown order is:
-
-```text
-power hook -> brightness hook -> table injection
-```
-
-and stops at the first failed release. Handles are forgotten only after confirmed release.
-
-Clean candidate failure may rollback the previous committed LUT/source. Dirty candidate cleanup immediately leaves DEGRADED ownership and forbids rollback/reinitialization. Clean rollback failure reports `VBE_ERR_LUT_ROLLBACK`; dirty cleanup/recovery failure reports `VBE_ERR_RESOURCE_RELEASE`. Recovery failure dominates the scalar public result.
-
-## Persistence
-
-Normal Save is legal only for an ACTIVE backend with a FILE source. The persistence transaction tracks fd/temp ownership and performs:
-
-```text
-prepare same-directory temp
--> open
--> write committed LUT
--> sync
--> close
--> rename to authoritative path
-```
-
-Rename is the commit point. Pre-commit failure cannot rename. fd/temp ownership is relinquished only after confirmed close/remove/rename. The committed source remains the authoritative final path; the temp path never becomes source identity.
-
-A committed LCD COMPILED fallback returns positive `VBE_RESULT_NO_FILE_SOURCE` rather than silently creating `ur0:tai/vitabright_lcd_lut.txt`.
-
-## Diagnostics and synchronization
-
-`VitaBrightStatus` remains ABI v2 with unchanged layout. `VitaBrightDiagnostics` ABI v1 remains additive and exposes synchronization, brightness, config, color-space, filter and input domains.
-
-Each subsystem owns its own domain. Runtime operations use one shared operation+unlock result rule: unlock failure dominates the scalar return while the operation's own domain truth remains stored independently.
-
-The compatibility summary precedence remains:
-
-```text
-SYNC > BRIGHTNESS > CONFIG > COLOR_SPACE > FILTER > INPUT
-```
-
-## Stop safety
-
-The module has one orchestration boundary in addition to the existing resource-specific ownership states: `INERT` means startup never crossed successful synchronization creation; `RUNTIME` means it did. This is not a second backend or mutex ownership model.
-
-Startup performs only firmware/model detection, status/error initialization and compiled-safe config defaults before `state_lock_init()`. If mutex creation fails, `module_start()` deliberately returns `SCE_KERNEL_START_SUCCESS` fail-open while the module remains `INERT` and the lock remains `ABSENT`. No config file is loaded, no hook/injection is installed, no invert/color-space mutation occurs and no persistence temporary resource exists. `INERT + ABSENT` therefore has a direct clean `SCE_KERNEL_STOP_SUCCESS` path.
-
-`ABSENT` is not globally interpreted as safe. The production module-lifecycle core permits only:
-
-```text
-INERT + ABSENT     -> clean inert stop
-RUNTIME + RUNNING  -> full serialized stop transaction
-all other pairs    -> unload unsafe
-```
-
-The runtime stop enters STOPPING, restores invert, restores/read-backs original panel color-space, tears down persistence/backend resources, then unlocks/deletes the mutex. A tiny stop accumulator answers only whether unload is safe; detailed failures remain in their subsystem domains.
-
-If any runtime stop-critical restore/release cannot be confirmed, `module_stop()` returns `SCE_KERNEL_STOP_FAIL` and the plugin remains resident. DEGRADED synchronization never takes the inert shortcut. Module lifecycle returns to `INERT` only after confirmed mutex deletion; this also makes an already-clean repeated stop benign without weakening dirty-state safety.
-
-## Unsupported filter semantics
-
-Advanced CCT/gamma/contrast/brightness/panel-enhance requests are explicit unsupported capability outcomes. `VBE_RESULT_UNSUPPORTED` is positive/nonzero, CSC/transfer remain `UNSUPPORTED`, FILTER remains clear, no speculative display write occurs, and the editor reports “unsupported capability” rather than generic failure.
-
-Verified hardware invert remains separately capability-gated.
-
-## Firmware/layout evidence
-
-LCD raw candidates remain 3.60 -> `0x1B00` and 3.65/3.67/3.68/3.69/3.70 -> `0x1B48`. 3.71–3.74 remain unsupported by raw-table injection. Before injection the loaded `SceLcd` must contain the exact Sony stock 17-byte signature at the candidate address.
-
-On the tested physical PCH-2000 / `0x03650000`, the runtime exact-signature gate passed at `0x1B48`. This is physical runtime evidence, not static decrypted-image verification.
-
-OLED requires successful DDB and loaded-module layout validation; DDB failure never becomes an assumed default panel.
-
-## Editor and build provenance
-
-Plugin and editor independently embed an 8-character build ID generated from the build checkout. The editor displays `plugin=<id> editor=<id> MATCH/MISMATCH`; replacing `ur0:tai` files does not update the separately installed editor VPK.
-
-After a LUT mutation the editor refreshes kernel status/diagnostics before choosing wording. It reports “previous committed table restored” only when the backend is operational and recovery diagnostics do not indicate rollback/resource-release failure. Degraded recovery and compiled-source persistence have separate truthful messages.
-
-## Deployment
-
-VitaShell FTP deployment uses absolute mount paths with `curl --ftp-method nocwd`: `...:1337//ur0:/...` and `...:1337//ux0:/...`.
-
-## Build and validation
-
-GitHub Actions compiles/runs production-shared regressions for LUT parser, config parser, source authority, transaction/ownership/source provenance/stop, persistence ownership/sequencing, synchronization lifecycle/result composition, module startup/stop lifecycle symmetry, diagnostics/error lifecycle and unsupported-filter policy. Structural checks remain tripwires only.
-
-Release and diagnostic SKPRX, generated syscall stubs, matching editor and PCH-2000 bundle build under current VitaSDK with warnings treated as errors.
-
-The exact final pre-hardware checkpoint SHA/run/hashes are recorded only after the last documentation/PR write and a fresh branch-exact workflow, avoiding self-invalidating provenance.
-
-## Hardware evidence — unchanged
-
-```text
-A1 isolated cold boot: PASS
-v1.3 hang: not reproduced
-old malformed-LUT fail-open: PASS
-3.65 SceLcd segment 0 / 0x1B48: physical runtime exact-signature PASS
-static decrypted-image verification: PENDING
-stock-vs-extended A/B: PASS
+PCH-2000 / 3.65 isolated cold boot: PASS
+v1.3 boot hang: not reproduced
+SceLcd 3.65 segment 0 / 0x1B48 runtime signature: PASS
+SceLcd 3.65 segment 0 / 0x1B48 retail static signature: PASS
+stock-vs-extended LUT A/B: PASS
 brightness slider sweep: PASS
-mid inactivity dim: PASS
-very-low behavior: consistent with design
-true maximum inactivity: PENDING
+mid-brightness inactivity dim: PASS
+true-maximum inactivity behavior: PENDING
 suspend/resume: PENDING
-normal plugin-stack compatibility: PENDING
-A2 overall: PARTIAL
+normal plugin-stack reintegration: PENDING
+RGB-range pattern validation: PENDING
 ```
 
-The next physical gate is a fresh full-power cold boot using one matching final release bundle with the normal commented production LCD LUT and matching editor, with no Circle/reload before inspection.
-
-## Power/performance
-
-The architecture is event-driven. Work occurs at boot, explicit config/editor changes or OS brightness events; no new continuous worker exists. No measured `<0.01 W` claim is made without suitable instrumentation.
+PR #1 remains draft until the controlled physical matrix is completed. No `<0.01 W` or similar measured power claim is made without appropriate instrumentation.

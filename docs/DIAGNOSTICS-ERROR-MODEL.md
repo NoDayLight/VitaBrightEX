@@ -1,184 +1,132 @@
 # Diagnostics and error-domain model
 
-Pseudo-v1.4 treats per-domain error slots as authoritative internal diagnostic state. `VitaBrightStatus.last_error` and `last_error_detail` are compatibility output only; production control flow does not read them back to reconstruct state.
+Pseudo-v1.4 treats per-domain slots as authoritative internal state. `VitaBrightStatus.last_error/last_error_detail` are compatibility output only; control flow never reconstructs state from them.
 
-`VitaBrightStatus` remains ABI v2 with unchanged layout. `VitaBrightDiagnostics` remains additive ABI v1.
+`VitaBrightStatus` remains ABI v2. `VitaBrightDiagnostics` remains additive ABI v1. `VitaBrightDisplayFilterState` ABI v1 separately exposes requested/committed filter truth.
 
-## Domains
+## Error domains
 
-The diagnostics ABI exposes independent slots for:
+- **SYNC** — mutex lifecycle/acquire/unlock/delete;
+- **BRIGHTNESS** — backend/LUT transaction, rollback and persistence;
+- **CONFIG** — authoritative config loading;
+- **COLOR_SPACE** — panel color-space mutation/restoration;
+- **FILTER** — runtime failures in a supported generic filter backend;
+- **INPUT** — invalid user arguments.
 
-- SYNC — state-transition mutex/lifecycle;
-- BRIGHTNESS — backend/LUT transaction, recovery and persistence;
-- CONFIG — authoritative config loading;
-- COLOR_SPACE — panel color-space operations/restoration;
-- FILTER — verified filter/invert runtime operations/restoration;
-- INPUT — user-facing argument validation.
+A capability being unsupported is not a runtime FILTER error.
 
-A subsystem updates only the domain it owns, at the stage that actually succeeded or failed. The outer reload/stop orchestrators combine control-flow results but do not clear unrelated domains.
-
-Therefore a successful config repair clears CONFIG even if the following LUT transaction fails. A successful brightness transaction does not clear a still-broken config. A later successful stop stage does not erase an earlier unresolved FILTER/COLOR_SPACE/BRIGHTNESS stop failure.
-
-## Synchronization result composition
-
-Runtime operations acquire the shared state lock and compose their operation result with the unlock result through the production synchronization core:
-
-```text
-operation fails + unlock succeeds
-    -> return operation failure
-
-operation succeeds + unlock fails
-    -> return synchronization failure
-
-operation fails + unlock fails
-    -> scalar return is synchronization failure
-       subsystem error remains in its own domain
-       SYNC records the unlock failure
-```
-
-A failed unlock changes internal lock lifecycle to `DEGRADED`; ordinary runtime acquisition is no longer legal. A later confirmed synchronization cycle may clear a repaired SYNC fault. Status/LUT getters do not copy their snapshot to userland when unlock ownership cannot be confirmed.
-
-## Module lifecycle boundary
-
-Module orchestration records only whether startup crossed successful synchronization creation:
-
-```text
-INERT
-    runtime initialization never committed, or clean stop completed
-
-RUNTIME
-    synchronization creation succeeded; normal runtime teardown responsibility exists
-```
-
-This is deliberately not another resource-ownership model. Mutex, backend, filter, color-space and persistence ownership remain authoritative in their existing subsystems.
-
-If `state_lock_init()` fails, it records the SYNC failure and leaves lock lifecycle ABSENT. Startup returns fail-open `SCE_KERNEL_START_SUCCESS` before config-file loading, backend hooks/injection, invert/color-space programming or persistence resource creation. The resulting `INERT + ABSENT` module is clean and may unload directly.
-
-That does not make ABSENT a generic success condition. `RUNTIME + ABSENT`, either module state with DEGRADED, and other inconsistent pairs are unload-unsafe.
-
-## Legacy summary precedence
-
-For compatibility, `last_error/detail` is derived deterministically from the domain state using this fixed precedence:
+Legacy summary precedence is fixed:
 
 ```text
 SYNC > BRIGHTNESS > CONFIG > COLOR_SPACE > FILTER > INPUT
 ```
 
-The summary is intentionally lossy. Full truth is available through `vitabrightGetDiagnostics()`.
+## Multi-stage reload result
 
-## Backend ownership and transaction classes
+Reload uses one production-shared severity composer:
 
-Internal backend ownership has exactly three semantic states:
+```text
+negative runtime failure
+>
+positive capability/partial result
+>
+zero success
+```
+
+Examples:
+
+```text
+OK + UNSUPPORTED                -> UNSUPPORTED
+UNSUPPORTED + negative failure  -> negative failure
+negative failure + UNSUPPORTED  -> retain negative failure
+```
+
+This prevents an early capability limitation from hiding a later real failure. Domain diagnostics remain independent, so both facts are still observable.
+
+## Synchronization boundary
+
+Unlock/release ownership is stricter than ordinary stage composition:
+
+```text
+operation failure + unlock succeeds
+    -> operation failure
+
+operation success + unlock failure
+    -> synchronization failure
+
+operation failure + unlock failure
+    -> synchronization failure scalar return
+       + operation's original domain remains recorded
+       + SYNC records unlock failure
+```
+
+Failed unlock makes the lock lifecycle DEGRADED and blocks ordinary future acquisition. Userland snapshots are not copied after an unconfirmed unlock.
+
+## Brightness ownership and rollback
+
+Backends use:
 
 ```text
 CLEAN
-    no backend taiHEN hook/injection resource remains owned
-
 ACTIVE
-    the complete committed backend stack is installed
-
 DEGRADED
-    ownership/recovery cannot be proven clean;
-    no new backend transaction may start
 ```
 
-Transaction attempts are classified independently:
+Attempt outcomes are `TXN_OK`, `TXN_FAILED_CLEAN`, `TXN_FAILED_DIRTY`. A clean candidate failure may roll back a previous state only while ownership is CLEAN. A dirty failure makes ownership DEGRADED and forbids rollback/new mutation.
 
-```text
-TXN_OK
-    requested transaction completed
+If rollback succeeds, the previous committed backend/state becomes ACTIVE again while the requested BRIGHTNESS failure remains visible. Clean rollback failure becomes `VBE_ERR_LUT_ROLLBACK`; dirty cleanup/recovery failure becomes `VBE_ERR_RESOURCE_RELEASE`.
 
-TXN_FAILED_CLEAN
-    requested transaction failed but ownership is known clean
-
-TXN_FAILED_DIRTY
-    failure left retained/uncertain ownership
-```
-
-`ret < 0` alone is never used to infer rollback legality. Rollback is legal only after a `FAILED_CLEAN` candidate failure while ownership is CLEAN and a previous committed backend existed.
-
-## Rollback semantics
-
-If replacement fails and rollback succeeds:
-
-- the previous committed table/backend/source identity becomes operational again;
-- capability state returns ACTIVE;
-- the requested operation's BRIGHTNESS failure remains visible because the requested edit did not commit;
-- the public negative result reports the requested failure.
-
-If rollback itself fails cleanly:
-
-- BRIGHTNESS becomes `VBE_ERR_LUT_ROLLBACK`;
-- the backend is not reported ACTIVE;
-- recovery failure dominates the public result.
-
-If candidate cleanup or rollback cleanup fails dirty:
-
-- BRIGHTNESS becomes `VBE_ERR_RESOURCE_RELEASE`;
-- ownership is `DEGRADED`;
-- no rollback/reinitialization is attempted over the uncertain resources;
-- recovery/ownership failure dominates the public result.
-
-Resource handles are invalidated only after confirmed taiHEN release. Dependency teardown is power hook -> brightness hook -> table injection and stops at the first failed release so a surviving hook does not lose resources it may still depend on.
+OLED rollback copies one complete `VbeOledLutState`, so base/runtime/source/panel/requested-transform/applied-transform cannot drift independently.
 
 ## Persistence diagnostics
 
-Persistence uses the compact BRIGHTNESS errors:
+Persistence uses:
 
-- `VBE_ERR_PERSISTENCE_PREPARE` — pre-commit setup/write/sync/close failure;
+- `VBE_ERR_PERSISTENCE_PREPARE` — setup/write/sync/close failure before commit;
 - `VBE_ERR_PERSISTENCE_COMMIT` — rename commit failure;
-- `VBE_ERR_PERSISTENCE_CLEANUP` — temporary-resource cleanup could not be confirmed.
+- `VBE_ERR_PERSISTENCE_CLEANUP` — temp/fd cleanup cannot be confirmed.
 
-Detailed failing stages remain available to diagnostic logging/production outcome state without adding one public enum per syscall. Failed persistence never changes committed LUT source identity.
+`VBE_RESULT_NO_FILE_SOURCE` is positive capability/control output for a COMPILED LCD state; it is not an error.
 
-`VBE_RESULT_NO_FILE_SOURCE` is a positive capability/control result for a committed compiled LCD fallback. It means no authoritative file exists to overwrite; it is not a runtime fault.
+## Generic filter diagnostics
+
+Pseudo-v1.4 currently has no mutation-safe generic filter backend:
+
+```text
+INVERT     unsupported
+AFFINE_CSC unsupported
+TRANSFER   unsupported
+```
+
+Unsupported requests are retained in `VitaBrightDisplayFilterState.requested` and `unsupported_domains`; committed hardware state remains neutral and `failed_domains` remains clear. FILTER diagnostics remain zero because no runtime mutation was attempted.
+
+Invert is unsupported because original-state acquisition is unproven. Persistent CSC is unsupported because original-state restoration/lifecycle is unproven. Transfer is unsupported because no nonlinear hardware stage is proven.
+
+Panel color-space is not part of this generic filter system; it has its own COLOR_SPACE domain and proven original-state/read-back restoration flow.
 
 ## Stop transaction
 
-Stop first classifies module orchestration state together with the lock lifecycle:
+Stop classification is:
 
 ```text
-INERT + ABSENT
-    -> no runtime teardown responsibility
-    -> SCE_KERNEL_STOP_SUCCESS
-
-RUNTIME + RUNNING
-    -> enter the serialized runtime stop transaction
-
-all other pairs
-    -> SCE_KERNEL_STOP_FAIL
+INERT + ABSENT    -> clean direct stop
+RUNTIME + RUNNING -> serialized runtime teardown
+anything else     -> STOP_FAIL
 ```
 
-The runtime stop then attempts, under STOPPING serialization:
+The runtime teardown resets generic requested filter state (no generic hardware state is owned), restores/read-backs panel color-space, cleans persistence/backend taiHEN resources, then unlocks/deletes the mutex. Any unresolved owned resource or synchronization state returns `SCE_KERNEL_STOP_FAIL` and leaves the module resident.
 
-```text
-invert/filter restoration
--> panel color-space restoration/read-back
--> backend persistence-resource cleanup + taiHEN teardown
--> mutex unlock/delete
-```
+## Regression coverage
 
-Each subsystem retains its own error domain. A tiny stop accumulator answers only whether unload is safe. Any unresolved runtime stop-critical failure returns `SCE_KERNEL_STOP_FAIL`; the module remains resident. Successful later teardown stages do not erase earlier domain failures.
+Production-shared tests cover:
 
-Color-space ownership is relinquished only after original mode is confirmed by read-back. Invert has no verified getter; therefore setter failure is treated as unconfirmed restoration and blocks successful unload. Mutex ID/lifecycle are relinquished only after confirmed unlock/delete. Module orchestration returns to INERT only after confirmed mutex deletion.
+- result severity, including `UNSUPPORTED` followed by a negative failure;
+- synchronization lifecycle and unlock dominance;
+- module lifecycle/inert/runtime stop classification;
+- independent diagnostic domains and summary precedence;
+- rollback legality/recovery classification;
+- persistence error sequencing;
+- generic filter requested/committed/unsupported truth;
+- config source rollback and OLED complete-state rollback.
 
-If stop teardown fails and cancellation unlock also fails, SYNC remains failed/DEGRADED and future unload cannot take the inert path. If mutex deletion fails after a successful stop unlock, runtime responsibility remains rather than being discarded.
-
-## Unsupported filter requests
-
-Unsupported advanced filtering is a capability outcome, not a runtime error. `VBE_RESULT_UNSUPPORTED` is positive/nonzero so negative values remain actual runtime/SCE/taiHEN failures.
-
-Advanced CCT/gamma/contrast/brightness/panel-enhance requests keep CSC/transfer capabilities `UNSUPPORTED`, leave FILTER diagnostics clear, perform no speculative hardware write, and are reported by the editor as unsupported rather than generic failure. Verified hardware invert remains separately capability-gated.
-
-## Regression proof
-
-Production-shared host suites cover distinct layers:
-
-- `tests/transaction_core_host.c` — ownership transitions, rollback legality/result dominance, source commit/persistence eligibility and stop accumulator;
-- `tests/persistence_core_host.c` — persistence sequence plus fd/temp ownership under injected failures;
-- `tests/state_lock_core_host.c` — runtime/STOPPING/DEGRADED mutex lifecycle and operation+unlock precedence;
-- `tests/module_lifecycle_core_host.c` — inert startup/stop symmetry, runtime stop eligibility, DEGRADED rejection, failed-delete responsibility and clean-stop idempotence using the production module/lock lifecycle cores;
-- `tests/status_error_host.c` — independent domains, stop-domain preservation, rollback diagnostics and summary precedence;
-- `tests/filter_policy_host.c` — unsupported-capability policy.
-
-Structural CI guards the startup ordering and stop classification boundary in addition to the existing ownership tripwires; it remains a guardrail rather than semantic proof.
+Structural CI remains a guardrail, not semantic proof.
