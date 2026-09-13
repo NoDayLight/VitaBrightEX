@@ -27,16 +27,6 @@ void vbe_filter_state_begin_request(VbeFilterStateCore *state,
     state->requested_domains = requested_domains;
     state->unsupported_domains = unsupported_domains;
     state->failed_domains = 0;
-}
-
-void vbe_filter_state_commit_invert(VbeFilterStateCore *state, int enabled) {
-    state->committed.invert = enabled ? 1 : 0;
-    if (enabled)
-        state->committed_domains |= VBE_DISPLAY_DOMAIN_INVERT;
-    else
-        state->committed_domains &= ~VBE_DISPLAY_DOMAIN_INVERT;
-}
-
-void vbe_filter_state_mark_failed(VbeFilterStateCore *state, uint32_t domains) {
-    state->failed_domains |= domains;
+    /* committed state is intentionally untouched: pseudo-v1.4 has no
+     * mutation-safe generic filter backend. */
 }

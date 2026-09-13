@@ -15,12 +15,14 @@ option(ENABLE_LOGGING "Enable debug logging to ur0:data/vitabright_log.txt" OFF)
 if(ENABLE_LOGGING) add_definitions(-DENABLE_LOGGING=1) endif()
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -Wall -Wextra -Werror -O3 -fno-pic -fno-PIC -std=gnu99")
 add_executable(vitabright
- main.c main.h module_lifecycle_core.c module_lifecycle_core.h log.c log.h build_info.c build_info.h
- config.c config.h config_parser.c config_parser.h text_stream.c text_stream.h source_authority.c source_authority.h
+ main.c main.h module_lifecycle_core.c module_lifecycle_core.h result_core.c result_core.h
+ log.c log.h build_info.c build_info.h
+ config.c config.h config_parser.c config_parser.h config_state_core.c config_state_core.h
+ text_stream.c text_stream.h source_authority.c source_authority.h
  transaction_core.c transaction_core.h persistence_core.c persistence_core.h persistence_file.c persistence_file.h
  status.c status.h status_error_core.h state_lock_core.c state_lock_core.h state_lock.c state_lock.h
  color_space.c color_space.h display_domains.h screen_filter_types.h filter_policy.c filter_policy.h filter_state_core.c filter_state_core.h
- screen_filter.c screen_filter.h affine_core.c affine_core.h taihen_extra.h lut_parser_core.h
+ screen_filter.c screen_filter.h taihen_extra.h lut_parser_core.h
  oled/lut_parser.c oled/parser.c oled/parser.h oled/hooks.c oled/hooks.h oled/lut.h
  oled/transform_core.c oled/transform_core.h oled/state_core.c oled/state_core.h
  lcd/lut_parser.c lcd/hooks.c lcd/hooks.h lcd/lcd_lut.h)

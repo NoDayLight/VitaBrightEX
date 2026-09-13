@@ -30,16 +30,17 @@ int vitabrightOledPersistLut(void);
 int vitabrightLcdGetBrightnessValues(unsigned char out[LCD_LUT_LEVELS]);
 int vitabrightLcdSetBrightnessValues(unsigned char in[LCD_LUT_LEVELS]);
 int vitabrightLcdPersistBrightnessValues(void);
+int vitabrightFilterGetState(VitaBrightDisplayFilterState *out);
 
 static VitaBrightStatus status;
 static VitaBrightDiagnostics diagnostics;
-static ScreenFilterParams filter;
+static VitaBrightDisplayFilterState filter_state;
 static unsigned char oled_lut[LUT_SIZE];
 static unsigned char lcd_lut[LCD_LUT_LEVELS];
 static char plugin_build[VBE_BUILD_ID_SIZE];
 static int status_ok, diagnostics_ok, build_ok, build_match;
 static int filter_ok, lut_ok, color_ok, color_mode = -1, cursor;
-static char msg[96];
+static char msg[112];
 
 static const char *cap(int s) {
     switch (s) {
@@ -71,6 +72,7 @@ static int brightness_recovery_failed(void) {
 static int refresh(void) {
     memset(&status, 0, sizeof(status));
     memset(&diagnostics, 0, sizeof(diagnostics));
+    memset(&filter_state, 0, sizeof(filter_state));
     memset(plugin_build, 0, sizeof(plugin_build));
     status_ok = vitabrightGetStatus(&status) >= 0 && status.abi_version >= 2;
     if (!status_ok) {
@@ -84,7 +86,8 @@ static int refresh(void) {
     build_ok = vitabrightGetBuildId(plugin_build) >= 0;
     plugin_build[VBE_BUILD_ID_SIZE - 1] = '\0';
     build_match = build_ok && strcmp(plugin_build, VBE_BUILD_ID) == 0;
-    filter_ok = vitabrightFilterGetParams(&filter) >= 0;
+    filter_ok = vitabrightFilterGetState(&filter_state) >= 0 &&
+                filter_state.abi_version == VBE_DISPLAY_FILTER_STATE_ABI_VERSION;
     color_ok = 0;
     color_mode = -1;
     if (usable(status.display_color_space)) {
@@ -114,18 +117,21 @@ static void save_lut(void) {
     else if (r < 0)
         set_msg("Atomic LUT persistence failed; see brightness diagnostics.");
     else
-        set_msg("Committed LUT atomically persisted to its authoritative source.");
+        set_msg("Committed base LUT atomically persisted to its authoritative source.");
 }
 
 static void toggle_invert(void) {
-    if (!filter_ok || !usable(status.invert)) { set_msg("Invert is unavailable."); return; }
-    ScreenFilterParams p = filter;
-    p.cct = CCT_DEFAULT; p.gamma = 1.0f; p.contrast = 1.0f; p.brightness = 0.0f; p.panel_enhance = 0; p.invert = !p.invert;
+    if (!filter_ok) { set_msg("Filter state ABI is unavailable."); return; }
+    ScreenFilterParams p = filter_state.requested;
+    p.invert = !p.invert;
     int r = vitabrightFilterSetParams(&p, status.hardware == VBE_HW_OLED);
     refresh();
-    if (r == VBE_RESULT_UNSUPPORTED) set_msg("Requested filter capability is unsupported.");
-    else if (r < 0) set_msg("Invert operation failed; inspect filter diagnostics.");
-    else set_msg(p.invert ? "Invert enabled." : "Invert disabled.");
+    if (r == VBE_RESULT_UNSUPPORTED)
+        set_msg("Invert request retained; safe hardware ownership is unsupported.");
+    else if (r < 0)
+        set_msg("Filter request failed at runtime; inspect filter diagnostics.");
+    else
+        set_msg(p.invert ? "Invert committed." : "Invert disabled.");
 }
 
 static void toggle_color(void) {
@@ -139,15 +145,20 @@ static void toggle_color(void) {
 
 static void report_lut_result(int r, int is_oled) {
     refresh();
+    if (r == VBE_RESULT_UNSUPPORTED) {
+        set_msg(is_oled ? "Base LUT committed; requested OLED transform is unsupported on this panel."
+                        : "Requested capability is unsupported.");
+        return;
+    }
     if (r >= 0) {
-        set_msg(is_oled ? "OLED LUT updated in RAM; Square atomically persists it."
+        set_msg(is_oled ? "OLED base LUT updated in RAM; Square persists the base."
                         : "LCD LUT updated in RAM; Square atomically persists it.");
         return;
     }
     if (brightness_recovery_failed())
         set_msg("LUT update failed and recovery failed; backend is degraded.");
     else
-        set_msg("LUT update rejected; previous committed table was restored.");
+        set_msg("LUT update rejected; committed kernel table was refreshed.");
 }
 
 static void edit(int delta) {
@@ -174,16 +185,26 @@ static void edit(int delta) {
 static void line(vita2d_pgf *font, float y, unsigned c, const char *s) { vita2d_pgf_draw_text(font, 24.0f, y, c, 1.0f, s); }
 
 static void draw(vita2d_pgf *font) {
-    char b[180]; float y = 31.0f;
+    char b[190]; float y = 31.0f;
     vita2d_start_drawing(); vita2d_clear_screen();
     line(font, y, WHITE, "VitaBrightEX pseudo-v1.4 capability editor"); y += 23;
     if (!status_ok) { line(font, y, BAD, "Plugin status ABI unavailable."); y += 24; line(font, y, DIM, msg); goto out; }
     snprintf(b, sizeof(b), "Build plugin=%s editor=%s  %s", build_ok ? plugin_build : "unavailable", VBE_BUILD_ID, build_match ? "MATCH" : "MISMATCH");
     line(font, y, build_match ? OK : BAD, b); y += 23;
     snprintf(b, sizeof(b), "Hardware: %s  firmware: 0x%08X  ABI: %u", status.hardware == VBE_HW_OLED ? "PCH-1000 OLED" : status.hardware == VBE_HW_LCD ? "PCH-2000 LCD" : "unknown", (unsigned)status.firmware, (unsigned)status.abi_version); line(font, y, WHITE, b); y += 23;
-    snprintf(b, sizeof(b), "Core=%s  table=%s  layout=%s  lock=%s", cap(status.brightness_core), cap(status.brightness_table), cap(status.firmware_layout), cap(status.state_lock)); line(font, y, WHITE, b); y += 23;
-    snprintf(b, sizeof(b), "Brightness hook=%s  power hook=%s  invert=%s", cap(status.brightness_hook), cap(status.power_limit_hook), cap(status.invert)); line(font, y, WHITE, b); y += 23;
-    snprintf(b, sizeof(b), "Panel color-space=%s mode=%s  CSC=%s transfer=%s", cap(status.display_color_space), color_ok ? (color_mode ? "1" : "0") : "n/a", cap(status.csc_filter), cap(status.transfer_lut)); line(font, y, color_ok ? WHITE : DIM, b); y += 23;
+    snprintf(b, sizeof(b), "Core=%s table=%s layout=%s lock=%s", cap(status.brightness_core), cap(status.brightness_table), cap(status.firmware_layout), cap(status.state_lock)); line(font, y, WHITE, b); y += 23;
+    snprintf(b, sizeof(b), "Brightness hook=%s power=%s invert=%s", cap(status.brightness_hook), cap(status.power_limit_hook), cap(status.invert)); line(font, y, WHITE, b); y += 23;
+    snprintf(b, sizeof(b), "Panel color-space=%s mode=%s CSC=%s transfer=%s", cap(status.display_color_space), color_ok ? (color_mode ? "1" : "0") : "n/a", cap(status.csc_filter), cap(status.transfer_lut)); line(font, y, color_ok ? WHITE : DIM, b); y += 23;
+    if (filter_ok) {
+        snprintf(b, sizeof(b), "Filter domains req=%X committed=%X unsupported=%X failed=%X",
+                 (unsigned)filter_state.requested_domains, (unsigned)filter_state.committed_domains,
+                 (unsigned)filter_state.unsupported_domains, (unsigned)filter_state.failed_domains);
+        line(font, y, filter_state.failed_domains ? BAD : WHITE, b); y += 23;
+        snprintf(b, sizeof(b), "Filter requested CCT=%u invert=%d | committed CCT=%u invert=%d",
+                 (unsigned)filter_state.requested.cct, filter_state.requested.invert,
+                 (unsigned)filter_state.committed.cct, filter_state.committed.invert);
+        line(font, y, filter_state.unsupported_domains ? DIM : WHITE, b); y += 23;
+    }
     snprintf(b, sizeof(b), "Last kernel error: %d detail: 0x%08X", status.last_error, (unsigned)status.last_error_detail); line(font, y, status.last_error ? BAD : OK, b); y += 23;
     if (diagnostics_ok) {
         snprintf(b, sizeof(b), "Errors cfg=%d bright=%d color=%d filter=%d input=%d sync=%d", diagnostics.config_error, diagnostics.brightness_error, diagnostics.color_space_error, diagnostics.filter_error, diagnostics.input_error, diagnostics.synchronization_error);
@@ -191,13 +212,12 @@ static void draw(vita2d_pgf *font) {
     }
     if (status.hardware == VBE_HW_OLED) {
         snprintf(b, sizeof(b), "Panel type: %d", status.panel_type); line(font, y, WHITE, b); y += 23;
-        if (lut_ok) { snprintf(b, sizeof(b), "OLED LUT byte %d/%d (row %d col %d): 0x%02X", cursor + 1, LUT_SIZE, cursor / LUT_LINE_SIZE, cursor % LUT_LINE_SIZE, oled_lut[cursor]); line(font, y, WHITE, b); y += 23; }
+        if (lut_ok) { snprintf(b, sizeof(b), "OLED base LUT byte %d/%d (row %d col %d): 0x%02X", cursor + 1, LUT_SIZE, cursor / LUT_LINE_SIZE, cursor % LUT_LINE_SIZE, oled_lut[cursor]); line(font, y, WHITE, b); y += 23; }
     } else if (status.hardware == VBE_HW_LCD && lut_ok) {
         snprintf(b, sizeof(b), "LCD LUT entry %d/%d: %u", cursor, LCD_LUT_LEVELS - 1, (unsigned)lcd_lut[cursor]); line(font, y, WHITE, b); y += 23;
     }
-    line(font, y, DIM, "Left/Right select | Up/Down edit | X invert | Triangle color-space | Square save"); y += 23;
+    line(font, y, DIM, "Left/Right select | Up/Down edit | X invert request | Triangle color-space | Square save"); y += 23;
     line(font, y, DIM, "Circle reload | Select refresh | Start exit"); y += 23;
-    line(font, y, DIM, "CCT/gamma/contrast/panel curves stay disabled when unsupported."); y += 26;
     if (msg[0]) line(font, y, WHITE, msg);
 out:
     vita2d_end_drawing(); vita2d_swap_buffers();
@@ -224,7 +244,7 @@ int main(void) {
             int r = vitabrightReload();
             refresh();
             if (r == VBE_RESULT_UNSUPPORTED)
-                set_msg("Reload complete; config requests an unsupported filter capability.");
+                set_msg("Reload committed supported stages; one or more requests are unsupported.");
             else if (r < 0)
                 set_msg("Reload completed fail-open; see domain diagnostics for the failed stage.");
             else

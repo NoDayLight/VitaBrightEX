@@ -10,48 +10,79 @@ env:
   VDPM_NONINTERACTIVE: 1
 jobs:
   test-and-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
       - name: Existing semantic contracts
         run: |
           python3 tools/verify_source_contract.py
           python3 tools/verify_parser_contract.py
+          python3 tools/generate_cct_table.py --check
           python3 tools/validate_packaged_assets.py
-      - name: Display pure-core regressions
+
+      - name: Display production-shared regressions
         run: |
-          cc -std=c99 -Wall -Wextra -Werror -I. tests/config_parser_host.c config_parser.c text_stream.c -o /tmp/config-test
-          /tmp/config-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/result_core_host.c result_core.c -o /tmp/result-test
+          /tmp/result-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/config_source_state_host.c config_state_core.c source_authority.c -o /tmp/config-source-test
+          /tmp/config-source-test
           cc -std=c99 -Wall -Wextra -Werror -I. tests/filter_policy_host.c filter_policy.c filter_state_core.c -o /tmp/filter-policy-test
           /tmp/filter-policy-test
           cc -std=c99 -Wall -Wextra -Werror -I. tests/filter_state_host.c filter_state_core.c -o /tmp/filter-state-test
           /tmp/filter-state-test
           cc -std=c99 -Wall -Wextra -Werror -I. tests/oled_transform_host.c oled/transform_core.c -o /tmp/oled-transform-test
           /tmp/oled-transform-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/oled_state_host.c oled/state_core.c oled/transform_core.c source_authority.c -o /tmp/oled-state-test
+          /tmp/oled-state-test
           cc -std=c99 -Wall -Wextra -Werror -I. tests/affine_core_host.c affine_core.c -o /tmp/affine-test
           /tmp/affine-test
-      - uses: actions/checkout@v7
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: vitasdk/vdpm
+          ref: c83b88a54ec13372515eeb8b3bdca4b10c36d721
           path: vdpm
-      - name: Bootstrap VitaSDK
+
+      - name: Bootstrap pinned VitaSDK package manager
         run: |
+          printf 'VDPM_CHECKOUT=%s\n' "$(git -C vdpm rev-parse HEAD)"
           bash vdpm/bootstrap-vitasdk.sh
           echo "$VITASDK/bin" >> "$GITHUB_PATH"
-          vdpm install taihen
-          vdpm install libvita2d
+          "$VITASDK/bin/vdpm" install taihen libvita2d
+          echo '--- VitaSDK package state ---'
+          "$VITASDK/bin/vdpm" status
+          "$VITASDK/bin/vdpm" list
+          echo '--- compiler identity ---'
+          "$VITASDK/bin/arm-vita-eabi-gcc" --version | head -n 1
+
       - name: Build release and diagnostic with -Werror
         run: |
           cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DENABLE_LOGGING=OFF
           cmake --build build --parallel
           cmake -S . -B build-diagnostic -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DENABLE_LOGGING=ON
           cmake --build build-diagnostic --parallel
+
+      - name: Generate and install syscall stubs
+        run: |
+          test -d build/vitabright-stubs
+          cmake --install build --prefix "$VITASDK/arm-vita-eabi"
+
       - name: Build editor against generated stubs
         run: |
-          cmake --install build --prefix "$VITASDK/arm-vita-eabi"
           cmake -S editor -B editor-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
           cmake --build editor-build --parallel
-      - name: Report exact-head build hashes only
+
+      - name: Report exact-head build and source hashes
         run: |
           printf 'HEAD=%s\n' "$GITHUB_SHA"
-          sha256sum build/vitabright.skprx build-diagnostic/vitabright.skprx editor-build/vitabrightex-editor.vpk
+          sha256sum \
+            build/vitabright.skprx \
+            build-diagnostic/vitabright.skprx \
+            editor-build/vitabrightex-editor.vpk \
+            vitabrightex.cfg \
+            lcd/luts/vitabright_lcd_lut.txt \
+            oled/luts/vitabright_lut.txt \
+            oled/luts/vitabright_lut_p4.txt \
+            oled/luts/vitabright_lut_p5.txt \
+            oled/luts/vitabright_lut_p6.txt

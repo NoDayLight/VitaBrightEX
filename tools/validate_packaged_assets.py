@@ -75,10 +75,19 @@ run_host_test("source_authority_host", [
     "tests/source_authority_host.c",
     "source_authority.c",
 ])
+run_host_test("config_source_state_host", [
+    "tests/config_source_state_host.c",
+    "config_state_core.c",
+    "source_authority.c",
+])
 run_host_test("transaction_core_host", [
     "tests/transaction_core_host.c",
     "transaction_core.c",
     "source_authority.c",
+])
+run_host_test("result_core_host", [
+    "tests/result_core_host.c",
+    "result_core.c",
 ])
 run_host_test("persistence_core_host", [
     "tests/persistence_core_host.c",
@@ -87,11 +96,13 @@ run_host_test("persistence_core_host", [
 run_host_test("state_lock_core_host", [
     "tests/state_lock_core_host.c",
     "state_lock_core.c",
+    "result_core.c",
 ])
 run_host_test("module_lifecycle_core_host", [
     "tests/module_lifecycle_core_host.c",
     "module_lifecycle_core.c",
     "state_lock_core.c",
+    "result_core.c",
 ])
 run_host_test("status_error_host", [
     "tests/status_error_host.c",
@@ -108,6 +119,12 @@ run_host_test("filter_state_host", [
 run_host_test("oled_transform_host", [
     "tests/oled_transform_host.c",
     "oled/transform_core.c",
+])
+run_host_test("oled_state_host", [
+    "tests/oled_state_host.c",
+    "oled/state_core.c",
+    "oled/transform_core.c",
+    "source_authority.c",
 ])
 run_host_test("affine_core_host", [
     "tests/affine_core_host.c",

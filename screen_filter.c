@@ -1,24 +1,15 @@
 #include "screen_filter.h"
 #include "config.h"
-#include "display_domains.h"
 #include "filter_policy.h"
 #include "filter_state_core.h"
-#include "main.h"
 #include "state_lock.h"
 #include "status.h"
-#include "taihen_extra.h"
 #include <stdint.h>
 #include <psp2kern/kernel/cpu.h>
 #include <psp2kern/kernel/sysmem.h>
-#include <taihen.h>
-
-#define NID_DISPLAY_INVERT_COLORS 0x19140ACD
 
 static VbeFilterStateCore g_filter_state;
 static int g_filter_state_initialized = 0;
-static int (*ksceDisplaySetInvertColors)(int head, int enable) = NULL;
-static int g_invert_programmed = 0;
-static int g_invert_value = 0;
 
 static void ensure_state_initialized(void) {
     if (g_filter_state_initialized) return;
@@ -42,21 +33,6 @@ static int params_valid(const ScreenFilterParams *p) {
     return 1;
 }
 
-static int resolve_invert(void) {
-    if (ksceDisplaySetInvertColors != NULL) return 0;
-
-    int ret = module_get_export_func(KERNEL_PID, "SceDisplay", TAI_ANY_LIBRARY,
-        NID_DISPLAY_INVERT_COLORS, (uintptr_t *)&ksceDisplaySetInvertColors);
-    if (ret < 0 || ksceDisplaySetInvertColors == NULL) {
-        ksceDisplaySetInvertColors = NULL;
-        g_vbe_status.invert = VBE_CAP_UNAVAILABLE;
-        return ret < 0 ? ret : -1;
-    }
-
-    g_vbe_status.invert = VBE_CAP_INACTIVE;
-    return 0;
-}
-
 static void config_candidate(ScreenFilterParams *out) {
     out->cct = (uint16_t)g_config.filter_cct;
     out->gamma = g_config.filter_gamma;
@@ -66,59 +42,22 @@ static void config_candidate(ScreenFilterParams *out) {
     out->panel_enhance = g_config.filter_panel_enhance;
 }
 
-static int apply_invert(const ScreenFilterParams *candidate) {
-    ensure_state_initialized();
-
-    if (!candidate->invert && !g_invert_programmed) {
-        g_vbe_status.invert = VBE_CAP_INACTIVE;
-        vbe_filter_state_commit_invert(&g_filter_state, 0);
-        return 0;
-    }
-
-    int ret = resolve_invert();
-    if (ret < 0) {
-        g_vbe_status.invert = VBE_CAP_FAILED;
-        vbe_filter_state_mark_failed(&g_filter_state, VBE_DISPLAY_DOMAIN_INVERT);
-        status_set_error_domain(VBE_ERROR_DOMAIN_FILTER,
-                                VBE_ERR_DISPLAY_CAPABILITY, ret);
-        return ret;
-    }
-
-    int requested = candidate->invert ? 1 : 0;
-    if (!g_invert_programmed || g_invert_value != requested) {
-        ret = ksceDisplaySetInvertColors(0, requested);
-        if (ret < 0) {
-            g_vbe_status.invert = VBE_CAP_FAILED;
-            vbe_filter_state_mark_failed(&g_filter_state, VBE_DISPLAY_DOMAIN_INVERT);
-            status_set_error_domain(VBE_ERROR_DOMAIN_FILTER,
-                                    VBE_ERR_DISPLAY_CAPABILITY, ret);
-            return ret;
-        }
-    }
-
-    g_invert_value = requested;
-    g_invert_programmed = requested;
-    g_vbe_status.invert = requested ? VBE_CAP_ACTIVE : VBE_CAP_INACTIVE;
-    vbe_filter_state_commit_invert(&g_filter_state, requested);
-    return 0;
-}
-
 static int apply_candidate(const ScreenFilterParams *candidate) {
     ensure_state_initialized();
     VbeFilterRequestPolicy policy = vbe_filter_request_policy(candidate);
     vbe_filter_state_begin_request(&g_filter_state, candidate,
                                    policy.requested_domains,
                                    policy.unsupported_domains);
+
+    /* These are hardware capabilities, not request activity indicators. */
+    g_vbe_status.invert = policy.invert_state;
     g_vbe_status.csc_filter = policy.csc_state;
     g_vbe_status.transfer_lut = policy.transfer_state;
 
-    int ret = apply_invert(candidate);
-    if (ret < 0) return ret;
-
+    /* Unsupported requests are capability results, never runtime errors. No
+     * generic filter hardware is touched in pseudo-v1.4. */
     status_clear_error_domain(VBE_ERROR_DOMAIN_FILTER);
-    if (policy.unsupported_domains != 0)
-        return VBE_RESULT_UNSUPPORTED;
-    return VBE_RESULT_OK;
+    return policy.result;
 }
 
 int screen_filter_apply_config(void) {

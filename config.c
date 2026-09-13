@@ -1,5 +1,6 @@
 #include "config.h"
 #include "config_parser.h"
+#include "config_state_core.h"
 #include "log.h"
 #include "source_authority.h"
 #include "status.h"
@@ -23,13 +24,11 @@ void config_get_source(VbeSourceIdentity *out) {
 }
 
 void config_snapshot(VbeConfigSnapshot *out) {
-    out->config = g_config;
-    vbe_source_identity_copy(&out->source, &g_config_source);
+    vbe_config_state_snapshot(out, &g_config, &g_config_source);
 }
 
 void config_restore(const VbeConfigSnapshot *snapshot) {
-    g_config = snapshot->config;
-    vbe_source_identity_copy(&g_config_source, &snapshot->source);
+    vbe_config_state_restore(&g_config, &g_config_source, snapshot);
 }
 
 static VbeSourceOutcome config_read_source(const char *path,

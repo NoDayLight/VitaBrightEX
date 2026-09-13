@@ -10,6 +10,7 @@
 #include "main.h"
 #include "module_lifecycle_core.h"
 #include "oled/hooks.h"
+#include "result_core.h"
 #include "screen_filter.h"
 #include "state_lock.h"
 #include "status.h"
@@ -22,11 +23,6 @@ static int g_module_lifecycle = VBE_MODULE_INERT;
 
 static int detect_is_lcd(void) {
     return (*(uint8_t *)(ksceKernelSysrootGetKblParam() + 0xE8) & 9) != 0;
-}
-
-static void keep_first_result(int *result, int stage_result) {
-    if (*result == VBE_RESULT_OK && stage_result != VBE_RESULT_OK)
-        *result = stage_result;
 }
 
 void _start() __attribute__((weak, alias("module_start")));
@@ -75,10 +71,10 @@ int vitabright_reload_locked(void) {
     config_snapshot(&previous_config);
 
     int config_ret = config_load();
-    keep_first_result(&result, config_ret);
+    result = vbe_result_compose(result, config_ret);
 
     int brightness_ret = g_is_oled ? oled_reload_backend() : lcd_reload_backend();
-    keep_first_result(&result, brightness_ret);
+    result = vbe_result_compose(result, brightness_ret);
 
     /* The config/source candidate is not externally observable during this
      * locked transition. A failed backend replacement restores the previous
@@ -87,10 +83,10 @@ int vitabright_reload_locked(void) {
         config_restore(&previous_config);
 
     int color_ret = color_space_apply_config();
-    keep_first_result(&result, color_ret);
+    result = vbe_result_compose(result, color_ret);
 
     int filter_ret = screen_filter_apply_config();
-    keep_first_result(&result, filter_ret);
+    result = vbe_result_compose(result, filter_ret);
 
     return result;
 }

@@ -1,4 +1,5 @@
 #include "state_lock_core.h"
+#include "result_core.h"
 
 int vbe_lock_can_acquire(int lifecycle) {
     return lifecycle == VBE_LOCK_RUNNING;
@@ -35,5 +36,5 @@ int vbe_lock_after_delete(int lifecycle, int api_result) {
 }
 
 int vbe_lock_result_after_release(int operation_result, int release_result) {
-    return release_result < 0 ? release_result : operation_result;
+    return vbe_result_compose(operation_result, release_result);
 }
