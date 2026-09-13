@@ -43,7 +43,7 @@ need("tests/lut_parser_host.c", "CR inside token rejected", "LCD CR-in-token reg
 need("tests/lut_parser_host.c", "OLED CR inside byte rejected", "OLED CR-in-byte regression missing")
 need("tests/config_parser_host.c", "interior CR rejected", "config CR regression missing")
 need("tests/config_parser_host.c", "suffix garbage rejected", "config numeric strictness regression missing")
-need("tests/config_parser_host.c", "color-space alias pair uses last valid occurrence",
+need("tests/config_parser_host.c", "color-space aliases use last valid occurrence",
      "config alias precedence regression missing")
 
 need("lcd/hooks.c", "VBE_OWNERSHIP_DEGRADED", "LCD backend lost explicit degraded ownership state")
