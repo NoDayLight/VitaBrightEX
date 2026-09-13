@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
+#include <psp2kern/kernel/cpu.h>
 #include <psp2kern/kernel/modulemgr.h>
 #include <psp2kern/kernel/sysmem/data_transfers.h>
 #include <psp2kern/lowio/iftu.h>
@@ -255,9 +256,8 @@ static SceUID install_export_hook(tai_hook_ref_t *ref, const char *module,
     return uid;
 }
 
-static int resolve_runtime_layout(void) {
+static int resolve_lowio_snapshot(void) {
     tai_module_info_t lowio;
-    tai_module_info_t lcd;
     uintptr_t plane = 0;
     int ret;
 
@@ -268,6 +268,12 @@ static int resolve_runtime_layout(void) {
                             LOWIO_PLANE_SEGMENT_OFFSET, &plane);
     if (ret < 0) return ret;
     g_plane_base = plane;
+    return 0;
+}
+
+static int install_panel_writer_hook(void) {
+    tai_module_info_t lcd;
+    int ret;
 
     lcd.size = sizeof(lcd);
     ret = taiGetModuleInfoForKernel(KERNEL_PID, "SceLcd", &lcd);
@@ -277,7 +283,7 @@ static int resolve_runtime_layout(void) {
         LCD_PANEL_WRITER_OFFSET, 1, hook_panel_write);
     if (g_hook_panel_write < 0) {
         g_hook_panel_write = -1;
-        g_hook_fail_mask |= VBE_TRACE_FAIL_PANEL_WRITE;
+        return -1;
     }
     return 0;
 }
@@ -292,9 +298,10 @@ static void clear_records(void) {
 
 int vbeTraceGetStatus(VbeTraceStatus *out) {
     VbeTraceStatus s;
-    uint32_t state;
+    uint32_t cpu_state;
     uint32_t slots = g_slots_reserved;
     uint32_t count = slots < VBE_TRACE_RECORD_CAPACITY ? slots : VBE_TRACE_RECORD_CAPACITY;
+    int ret;
     if (out == NULL) return -1;
     s.magic = VBE_TRACE_MAGIC;
     s.version = VBE_TRACE_VERSION;
@@ -308,10 +315,10 @@ int vbeTraceGetStatus(VbeTraceStatus *out) {
     s.active_hooks = g_active_hooks;
     s.hook_fail_mask = g_hook_fail_mask;
     s.snapshot_available = g_plane_base != 0;
-    ENTER_SYSCALL(state);
-    state = (uint32_t)ksceKernelMemcpyKernelToUser((uintptr_t)out, &s, sizeof(s));
-    EXIT_SYSCALL(state);
-    return (int)state;
+    ENTER_SYSCALL(cpu_state);
+    ret = ksceKernelMemcpyKernelToUser(out, &s, sizeof(s));
+    EXIT_SYSCALL(cpu_state);
+    return ret;
 }
 
 int vbeTraceStop(void) {
@@ -334,7 +341,7 @@ int vbeTraceReset(int enable_after_reset) {
 }
 
 int vbeTraceRead(VbeTraceRecord *out, uint32_t capacity, uint32_t *written) {
-    uint32_t state;
+    uint32_t cpu_state;
     uint32_t count;
     int ret;
     if (out == NULL || written == NULL) return -1;
@@ -343,18 +350,18 @@ int vbeTraceRead(VbeTraceRecord *out, uint32_t capacity, uint32_t *written) {
     if (count > VBE_TRACE_RECORD_CAPACITY) count = VBE_TRACE_RECORD_CAPACITY;
     if (count > capacity) count = capacity;
 
-    ENTER_SYSCALL(state);
-    ret = ksceKernelMemcpyKernelToUser((uintptr_t)out, g_records,
+    ENTER_SYSCALL(cpu_state);
+    ret = ksceKernelMemcpyKernelToUser(out, g_records,
                                        (SceSize)(count * sizeof(VbeTraceRecord)));
     if (ret >= 0)
-        ret = ksceKernelMemcpyKernelToUser((uintptr_t)written, &count, sizeof(count));
-    EXIT_SYSCALL(state);
+        ret = ksceKernelMemcpyKernelToUser(written, &count, sizeof(count));
+    EXIT_SYSCALL(cpu_state);
     return ret;
 }
 
 int vbeTraceSnapshot(VbeTraceSnapshot *out) {
     VbeTraceSnapshot snap;
-    uint32_t i, state;
+    uint32_t i, cpu_state;
     int ret;
     if (out == NULL) return -1;
     if (g_firmware_version != VBE_TRACE_FW_365 || g_plane_base == 0) return -3;
@@ -375,9 +382,9 @@ int vbeTraceSnapshot(VbeTraceSnapshot *out) {
         copy_bytes(d->csc_b_148, p + 0x148, 0x3C);
     }
 
-    ENTER_SYSCALL(state);
-    ret = ksceKernelMemcpyKernelToUser((uintptr_t)out, &snap, sizeof(snap));
-    EXIT_SYSCALL(state);
+    ENTER_SYSCALL(cpu_state);
+    ret = ksceKernelMemcpyKernelToUser(out, &snap, sizeof(snap));
+    EXIT_SYSCALL(cpu_state);
     return ret;
 }
 
@@ -413,10 +420,12 @@ int module_start(SceSize argc, const void *args) {
         return SCE_KERNEL_START_SUCCESS;
     }
 
-    if (resolve_runtime_layout() < 0) {
+    if (resolve_lowio_snapshot() < 0) {
         g_plane_base = 0;
         g_hook_fail_mask |= VBE_TRACE_FAIL_LOWIO_SNAPSHOT;
     }
+    if (install_panel_writer_hook() < 0)
+        g_hook_fail_mask |= VBE_TRACE_FAIL_PANEL_WRITE;
 
     g_hook_csc_a = install_export_hook(&g_ref_csc_a, "SceLowio", NID_IFTU_CSC_A,
                                        hook_csc_a, VBE_TRACE_FAIL_CSC_A);
