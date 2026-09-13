@@ -30,22 +30,43 @@ jobs:
           bash vdpm/bootstrap-vitasdk.sh
           echo "$VITASDK/bin" >> "$GITHUB_PATH"
           "$VITASDK/bin/vdpm" install taihen
-      - name: Assert nonblocking kernel trace contract
+      - name: Assert hardened nonblocking trace contract
         run: |
           set -euxo pipefail
           p=research/diagnostics/iftu_csc_trace/main.c
           h=research/diagnostics/iftu_csc_trace/trace_protocol.h
+          l=research/diagnostics/iftu_csc_trace/layout_365.h
+          d=research/diagnostics/iftu_csc_trace/drain.c
           grep -F '0x0FCBF457u' "$p"
           grep -F '0xD64F4C6Bu' "$p"
           grep -F 'LOWIO_PLANE_SEGMENT         1' "$p"
           grep -F 'LOWIO_PLANE_SEGMENT_OFFSET  0x37Cu' "$p"
-          grep -F 'LCD_PANEL_WRITER_OFFSET     0xA54u' "$p"
-          grep -F 'VBE_TRACE_RECORD_CAPACITY    512u' "$h"
-          grep -F 'VBE_TRACE_PANEL_WRITE' "$h"
-          grep -F 'VBE_TRACE_IFTU_ENABLE' "$h"
+          grep -F 'VBE_LCD_PANEL_WRITER_OFFSET       0xA54u' "$l"
+          grep -F 'VBE_LCD_PANEL_READER_OFFSET       0x5B4u' "$l"
+          grep -F 'VBE_LCD_STATE_OFFSET              0xA0u' "$l"
+          grep -F 'vbe_lcd_panel_writer_signature' "$l"
+          grep -F 'vbe_lcd_panel_reader_signature' "$l"
+          grep -F 'VBE_TRACE_RECORD_CAPACITY         512u' "$h"
+          grep -F 'VBE_TRACE_PAYLOAD_MAX             256u' "$h"
+          grep -F 'VBE_TRACE_REQUIRED_AFFINE_HOOKS' "$h"
+          grep -F 'VBE_TRACE_REQUIRED_PANEL_HOOKS' "$h"
+          grep -F 'VBE_TRACE_PANEL_READ_ENTER' "$h"
+          grep -F 'VBE_TRACE_PANEL_READ_EXIT' "$h"
+          grep -F 'VBE_TRACE_DISPLAY_ON_ENTER' "$h"
+          grep -F 'VBE_TRACE_DISPLAY_ON_EXIT' "$h"
+          grep -F 'VBE_TRACE_IFTU_ENABLE_ENTER' "$h"
+          grep -F 'VBE_TRACE_IFTU_ENABLE_EXIT' "$h"
+          grep -F 'g_enabled = 0;' "$p"
+          grep -F 'release_owned_hook' "$p"
+          grep -F 'snapshot_data_read(&a,available);' "$p"
+          grep -F 'snapshot_data_read(&b,available);' "$p"
+          grep -F 'missing_required_mask' "$p"
+          grep -F 'validate_records' "$d"
+          grep -F 'VBE_TRACE_CAPTURE_PARTIAL' "$d"
           ! grep -E 'ksceIo|sceIo|snprintf|printf|malloc|calloc|realloc|ksceKernelAlloc|CreateThread|CreateTimer|DelayThread|Wait' "$p"
-          ! grep -E '0x8100B37C|0x81000A54' "$p"
-      - name: Build ring-buffer diagnostic and user drain with Werror
+          ! grep -E 'taiInject|SetDisplayColorSpace|SetBrightness' "$p"
+          ! grep -E '0x8100B37C|0x81000A54|0x810005B4|0x810020A0' "$p"
+      - name: Build hardened ring-buffer diagnostic and user drain with Werror
         run: |
           set -euxo pipefail
           cmake -S research/diagnostics/iftu_csc_trace -B trace-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
@@ -54,7 +75,7 @@ jobs:
           test -s trace-build/vbe_color_trace_drain.self
           test -s trace-build/vbe_color_trace_drain.vpk
           sha256sum trace-build/vbe_color_trace.skprx trace-build/vbe_color_trace_drain.self trace-build/vbe_color_trace_drain.vpk
-      - name: Upload correlated trace diagnostic
+      - name: Upload hardened Gate-0 trace diagnostic
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: vbe-color-trace-diagnostic
@@ -63,3 +84,4 @@ jobs:
             trace-build/vbe_color_trace_drain.self
             trace-build/vbe_color_trace_drain.vpk
             research/diagnostics/iftu_csc_trace/trace_protocol.h
+            research/diagnostics/iftu_csc_trace/layout_365.h
