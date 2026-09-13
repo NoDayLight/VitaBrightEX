@@ -2,8 +2,6 @@
 #include <stdint.h>
 #include "lut.h"
 
-extern unsigned char lookupNew[LUT_SIZE];
-
 int oled_enable_hooks(void);
 int oled_disable_hooks(void);
 int oled_reload_backend(void);
