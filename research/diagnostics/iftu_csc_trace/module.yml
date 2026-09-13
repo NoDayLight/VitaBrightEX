@@ -1,4 +1,4 @@
-vbe_iftu_csc_trace:
+VbeColorTrace:
   attributes: 0
   version:
     major: 1
@@ -6,3 +6,12 @@ vbe_iftu_csc_trace:
   main:
     start: module_start
     stop: module_stop
+  modules:
+    VbeColorTrace:
+      syscall: true
+      functions:
+        - vbeTraceGetStatus
+        - vbeTraceStop
+        - vbeTraceReset
+        - vbeTraceRead
+        - vbeTraceSnapshot
