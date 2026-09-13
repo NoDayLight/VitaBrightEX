@@ -26,4 +26,7 @@ int main(void){int failures=0;VitaBrightConfig cfg;
  failures+=ok(parse_text("lcd_ips_enhance=1\ndisplay_color_space_mode=0\n",&cfg)==0&&cfg.display_color_space_mode==0&&cfg.display_color_space_scope==VBE_COLOR_SPACE_SCOPE_ANY_PANEL,"legacy then canonical -> canonical 0");
  failures+=ok(parse_text("display_color_space_mode=0\nlcd_ips_enhance=1\n",&cfg)==0&&cfg.display_color_space_mode==1&&cfg.display_color_space_scope==VBE_COLOR_SPACE_SCOPE_LCD_ONLY,"canonical then legacy -> legacy 1 LCD-only");
  failures+=ok(parse_text("lcd_color_space_mode=1\nlcd_saturation_boost=0\nlcd_ips_enhance=1\ndisplay_color_space_mode=0\n",&cfg)==0&&cfg.display_color_space_mode==0&&cfg.display_color_space_scope==VBE_COLOR_SPACE_SCOPE_ANY_PANEL,"color-space aliases use last valid occurrence");
- if(failures)return 1;puts("production config parser/request regressions: OK");return 0;}
+ if(failures)return 1;
+ puts("production config parser/request regressions: OK");
+ return 0;
+}
