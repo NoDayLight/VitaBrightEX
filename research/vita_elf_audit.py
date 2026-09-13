@@ -213,7 +213,10 @@ DECODER=Decoder()
 
 def immediate_target(ins):
     from capstone.arm import ARM_OP_IMM
-    return (ins.operands[0].imm&0xFFFFFFFF) if ins.operands and ins.operands[0].type==ARM_OP_IMM else None
+    for op in reversed(getattr(ins,'operands',[])):
+        if op.type==ARM_OP_IMM:
+            return op.imm&0xFFFFFFFF
+    return None
 
 def target_mode(ins,current_thumb,target):
     if target&1: return True
@@ -225,7 +228,7 @@ def is_branch(ins):
 def is_uncond(ins): return ins.mnemonic.lower() in ('b','b.w')
 def terminal(ins):
     m=ins.mnemonic.lower(); ops=ins.op_str.replace(' ','').lower()
-    return m in ('bx','bxj','tbb','tbh','eret','rfe','rfeia','rfedb') or (m=='pop' and 'pc' in ops) or (m.startswith('ldm') and 'pc' in ops) or (m in ('ldr','mov') and ops.startswith('pc,'))
+    return m in ('bx','bxj','tbb','tbh','eret','rfe','rfeia','rfedb') or (m.startswith('pop') and 'pc' in ops) or (m.startswith('ldm') and 'pc' in ops) or (m in ('ldr','mov') and ops.startswith('pc,'))
 
 @dataclass
 class Block:
@@ -300,17 +303,25 @@ class Reachability:
             for cv,ct in cfg.direct_callees:
                 if (cv,ct) not in self.functions: q.append((cv,ct,f'call-from-0x{cfg.start:08X}'))
     def proven_calls_to(self,target):
-        target &= ~1; out=[]
+        target &= ~1; by_call={}
         for (start,thumb),cfg in self.functions.items():
             for c in cfg.calls:
-                if c['target']==target:
-                    out.append(dict(classification='PROVEN_CALLSITE',function_start=start,function_mode='thumb' if thumb else 'arm',exidx_exact=cfg.exidx_exact,call_va=c['va'],instruction=c['instruction'],pre_post_window=cfg.window_for_call(c['va'])))
-        return sorted(out,key=lambda x:x['call_va'])
+                if c['target']!=target: continue
+                item=dict(classification='PROVEN_CALLSITE',function_start=start,function_mode='thumb' if thumb else 'arm',exidx_exact=cfg.exidx_exact,call_va=c['va'],instruction=c['instruction'],pre_post_window=cfg.window_for_call(c['va']))
+                previous=by_call.get(c['va'])
+                if previous is None or item['function_start']>previous['function_start']:
+                    by_call[c['va']]=item
+        return [by_call[k] for k in sorted(by_call)]
     def state_refs(self):
-        out=[]
+        by_ref={}
         for (start,thumb),cfg in self.functions.items():
-            for r in cfg.offset_refs: out.append(dict(function_start=start,function_mode='thumb' if thumb else 'arm',exidx_exact=cfg.exidx_exact,**r))
-        return sorted(out,key=lambda x:(x['immediate'],x['va']))
+            for r in cfg.offset_refs:
+                key=(r['va'],r['immediate'])
+                item=dict(function_start=start,function_mode='thumb' if thumb else 'arm',exidx_exact=cfg.exidx_exact,**r)
+                prev=by_ref.get(key)
+                if prev is None or item['function_start']>prev['function_start']:
+                    by_ref[key]=item
+        return [by_ref[k] for k in sorted(by_ref,key=lambda x:(x[1],x[0]))]
 
 def candidate_branch_refs(elf,targets,limit=32):
     from capstone import Cs,CS_ARCH_ARM,CS_MODE_ARM,CS_MODE_THUMB
