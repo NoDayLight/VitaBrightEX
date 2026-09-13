@@ -28,8 +28,15 @@ typedef struct {
     int filter_panel_enhance;
 } VitaBrightConfig;
 
+typedef struct {
+    VitaBrightConfig config;
+    VbeSourceIdentity source;
+} VbeConfigSnapshot;
+
 extern VitaBrightConfig g_config;
 
 void config_reset_defaults(void);
 int config_load(void);
 void config_get_source(VbeSourceIdentity *out);
+void config_snapshot(VbeConfigSnapshot *out);
+void config_restore(const VbeConfigSnapshot *snapshot);
