@@ -1,0 +1,57 @@
+name: Display pipeline CI
+on:
+  push:
+    branches:
+      - v1.4-display-pipeline
+permissions:
+  contents: read
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Existing semantic contracts
+        run: |
+          python3 tools/verify_source_contract.py
+          python3 tools/verify_parser_contract.py
+          python3 tools/validate_packaged_assets.py
+      - name: Display pure-core regressions
+        run: |
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/config_parser_host.c config_parser.c text_stream.c -o /tmp/config-test
+          /tmp/config-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/filter_policy_host.c filter_policy.c filter_state_core.c -o /tmp/filter-policy-test
+          /tmp/filter-policy-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/filter_state_host.c filter_state_core.c -o /tmp/filter-state-test
+          /tmp/filter-state-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/oled_transform_host.c oled/transform_core.c -o /tmp/oled-transform-test
+          /tmp/oled-transform-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/affine_core_host.c affine_core.c -o /tmp/affine-test
+          /tmp/affine-test
+      - uses: actions/checkout@v7
+        with:
+          repository: vitasdk/vdpm
+          path: vdpm
+      - name: Bootstrap VitaSDK
+        run: |
+          bash vdpm/bootstrap-vitasdk.sh
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+          vdpm install taihen
+          vdpm install libvita2d
+      - name: Build release and diagnostic with -Werror
+        run: |
+          cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DENABLE_LOGGING=OFF
+          cmake --build build --parallel
+          cmake -S . -B build-diagnostic -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DENABLE_LOGGING=ON
+          cmake --build build-diagnostic --parallel
+      - name: Build editor against generated stubs
+        run: |
+          cmake --install build --prefix "$VITASDK/arm-vita-eabi"
+          cmake -S editor -B editor-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          cmake --build editor-build --parallel
+      - name: Report exact-head build hashes only
+        run: |
+          printf 'HEAD=%s\n' "$GITHUB_SHA"
+          sha256sum build/vitabright.skprx build-diagnostic/vitabright.skprx editor-build/vitabrightex-editor.vpk

@@ -1,33 +1,23 @@
 #pragma once
 #include <stdint.h>
+#include "screen_filter_types.h"
+
+#define VBE_DISPLAY_FILTER_STATE_ABI_VERSION 1u
 
 typedef struct {
-    uint16_t cct;
-    float gamma;
-    float contrast;
-    float brightness;
-    int invert;
-    int panel_enhance;
-} ScreenFilterParams;
+    uint32_t abi_version;
+    ScreenFilterParams requested;
+    ScreenFilterParams committed;
+    uint32_t requested_domains;
+    uint32_t committed_domains;
+    uint32_t unsupported_domains;
+    uint32_t failed_domains;
+} VitaBrightDisplayFilterState;
 
-extern ScreenFilterParams g_screen_filter;
-
-#define CCT_DEFAULT         6500
-#define CCT_AQUARIUM        10000
-#define CCT_OVERCAST_SKY    7500
-#define CCT_DAYLIGHT        5500
-#define CCT_FLUORESCENT     4200
-#define CCT_HALOGEN         3400
-#define CCT_INCANDESCENT    2700
-#define CCT_WARM_INCAN      2300
-#define CCT_CANDLE          1900
-#define CCT_EMBER           1200
-
-void screen_filter_load_config(void);
-int screen_filter_apply(int is_oled);
-void screen_filter_set_cct(uint16_t cct, int is_oled);
-int screen_filter_reset(int is_oled);
+int screen_filter_apply_config(void);
+int screen_filter_reset(int is_oled_unused);
 
 int vitabrightFilterGetParams(ScreenFilterParams *out);
-int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled);
-int vitabrightFilterReset(int is_oled);
+int vitabrightFilterGetState(VitaBrightDisplayFilterState *out);
+int vitabrightFilterSetParams(const ScreenFilterParams *in, int is_oled_unused);
+int vitabrightFilterReset(int is_oled_unused);
