@@ -71,12 +71,20 @@ int module_start(SceSize argc, const void *args) {
 
 int vitabright_reload_locked(void) {
     int result = VBE_RESULT_OK;
+    VbeConfigSnapshot previous_config;
+    config_snapshot(&previous_config);
 
     int config_ret = config_load();
     keep_first_result(&result, config_ret);
 
     int brightness_ret = g_is_oled ? oled_reload_backend() : lcd_reload_backend();
     keep_first_result(&result, brightness_ret);
+
+    /* The config/source candidate is not externally observable during this
+     * locked transition. A failed backend replacement restores the previous
+     * committed config and exact FILE/COMPILED identity before returning. */
+    if (config_ret >= 0 && brightness_ret < 0)
+        config_restore(&previous_config);
 
     int color_ret = color_space_apply_config();
     keep_first_result(&result, color_ret);
