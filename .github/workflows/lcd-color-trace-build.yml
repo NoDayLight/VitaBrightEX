@@ -30,23 +30,36 @@ jobs:
           bash vdpm/bootstrap-vitasdk.sh
           echo "$VITASDK/bin" >> "$GITHUB_PATH"
           "$VITASDK/bin/vdpm" install taihen
-      - name: Assert trace-only source contract
+      - name: Assert nonblocking kernel trace contract
         run: |
           set -euxo pipefail
           p=research/diagnostics/iftu_csc_trace/main.c
+          h=research/diagnostics/iftu_csc_trace/trace_protocol.h
           grep -F '0x0FCBF457u' "$p"
           grep -F '0xD64F4C6Bu' "$p"
-          grep -F 'TAI_CONTINUE(int, g_ref_a, plane, params)' "$p"
-          grep -F 'TAI_CONTINUE(int, g_ref_b, plane, params)' "$p"
-          ! grep -E 'taiInject|ksceKernelCreateThread|ksceKernelCreateTimer|ksceKernelDelayThread|sceKernelDelayThread|SetDisplayColorSpace|SetBrightness' "$p"
-      - name: Build trace-only diagnostic with Werror
+          grep -F 'LOWIO_PLANE_SEGMENT         1' "$p"
+          grep -F 'LOWIO_PLANE_SEGMENT_OFFSET  0x37Cu' "$p"
+          grep -F 'LCD_PANEL_WRITER_OFFSET     0xA54u' "$p"
+          grep -F 'VBE_TRACE_RECORD_CAPACITY    512u' "$h"
+          grep -F 'VBE_TRACE_PANEL_WRITE' "$h"
+          grep -F 'VBE_TRACE_IFTU_ENABLE' "$h"
+          ! grep -E 'ksceIo|sceIo|snprintf|printf|malloc|calloc|realloc|ksceKernelAlloc|CreateThread|CreateTimer|DelayThread|Wait' "$p"
+          ! grep -E '0x8100B37C|0x81000A54' "$p"
+      - name: Build ring-buffer diagnostic and user drain with Werror
         run: |
           set -euxo pipefail
           cmake -S research/diagnostics/iftu_csc_trace -B trace-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
           cmake --build trace-build --parallel
-          sha256sum trace-build/vbe_iftu_csc_trace.skprx
-      - name: Upload trace-only diagnostic
+          test -s trace-build/vbe_color_trace.skprx
+          test -s trace-build/vbe_color_trace_drain.self
+          test -s trace-build/vbe_color_trace_drain.vpk
+          sha256sum trace-build/vbe_color_trace.skprx trace-build/vbe_color_trace_drain.self trace-build/vbe_color_trace_drain.vpk
+      - name: Upload correlated trace diagnostic
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: vbe-iftu-csc-trace-only
-          path: trace-build/vbe_iftu_csc_trace.skprx
+          name: vbe-color-trace-diagnostic
+          path: |
+            trace-build/vbe_color_trace.skprx
+            trace-build/vbe_color_trace_drain.self
+            trace-build/vbe_color_trace_drain.vpk
+            research/diagnostics/iftu_csc_trace/trace_protocol.h
