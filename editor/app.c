@@ -164,14 +164,16 @@ static void edit(int delta) {
     }
     if (status.hardware == VBE_HW_OLED) {
         int v = (int)oled_lut[cursor] + delta;
-        if (v < 0) v = 0; if (v > 255) v = 255;
+        if (v < 0) v = 0;
+        if (v > 255) v = 255;
         oled_lut[cursor] = (unsigned char)v;
         report_lut_result(vitabrightOledSetLut(oled_lut), 1);
     } else if (status.hardware == VBE_HW_LCD) {
         int v = (int)lcd_lut[cursor] + delta;
         int lo = cursor ? lcd_lut[cursor - 1] : 0;
         int hi = cursor == LCD_LUT_LEVELS - 1 ? 255 : lcd_lut[cursor + 1];
-        if (v < lo) v = lo; if (v > hi) v = hi;
+        if (v < lo) v = lo;
+        if (v > hi) v = hi;
         lcd_lut[cursor] = (unsigned char)v;
         report_lut_result(vitabrightLcdSetBrightnessValues(lcd_lut), 0);
     }
