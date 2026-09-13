@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <psp2kern/io/fcntl.h>
+#include <psp2kern/kernel/modulemgr.h>
 #include <psp2kern/lowio/iftu.h>
 #include <taihen.h>
 
@@ -52,7 +53,7 @@ static int hook_csc_b(int plane, const SceIftuCscParams *params) {
     return TAI_CONTINUE(int, g_ref_b, plane, params);
 }
 
-void _start(void) __attribute__((weak, alias("module_start")));
+void _start() __attribute__((weak, alias("module_start")));
 int module_start(SceSize argc, const void *args) {
     (void)argc;
     (void)args;
@@ -72,7 +73,6 @@ int module_start(SceSize argc, const void *args) {
         g_hook_b = -1;
         int release = taiHookReleaseForKernel(g_hook_a, g_ref_a);
         if (release >= 0) g_hook_a = -1;
-        /* If release failed, remain resident rather than unload beneath a hook. */
         return SCE_KERNEL_START_SUCCESS;
     }
 
