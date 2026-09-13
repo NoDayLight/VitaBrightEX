@@ -108,9 +108,12 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p fw/raw
-          echo '=== os0:/kd relevant entries ==='
-          mdir -i fw/PUP_dec/os0.bin ::/kd | grep -Ei 'lowio|display|lcd|oled'
+          echo '=== os0 root ==='
+          mdir -i fw/PUP_dec/os0.bin ::
+          echo '=== os0:/kd ==='
+          mdir -i fw/PUP_dec/os0.bin ::/kd
           for module in lowio display lcd oled; do
+            echo "extracting os0:/kd/${module}.skprx"
             mcopy -n -i fw/PUP_dec/os0.bin "::/kd/${module}.skprx" "fw/raw/${module}.skprx"
             test -s "fw/raw/${module}.skprx"
           done
