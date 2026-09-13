@@ -118,6 +118,23 @@ jobs:
           set -euxo pipefail
           python3 research/analysis_authority_audit.py --elf-dir fw/elf-all --display fw/elf-all/display.elf --json analysis-authority.json | tee analysis-authority.txt
 
+      - name: Audit decisive affine static semantics
+        run: |
+          set -euxo pipefail
+          python3 research/affine_static_closure_audit.py --lowio fw/elf-all/lowio.elf --display fw/elf-all/display.elf --nid-db-root vita-headers-reference --json affine-static-closure.json | tee affine-static-closure.txt
+          python3 research/affine_math_host.py --json affine-host-math.json | tee affine-host-math.txt
+
+      - name: Reconstruct valid Sony LCD working programs
+        run: |
+          set -euxo pipefail
+          python3 research/panel_program_reconstruction_audit.py --lcd fw/elf-all/lcd.elf --json panel-program-reconstruction.json | tee panel-program-reconstruction.txt
+          python3 research/lcd_state_provenance_audit.py --lcd fw/elf-all/lcd.elf --nid-db-root vita-headers-reference --json lcd-state-provenance.json | tee lcd-state-provenance.txt
+
+      - name: Audit suspend resume display dependency edge
+        run: |
+          set -euxo pipefail
+          python3 research/display_lifecycle_audit.py --elf-dir fw/elf-all --nid-db-root vita-headers-reference --json display-lifecycle.json | tee display-lifecycle.txt
+
       - name: Audit IFTU affine pipeline
         run: |
           set -euxo pipefail
@@ -144,17 +161,17 @@ jobs:
           python3 research/lcd_dsi_audit.py --lcd fw/elf-all/lcd.elf --lowio fw/elf-all/lowio.elf --json lcd-dsi-365.json | tee lcd-dsi-365.txt
           python3 research/lcd_panel_topology_audit.py --lcd fw/elf-all/lcd.elf --nid-db-root vita-headers-reference --json panel-bus-map.json | tee panel-bus-map.txt
 
-      - name: Audit all kernel display/IFTU touch points
+      - name: Audit all kernel display IFTU touch points
         run: |
           set -euxo pipefail
           python3 research/kernel_color_topology_audit.py --elf-dir fw/elf-all --nid-db-root vita-headers-reference --json kernel-color-topology.json | tee kernel-color-topology.txt
 
-      - name: Audit registry-backed display/color consumers
+      - name: Audit registry-backed display color consumers
         run: |
           set -euxo pipefail
           python3 research/registry_display_audit.py --elf-dir fw/elf-all --nid-db-root vita-headers-reference --json registry-display-consumers.json | tee registry-display-consumers.txt
 
-      - name: Assert pinned public structure/API evidence
+      - name: Assert pinned public structure API evidence
         run: |
           set -euxo pipefail
           grep -F 'VITASDK_BUILD_ASSERT_EQ(0x3C, SceIftuCscParams);' vita-headers-reference/include/psp2kern/lowio/iftu.h
@@ -174,6 +191,16 @@ jobs:
             kernel-elf-sha256.txt
             analysis-authority.json
             analysis-authority.txt
+            affine-static-closure.json
+            affine-static-closure.txt
+            affine-host-math.json
+            affine-host-math.txt
+            panel-program-reconstruction.json
+            panel-program-reconstruction.txt
+            lcd-state-provenance.json
+            lcd-state-provenance.txt
+            display-lifecycle.json
+            display-lifecycle.txt
             iftu-pipeline-365.json
             iftu-pipeline-365.txt
             display-export-map.json
