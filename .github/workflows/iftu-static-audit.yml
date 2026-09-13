@@ -127,21 +127,22 @@ jobs:
           file fw/elf/*.elf
           sha256sum fw/elf/*.elf
 
-      - name: Emit proof-grade target CFG and call-site evidence
+      - name: Emit reachable-CFG target and call-site evidence
         shell: bash
         run: |
           set -euxo pipefail
           python3 research/vita_elf_audit.py fw/elf/lowio.elf fw/elf/display.elf fw/elf/lcd.elf fw/elf/oled.elf --json audit-365.json | tee audit-365.txt
-          python3 - <<'PY'
-          import json
-          records=json.load(open('audit-365.json'))
-          display=next(x for x in records if x['module']=='SceDisplay')
-          bynid={x['nid']:x for x in display['target_imports']}
-          for nid in (0x0FCBF457,0x357EAE24,0xD64F4C6B):
-              if nid not in bynid or not bynid[nid]['proven_callsites']:
-                  raise SystemExit('no PROVEN_CALLSITE for IFTU import 0x%08X' % nid)
-              print('0x%08X proven_calls=%d candidate_xrefs=%d' % (nid,len(bynid[nid]['proven_callsites']),len(bynid[nid]['candidate_xrefs'])))
-          PY
+
+      - name: Assert exact retail-3.65 IFTU CSC contract
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 research/verify_iftu_365_contract.py \
+            --lowio fw/elf/lowio.elf \
+            --display fw/elf/display.elf \
+            --audit-json audit-365.json \
+            --iftu-header vita-headers-reference/include/psp2kern/lowio/iftu.h \
+            --legacy-screen-filter legacy-v13/screen_filter.c
 
       - name: Prove legacy v1.3 IFTU ABI mismatch
         shell: bash
