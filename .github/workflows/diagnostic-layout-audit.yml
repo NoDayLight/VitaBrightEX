@@ -1,0 +1,79 @@
+name: LCD diagnostic runtime layout
+
+on:
+  push:
+    branches:
+      - research-lcd-color-engine
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PUP_URL: https://web.archive.org/web/20180630222648id_/http://dus01.psp2.update.playstation.net/update/psp2/image/2017_0317/rel_0a0f2a9ae58968ac5d1d2127049c3cba/PSP2UPDAT.PUP
+  PUP_SHA256: 86859b3071681268b6d0beb5ef691da874b6726e85b6f06a1cdf6a0e183e77c6
+  SCEUTILS_SHA: 0466d003246ec986ab6189e6719dcb196a40fb02
+  VITA_HEADERS_SHA: 5e1e7d38d766e4c1634a77f6e5249caab8c8f9cb
+  PY2_IMAGE: python@sha256:d8fac68ebdc45b8d66d53f1ed6c1532da81109a8f5532a6ca0c951ed31107d70
+
+jobs:
+  layout-365:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Prepare pinned retail 3.65 inputs
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 5 --retry-delay 2 "$PUP_URL" -o PSP2UPDAT-365.PUP
+          echo "$PUP_SHA256  PSP2UPDAT-365.PUP" | sha256sum -c -
+          sudo apt-get update
+          sudo apt-get install -y mtools
+          python3 -m pip install --disable-pip-version-check --user capstone==5.0.3
+          git init -q sceutils-audit
+          git -C sceutils-audit remote add origin https://github.com/RealYoti/sceutils.git
+          git -C sceutils-audit fetch -q --depth 1 origin "$SCEUTILS_SHA"
+          git -C sceutils-audit checkout -q --detach FETCH_HEAD
+          git init -q vita-headers-reference
+          git -C vita-headers-reference remote add origin https://github.com/vitasdk/vita-headers.git
+          git -C vita-headers-reference fetch -q --depth 1 origin "$VITA_HEADERS_SHA"
+          git -C vita-headers-reference checkout -q --detach FETCH_HEAD
+          cp sceutils-audit/keys_external.py sceutils-audit/keys.py
+          mkdir -p sceutils-audit/unarzl
+          : > sceutils-audit/unarzl/unarzl
+      - name: Decrypt only Lowio and LCD
+        run: |
+          set -euxo pipefail
+          cat > extract_os0.py <<'PY'
+          import os,sys
+          sys.path.insert(0,'sceutils-audit')
+          import pup_fiction
+          os.makedirs('fw/PUP'); os.makedirs('fw/PUP_dec')
+          pup_fiction.pup_extract_files('PSP2UPDAT-365.PUP','fw/PUP')
+          pup_fiction.pup_decrypt_packages('fw/PUP','fw/PUP_dec')
+          PY
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python extract_os0.py"
+          sudo chown -R "$(id -u):$(id -g)" fw
+          mkdir -p fw/raw fw/elf
+          mcopy -n -i fw/PUP_dec/os0.bin ::/kd/lowio.skprx fw/raw/lowio.skprx
+          mcopy -n -i fw/PUP_dec/os0.bin ::/kd/lcd.skprx fw/raw/lcd.skprx
+          for m in lowio lcd; do
+            docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python sceutils-audit/self2elf.py -i fw/raw/$m.skprx -o fw/elf/$m.elf >/dev/null"
+          done
+          sudo chown -R "$(id -u):$(id -g)" fw/elf
+          echo 'f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744  fw/elf/lowio.elf' | sha256sum -c -
+          echo '24752bb4c69f0c241701cab0364cde9cbe5c95128b6bfe02bf3263aad524246e  fw/elf/lcd.elf' | sha256sum -c -
+      - name: Prove runtime segment bindings
+        run: |
+          set -euxo pipefail
+          python3 research/diagnostic_layout_audit.py --lowio fw/elf/lowio.elf --lcd fw/elf/lcd.elf --nid-db-root vita-headers-reference --json diagnostic-runtime-layout.json | tee diagnostic-runtime-layout.txt
+      - name: Upload derived layout evidence only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: diagnostic-runtime-layout
+          path: |
+            diagnostic-runtime-layout.json
+            diagnostic-runtime-layout.txt
+      - name: Remove proprietary firmware bytes
+        if: always()
+        run: sudo rm -rf PSP2UPDAT-365.PUP fw sceutils-audit extract_os0.py vita-headers-reference
