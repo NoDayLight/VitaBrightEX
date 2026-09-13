@@ -21,7 +21,8 @@ add_executable(vitabright
  status.c status.h status_error_core.h state_lock_core.c state_lock_core.h state_lock.c state_lock.h
  color_space.c color_space.h display_domains.h screen_filter_types.h filter_policy.c filter_policy.h filter_state_core.c filter_state_core.h
  screen_filter.c screen_filter.h affine_core.c affine_core.h taihen_extra.h lut_parser_core.h
- oled/lut_parser.c oled/parser.c oled/parser.h oled/hooks.c oled/hooks.h oled/lut.h oled/transform_core.c oled/transform_core.h
+ oled/lut_parser.c oled/parser.c oled/parser.h oled/hooks.c oled/hooks.h oled/lut.h
+ oled/transform_core.c oled/transform_core.h oled/state_core.c oled/state_core.h
  lcd/lut_parser.c lcd/hooks.c lcd/hooks.h lcd/lcd_lut.h)
 target_compile_definitions(vitabright PRIVATE VBE_BUILD_ID="${VBE_BUILD_ID}")
 target_link_libraries(vitabright SceDisplayForDriver_stub taihenForKernel_stub taihenModuleUtils_stub SceIofilemgrForDriver_stub SceThreadmgrForDriver_stub gcc SceSysclibForDriver_stub SceSysmemForDriver_stub SceSysrootForKernel_stub SceSysrootForDriver_stub)
