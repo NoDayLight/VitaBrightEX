@@ -1,0 +1,52 @@
+name: LCD color trace diagnostic build
+
+on:
+  push:
+    branches:
+      - research-lcd-color-engine
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+
+jobs:
+  build-trace-only:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: vitasdk/vdpm
+          ref: c83b88a54ec13372515eeb8b3bdca4b10c36d721
+          path: vdpm
+      - name: Bootstrap pinned VitaSDK
+        run: |
+          set -euxo pipefail
+          test "$(git -C vdpm rev-parse HEAD)" = c83b88a54ec13372515eeb8b3bdca4b10c36d721
+          bash vdpm/bootstrap-vitasdk.sh
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+          "$VITASDK/bin/vdpm" install taihen
+      - name: Assert trace-only source contract
+        run: |
+          set -euxo pipefail
+          p=research/diagnostics/iftu_csc_trace/main.c
+          grep -F '0x0FCBF457u' "$p"
+          grep -F '0xD64F4C6Bu' "$p"
+          grep -F 'TAI_CONTINUE(int, g_ref_a, plane, params)' "$p"
+          grep -F 'TAI_CONTINUE(int, g_ref_b, plane, params)' "$p"
+          ! grep -E 'taiInject|ksceKernelCreateThread|ksceKernelCreateTimer|ksceKernelDelayThread|sceKernelDelayThread|SetDisplayColorSpace|SetBrightness' "$p"
+      - name: Build trace-only diagnostic with Werror
+        run: |
+          set -euxo pipefail
+          cmake -S research/diagnostics/iftu_csc_trace -B trace-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          cmake --build trace-build --parallel
+          sha256sum trace-build/vbe_iftu_csc_trace.skprx
+      - name: Upload trace-only diagnostic
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vbe-iftu-csc-trace-only
+          path: trace-build/vbe_iftu_csc_trace.skprx
