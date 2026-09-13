@@ -162,7 +162,7 @@ int vitabrightFilterReset(int is_oled_unused) {
         return ret;
     }
 
-    ret = screen_filter_reset(g_is_oled);
+    ret = screen_filter_reset(0);
     if (ret >= 0)
         status_stage_result(VBE_ERROR_DOMAIN_INPUT, 1,
                             VBE_ERR_INVALID_USER_INPUT, 0);
