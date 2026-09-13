@@ -36,5 +36,10 @@ int vbe_lock_after_delete(int lifecycle, int api_result) {
 }
 
 int vbe_lock_result_after_release(int operation_result, int release_result) {
+    /* Unlock/release ownership is a synchronization boundary: if it fails,
+     * that failure must be the scalar return even when the operation already
+     * failed. The operation's own domain remains independently recorded. */
+    if (release_result < 0)
+        return vbe_result_compose(0, release_result);
     return vbe_result_compose(operation_result, release_result);
 }
