@@ -100,11 +100,12 @@ jobs:
             --display fw/elf/display.elf \
             --json iftu-pipeline-365.json | tee iftu-pipeline-365.txt
 
-      - name: Audit complete SceLcd DSI traffic
+      - name: Audit complete SceLcd panel and DSI paths
         run: |
           set -euxo pipefail
           python3 research/lcd_dsi_audit.py \
             --lcd fw/elf/lcd.elf \
+            --lowio fw/elf/lowio.elf \
             --json lcd-dsi-365.json | tee lcd-dsi-365.txt
 
       - name: Assert pinned public structure/API evidence

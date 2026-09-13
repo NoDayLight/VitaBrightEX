@@ -1,302 +1,111 @@
 #!/usr/bin/env python3
-"""Retail-3.65 SceLcd -> SceDsi command/dataflow audit.
-
-The output is derived semantic evidence: export/import maps, reachable DSI call
-sites, statically-resolved argument values, and focused control-flow for the
-color-space/DDB functions. Unknown dynamic arguments remain UNKNOWN.
-"""
+"""Retail-3.65 SceLcd panel-command and DSI hardware audit v2."""
 from __future__ import annotations
-
-import argparse
-import json
-from collections import defaultdict, deque
+import argparse,json
 from pathlib import Path
+from vita_elf_audit import FunctionCFG, Reachability, VitaElf
 
-from capstone.arm import ARM_OP_IMM, ARM_OP_MEM, ARM_OP_REG, ARM_REG_PC
-from vita_elf_audit import FunctionCFG, Reachability, VitaElf, immediate_target, is_call
+LCD_SHA256='24752bb4c69f0c241701cab0364cde9cbe5c95128b6bfe02bf3263aad524246e'
+LOWIO_SHA256='f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744'
+LCD_EXPORTS={0x1A0A7519:'ksceLcdDisplayOff',0x5F4124AB:'ksceLcdDisplayOn',0x3A6D6AC3:'ksceLcdGetBrightness',0xE03E120B:'ksceLcdGetDDB',0x17F66722:'ksceLcdGetDisplayColorSpaceMode',0x581D3A87:'ksceLcdSetBrightness',0xD40968FB:'ksceLcdSetDisplayColorSpaceMode',0x0C7E03D8:'ksceLcdWaitReady'}
+DSI_PUBLIC={0x3FB0DF1F:'ksceDsiDcsRead',0xBA6BC89F:'ksceDsiDcsShortWrite',0x98120684:'ksceDsiGenericReadRequest',0x89C00D2F:'ksceDsiGenericShortWrite',0x114D1413:'ksceDsiDisableHead',0x5BE5AA9B:'ksceDsiEnableHead',0x4DF9E924:'ksceDsiGetPixelClock',0xB3A70C05:'ksceDsiGetVicResolution',0x7640F607:'ksceDsiSendBlankingPacket',0x78E6E3CF:'ksceDsiSetLanesAndPixelSize',0x97BFEA76:'ksceDsiSetVic',0xC2E85919:'ksceDsiStartDisplay'}
+EXPECTED_LCD_VA={0x0C7E03D8:0x81000550,0xE03E120B:0x8100057C,0x3A6D6AC3:0x81000F08,0x17F66722:0x81000F20,0x5F4124AB:0x8100109C,0x1A0A7519:0x810010E4,0x581D3A87:0x8100117C,0xD40968FB:0x810012B4}
+PROGRAMS={'display_off_or_zero':0x81001AA8,'color_space_mode_0':0x81001AE8,'color_space_mode_1':0x81001B70,'display_on_program_candidate':0x81002020}
+INTERNALS={'panel_command_writer':0x81000A54,'panel_init_or_reconcile':0x81000B78,'program_step':0x81000F88,'program_kick':0x81000FF0,'async_brightness_worker':0x81001A6C}
 
-LCD_SHA256 = "24752bb4c69f0c241701cab0364cde9cbe5c95128b6bfe02bf3263aad524246e"
-LCD_EXPORTS = {
-    0x1A0A7519: "ksceLcdDisplayOff",
-    0x5F4124AB: "ksceLcdDisplayOn",
-    0x3A6D6AC3: "ksceLcdGetBrightness",
-    0xE03E120B: "ksceLcdGetDDB",
-    0x17F66722: "ksceLcdGetDisplayColorSpaceMode",
-    0x581D3A87: "ksceLcdSetBrightness",
-    0xD40968FB: "ksceLcdSetDisplayColorSpaceMode",
-    0x0C7E03D8: "ksceLcdWaitReady",
-}
-DSI_IMPORTS = {
-    0x3FB0DF1F: "ksceDsiDcsRead",
-    0xBA6BC89F: "ksceDsiDcsShortWrite",
-    0x114D1413: "ksceDsiDisableHead",
-    0x5BE5AA9B: "ksceDsiEnableHead",
-    0x98120684: "ksceDsiGenericReadRequest",
-    0x89C00D2F: "ksceDsiGenericShortWrite",
-    0x4DF9E924: "ksceDsiGetPixelClock",
-    0xB3A70C05: "ksceDsiGetVicResolution",
-    0x7640F607: "ksceDsiSendBlankingPacket",
-    0x78E6E3CF: "ksceDsiSetLanesAndPixelSize",
-    0x97BFEA76: "ksceDsiSetVic",
-    0xC2E85919: "ksceDsiStartDisplay",
-}
-ARG_REG_NAMES = ("r0", "r1", "r2", "r3")
-
-
-def fail(msg):
-    raise SystemExit(msg)
-
-
-def find_export(elf, nid):
-    for lib in elf.exports():
-        for fn in lib["functions"]:
-            if fn["nid"] == nid:
-                return lib, fn
-    return None, None
-
-
-def find_import(elf, nid):
-    for lib in elf.imports():
-        for fn in lib["functions"]:
-            if fn["nid"] == nid:
-                return lib, fn
-    return None, None
-
-
-def all_insns(cfg):
-    out = {}
-    for block in cfg.blocks.values():
-        for ins in block.instructions:
-            out[ins.address] = ins
-    return [out[k] for k in sorted(out)]
-
-
-def read_u32_va(elf, va):
-    try:
-        _, off = elf.file_from_va(va)
-    except ValueError:
-        return None
-    if off + 4 > len(elf.data):
-        return None
-    return int.from_bytes(elf.data[off:off+4], "little")
-
-
-def update_constants(elf, regs, ins):
-    ops = getattr(ins, "operands", [])
-    m = ins.mnemonic.lower()
-    if not ops:
-        return
-    dest = ops[0].reg if ops[0].type == ARM_OP_REG else None
-
-    if m in ("mov", "movs", "mov.w") and dest is not None and len(ops) >= 2:
-        if ops[1].type == ARM_OP_IMM:
-            regs[dest] = ops[1].imm & 0xFFFFFFFF
-        elif ops[1].type == ARM_OP_REG and ops[1].reg in regs:
-            regs[dest] = regs[ops[1].reg]
-        else:
-            regs.pop(dest, None)
-        return
-    if m == "movw" and dest is not None and len(ops) >= 2 and ops[1].type == ARM_OP_IMM:
-        regs[dest] = ops[1].imm & 0xFFFF
-        return
-    if m == "movt" and dest is not None and len(ops) >= 2 and ops[1].type == ARM_OP_IMM:
-        low = regs.get(dest, 0) & 0xFFFF
-        regs[dest] = low | ((ops[1].imm & 0xFFFF) << 16)
-        return
-    if m.startswith("ldr") and dest is not None and len(ops) >= 2 and ops[1].type == ARM_OP_MEM and ops[1].mem.base == ARM_REG_PC:
-        literal = ((ins.address + 4) & ~3) + ops[1].mem.disp
-        value = read_u32_va(elf, literal)
-        if value is None:
-            regs.pop(dest, None)
-        else:
-            regs[dest] = value
-        return
-    if m in ("add", "adds", "add.w", "sub", "subs", "sub.w") and dest is not None and len(ops) >= 3:
-        if ops[1].type == ARM_OP_REG and ops[1].reg in regs and ops[2].type == ARM_OP_IMM:
-            base = regs[ops[1].reg]
-            imm = ops[2].imm
-            regs[dest] = (base + imm if m.startswith("add") else base - imm) & 0xFFFFFFFF
-        else:
-            regs.pop(dest, None)
-        return
-    if m in ("uxth", "uxtb") and dest is not None and len(ops) >= 2 and ops[1].type == ARM_OP_REG and ops[1].reg in regs:
-        regs[dest] = regs[ops[1].reg] & (0xFFFF if m == "uxth" else 0xFF)
-        return
-    if m == "eor" and dest is not None and len(ops) >= 3 and ops[1].type == ARM_OP_REG and ops[2].type == ARM_OP_REG and ops[1].reg == ops[2].reg:
-        regs[dest] = 0
-        return
-
-    # Calls can clobber r0-r3; caller-saved registers are invalid after call.
-    if is_call(ins):
-        for reg in list(regs):
-            name = ins.reg_name(reg)
-            if name in ARG_REG_NAMES:
-                regs.pop(reg, None)
-        return
-
-    # Conservative destination invalidation for other register-writing ops.
-    if dest is not None and m not in ("cmp", "cmn", "tst", "teq", "str", "str.w", "stm", "stm.w"):
-        regs.pop(dest, None)
-
-
-def args_before_call(elf, block, call_va):
-    regs = {}
-    snapshot = {}
-    for ins in block.instructions:
-        if ins.address == call_va:
-            for name in ARG_REG_NAMES:
-                reg = next((r for r in regs if ins.reg_name(r) == name), None)
-                snapshot[name] = regs.get(reg) if reg is not None else None
-            return snapshot
-        update_constants(elf, regs, ins)
-    return {name: None for name in ARG_REG_NAMES}
-
-
-def export_reachability(elf, reach, exports):
-    owners = defaultdict(set)
-    for name, meta in exports.items():
-        root = (meta["va"], meta["thumb"])
-        q = deque([root])
-        seen = set()
-        while q:
-            key = q.popleft()
-            if key in seen:
-                continue
-            seen.add(key)
-            owners[key[0]].add(name)
-            cfg = reach.functions.get(key)
-            if cfg is None:
-                continue
-            for child in cfg.direct_callees:
-                q.append(child)
-    return owners
-
-
-def call_records(elf, reach, import_stubs, owners):
-    records = []
-    for (start, thumb), cfg in reach.functions.items():
-        for block in cfg.blocks.values():
-            for ins in block.instructions:
-                if not is_call(ins):
-                    continue
-                target = immediate_target(ins)
-                if target is None:
-                    continue
-                target &= ~1
-                info = import_stubs.get(target)
-                if info is None:
-                    continue
-                records.append({
-                    "public_callers": sorted(owners.get(start, [])),
-                    "function": start,
-                    "mode": "thumb" if thumb else "arm",
-                    "call_va": ins.address,
-                    "import_nid": info["nid"],
-                    "import_name": info["name"],
-                    "args": args_before_call(elf, block, ins.address),
-                    "instruction": f"{ins.mnemonic} {ins.op_str}".strip(),
-                })
-    records.sort(key=lambda x: x["call_va"])
-    return records
-
+def die(s):raise SystemExit(s)
+def load(p,sha):
+ e=VitaElf(p)
+ if e.sha256!=sha:die(f'SHA mismatch {e.modinfo["name"]}: {e.sha256}')
+ return e
+def find_export(e,n):
+ for lib in e.exports():
+  for f in lib['functions']:
+   if f['nid']==n:return lib,f
+ return None,None
+def allins(cfg):
+ d={}
+ for b in cfg.blocks.values():
+  for i in b.instructions:d[i.address]=i
+ return [d[k] for k in sorted(d)]
+def it(i):return f'{i.mnemonic} {i.op_str}'.strip()
+def readb(e,va,n):
+ try:_,o=e.file_from_va(va)
+ except ValueError:return None
+ if o+n>len(e.data):return None
+ return e.data[o:o+n]
+def parse_program(e,va,max_records=128):
+ p=va;rows=[];valid=True;reason='END_NOT_REACHED'
+ for _ in range(max_records):
+  h=readb(e,p,2)
+  if not h or len(h)<2:valid=False;reason='OUT_OF_FILE';break
+  cmd,n=h[0],h[1]
+  if cmd==0xff:
+   rows.append({'va':p,'kind':'end','opcode':cmd});reason='END';break
+  if cmd==0x0d:
+   rows.append({'va':p,'kind':'delay_or_wait','opcode':cmd,'value':n});p+=2;continue
+  if n>96:
+   valid=False;reason=f'IMPLAUSIBLE_LENGTH_{n}';break
+  payload=readb(e,p+2,n)
+  if payload is None:valid=False;reason='PAYLOAD_OUT_OF_FILE';break
+  rows.append({'va':p,'kind':'panel_command','command':cmd,'length':n,'payload_hex':payload.hex(),'payload':[x for x in payload]})
+  p+=2+n
+ else:valid=False;reason='RECORD_LIMIT'
+ return {'start':va,'valid':valid,'termination':reason,'records':rows}
+def cfg_record(e,r,va):
+ cfg=r.functions.get((va,True)) or FunctionCFG(e,va,True,r.import_stubs)
+ return {'start':va,'instruction_count':cfg.instruction_count(),'instructions':[{'va':i.address,'text':it(i)} for i in allins(cfg)]}
+def import_inventory(e):
+ out=[]
+ for lib in e.imports():
+  out.append({'library':lib['library_name'],'library_nid':lib['library_nid'],'functions':[{'nid':f['nid'],'va':f['va']} for f in lib['functions']]})
+ return out
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--lcd", type=Path, required=True)
-    ap.add_argument("--json", type=Path, required=True)
-    a = ap.parse_args()
-
-    elf = VitaElf(a.lcd)
-    if elf.sha256 != LCD_SHA256:
-        fail(f"SceLcd SHA mismatch: {elf.sha256} expected {LCD_SHA256}")
-    reach = Reachability(elf, elf.exports(), elf.imports())
-
-    exports = {}
-    export_rows = []
-    for nid, name in LCD_EXPORTS.items():
-        lib, fn = find_export(elf, nid)
-        if fn is None:
-            fail(f"SceLcd export missing: {name} 0x{nid:08X}")
-        meta = {"nid": nid, "name": name, "va": fn["va"], "thumb": fn["thumb"], "library": lib["library_name"]}
-        exports[name] = meta
-        export_rows.append(meta)
-
-    import_stubs = {}
-    import_rows = []
-    for nid, name in DSI_IMPORTS.items():
-        lib, fn = find_import(elf, nid)
-        if fn is None:
-            continue
-        row = {"nid": nid, "name": name, "va": fn["va"], "thumb": fn["thumb"], "library": lib["library_name"]}
-        import_rows.append(row)
-        if fn["va"]:
-            import_stubs[fn["va"]] = row
-
-    owners = export_reachability(elf, reach, exports)
-    calls = call_records(elf, reach, import_stubs, owners)
-
-    focus = {}
-    for name in ("ksceLcdSetDisplayColorSpaceMode", "ksceLcdGetDisplayColorSpaceMode", "ksceLcdGetDDB", "ksceLcdSetBrightness", "ksceLcdDisplayOn", "ksceLcdDisplayOff"):
-        meta = exports[name]
-        cfg = reach.functions.get((meta["va"], meta["thumb"])) or FunctionCFG(elf, meta["va"], meta["thumb"], reach.import_stubs)
-        focus[name] = {
-            "entry": meta["va"],
-            "instructions": [{"va": ins.address, "text": f"{ins.mnemonic} {ins.op_str}".strip()} for ins in all_insns(cfg)],
-            "dsi_calls": [c for c in calls if name in c["public_callers"]],
-        }
-
-    dcs_writes = [c for c in calls if c["import_name"] == "ksceDsiDcsShortWrite"]
-    dcs_reads = [c for c in calls if c["import_name"] == "ksceDsiDcsRead"]
-    generic_writes = [c for c in calls if c["import_name"] == "ksceDsiGenericShortWrite"]
-    generic_reads = [c for c in calls if c["import_name"] == "ksceDsiGenericReadRequest"]
-    gamma_calls = [c for c in dcs_writes if c["args"].get("r1") == 0x26]
-    unresolved_dcs_commands = [c for c in dcs_writes if c["args"].get("r1") is None]
-
-    result = {
-        "schema": 1,
-        "firmware": "3.65",
-        "elf_sha256": elf.sha256,
-        "exports": sorted(export_rows, key=lambda x: x["nid"]),
-        "dsi_imports": sorted(import_rows, key=lambda x: x["nid"]),
-        "dsi_calls": calls,
-        "focus": focus,
-        "command_summary": {
-            "dcs_short_write_count": len(dcs_writes),
-            "dcs_read_count": len(dcs_reads),
-            "generic_short_write_count": len(generic_writes),
-            "generic_read_count": len(generic_reads),
-            "resolved_dcs_commands": sorted({c["args"]["r1"] for c in dcs_writes if c["args"].get("r1") is not None}),
-            "standard_set_gamma_curve_calls": gamma_calls,
-            "unresolved_dcs_command_calls": unresolved_dcs_commands,
-        },
-    }
-    a.json.write_text(json.dumps(result, indent=2) + "\n")
-
-    print("SCELCD_EXPORT_MAP")
-    for row in sorted(export_rows, key=lambda x: x["va"]):
-        print(f"  0x{row['nid']:08X} {row['name']} -> 0x{row['va']:08X}")
-
-    print("SCELCD_DSI_IMPORT_MAP")
-    for row in sorted(import_rows, key=lambda x: x["nid"]):
-        print(f"  0x{row['nid']:08X} {row['name']} stub=0x{row['va']:08X}")
-
-    print("REACHABLE_DSI_CALLS")
-    for call in calls:
-        args = " ".join(f"{name}={'UNKNOWN' if call['args'][name] is None else hex(call['args'][name])}" for name in ARG_REG_NAMES)
-        roots = ",".join(call["public_callers"]) or "internal-only"
-        print(f"  call=0x{call['call_va']:08X} {call['import_name']} roots={roots} {args}")
-
-    print("NONLINEAR_EVIDENCE_MATRIX")
-    if gamma_calls:
-        print(f"  standard DCS 0x26 set_gamma_curve: OBSERVED count={len(gamma_calls)}")
-    elif unresolved_dcs_commands:
-        print("  standard DCS 0x26 set_gamma_curve: NOT RESOLVED; one or more DCS command arguments remain dynamic")
-    else:
-        print("  standard DCS 0x26 set_gamma_curve: NOT OBSERVED in complete reachable DCS short-write set")
-    print(f"  DCS read calls={len(dcs_reads)} generic read calls={len(generic_reads)}")
-    print("  vendor gamma programming: UNCLASSIFIED until command-sequence semantics are reviewed")
-    print("  controller identity: UNKNOWN until observed/read ID path is semantically proven")
-
-
-if __name__ == "__main__":
-    main()
+ p=argparse.ArgumentParser();p.add_argument('--lcd',type=Path,required=True);p.add_argument('--lowio',type=Path,required=True);p.add_argument('--json',type=Path,required=True);a=p.parse_args()
+ lcd=load(a.lcd,LCD_SHA256);low=load(a.lowio,LOWIO_SHA256);lr=Reachability(lcd,lcd.exports(),lcd.imports());lor=Reachability(low,low.exports(),low.imports())
+ ex=[]
+ for n,nm in LCD_EXPORTS.items():
+  lib,f=find_export(lcd,n)
+  if not f:die(f'missing {nm}')
+  if f['va']!=EXPECTED_LCD_VA[n]:die(f'{nm} VA drift: 0x{f["va"]:08X}')
+  ex.append({'nid':n,'name':nm,'va':f['va'],'library':lib['library_name']})
+ low_dsi=[]
+ for n,nm in DSI_PUBLIC.items():
+  lib,f=find_export(low,n)
+  if f:low_dsi.append({'nid':n,'name':nm,'va':f['va'],'library':lib['library_name'],'instructions':cfg_record(low,lor,f['va'])['instructions'] if nm in ('ksceDsiDcsShortWrite','ksceDsiGenericShortWrite','ksceDsiDcsRead','ksceDsiGenericReadRequest') else None})
+ inv=import_inventory(lcd)
+ dsi_imports=[lib for lib in inv if lib['library']=='SceDsiForDriver' or any(f['nid'] in DSI_PUBLIC for f in lib['functions'])]
+ programs={name:parse_program(lcd,va) for name,va in PROGRAMS.items()}
+ internals={name:cfg_record(lcd,lr,va) for name,va in INTERNALS.items()}
+ focus={}
+ for nm in ('ksceLcdSetDisplayColorSpaceMode','ksceLcdGetDisplayColorSpaceMode','ksceLcdGetDDB','ksceLcdSetBrightness','ksceLcdDisplayOn','ksceLcdDisplayOff'):
+  va=next(x['va'] for x in ex if x['name']==nm);focus[nm]=cfg_record(lcd,lr,va)
+ mode0=[r for r in programs['color_space_mode_0']['records'] if r['kind']=='panel_command'];mode1=[r for r in programs['color_space_mode_1']['records'] if r['kind']=='panel_command']
+ allcmd=[r['command'] for pgr in programs.values() for r in pgr['records'] if r['kind']=='panel_command']
+ result={'schema':2,'firmware':'3.65','elf_sha256':{'SceLcd':lcd.sha256,'SceLowio':low.sha256},'lcd_exports':sorted(ex,key=lambda x:x['va']),'lcd_import_inventory':inv,'sce_dsi_imports_used_by_scelcd':dsi_imports,'lowio_public_dsi_exports':low_dsi,'internal_panel_path':internals,'panel_programs':programs,'focus':focus,'color_space_program_delta':{'mode0_commands':mode0,'mode1_commands':mode1},'nonlinear_evidence':{'panel_program_contains_0x26':0x26 in allcmd,'all_observed_program_commands':sorted(set(allcmd)),'controller_identity':'UNKNOWN_STATICALLY','vendor_gamma_table':'UNCLASSIFIED','iftu_nonlinear':'SEPARATE_AUDIT_REQUIRED'}}
+ a.json.write_text(json.dumps(result,indent=2)+'\n')
+ print('SCELCD_EXPORT_MAP')
+ for x in sorted(ex,key=lambda x:x['va']):print(f"  0x{x['nid']:08X} {x['name']} -> 0x{x['va']:08X}")
+ print('SCELCD_DSI_IMPORT_RESULT')
+ print(f'  SceDsiForDriver imports used by retail SceLcd: {sum(len(x["functions"]) for x in dsi_imports)}')
+ if not dsi_imports:print('  RESULT: ZERO. SceLcd uses an internal/direct panel transport path rather than the public SceDsi ABI.')
+ print('LOWIO_PUBLIC_DSI_EXPORT_MAP')
+ for x in low_dsi:print(f"  0x{x['nid']:08X} {x['name']} -> 0x{x['va']:08X}")
+ print('COLOR_SPACE_PROGRAMS')
+ for name in ('color_space_mode_0','color_space_mode_1'):
+  q=programs[name];print(f"  {name} start=0x{q['start']:08X} valid={q['valid']} termination={q['termination']}")
+  for r in q['records']:
+   if r['kind']=='panel_command':print(f"    cmd=0x{r['command']:02X} len={r['length']} payload={r['payload_hex']}")
+   else:print(f"    {r}")
+ print('COLOR_SPACE_DELTA')
+ a0=[(r['command'],r['payload_hex']) for r in mode0];a1=[(r['command'],r['payload_hex']) for r in mode1]
+ print(f'  identical={a0==a1}')
+ print(f'  mode0_only={[x for x in a0 if x not in a1]}')
+ print(f'  mode1_only={[x for x in a1 if x not in a0]}')
+ print('NONLINEAR_EVIDENCE_MATRIX')
+ print(f"  observed command 0x26 in Sony panel programs: {'YES' if 0x26 in allcmd else 'NO'}")
+ print(f"  observed command set: {[hex(x) for x in sorted(set(allcmd))]}")
+ print('  IMPORTANT: command bytes are not labelled MIPI-DCS until the internal writer is matched to Lowio DCS packet semantics.')
+ print('  controller identity: UNKNOWN pending command/read-path interpretation')
+if __name__=='__main__':main()
