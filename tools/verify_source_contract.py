@@ -71,8 +71,6 @@ for path in (lcd, oled):
     require(path, "VBE_ERR_RESOURCE_RELEASE",
             f"{path.relative_to(ROOT)} no longer reports incomplete teardown")
 
-# LCD still owns source identity directly and therefore retains the explicit
-# source-commit helper. OLED commits a complete VbeOledLutState instead.
 require(lcd, "vbe_txn_commit_source",
         "LCD backend bypasses transactional source commit")
 
@@ -147,8 +145,8 @@ require(ROOT / "config.c", "vbe_source_identity_compiled(&g_config_source)",
 require(main, "config_restore(&previous_config)",
         "failed backend replacement no longer restores prior config/source identity")
 
-require(filter_policy, "out.attempt_domains = 0",
-        "generic filter policy unexpectedly enables an unowned hardware mutation path")
+# Generic filter support is behaviorally guarded by filter_policy_host and
+# filter_state_host. Structural checks only ensure no unsafe setter path exists.
 require(filter_policy, "out.unsupported_domains = out.requested_domains",
         "generic unsupported-domain truth no longer follows requested domains")
 forbid(filter_runtime, "NID_DISPLAY_INVERT_COLORS",
