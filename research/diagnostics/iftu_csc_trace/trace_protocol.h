@@ -4,7 +4,7 @@
 
 #define VBE_TRACE_MAGIC                   0x56425452u /* VBTR */
 #define VBE_TRACE_DUMP_MAGIC              0x56424450u /* VBDP */
-#define VBE_TRACE_VERSION                 3u
+#define VBE_TRACE_VERSION                 4u
 #define VBE_TRACE_RECORD_CAPACITY         512u
 #define VBE_TRACE_PAYLOAD_MAX             256u
 #define VBE_TRACE_CSC_PAYLOAD_SIZE        0x3Cu
@@ -14,6 +14,8 @@
 
 #define VBE_TRACE_FLAG_NULL               (1u << 0)
 #define VBE_TRACE_FLAG_TRUNCATED          (1u << 1)
+#define VBE_TRACE_FLAG_READ_PAYLOAD_UNCERTAIN (1u << 2)
+#define VBE_TRACE_FLAG_READ_PAYLOAD_PROVEN    (1u << 3)
 
 #define VBE_TRACE_HOOK_CSC_A              (1u << 0)
 #define VBE_TRACE_HOOK_CSC_B              (1u << 1)
@@ -33,12 +35,19 @@
     VBE_TRACE_HOOK_LCD_BRIGHT | VBE_TRACE_HOOK_LCD_COLOR | \
     VBE_TRACE_HOOK_DISPLAY_ON | VBE_TRACE_HOOK_DISPLAY_OFF | \
     VBE_TRACE_HOOK_IFTU_ENABLE)
-#define VBE_TRACE_REQUIRED_PANEL_HOOKS (VBE_TRACE_HOOK_PANEL_WRITE | VBE_TRACE_HOOK_PANEL_READ)
-#define VBE_TRACE_REQUIRED_HOOKS (VBE_TRACE_REQUIRED_AFFINE_HOOKS | VBE_TRACE_REQUIRED_PANEL_HOOKS)
+#define VBE_TRACE_REQUIRED_PANEL_ONLY_HOOKS \
+    (VBE_TRACE_HOOK_PANEL_WRITE | VBE_TRACE_HOOK_PANEL_READ)
+/* Panel authority includes the causal affine/lifecycle hooks plus panel transport. */
+#define VBE_TRACE_REQUIRED_PANEL_HOOKS \
+    (VBE_TRACE_REQUIRED_AFFINE_HOOKS | VBE_TRACE_REQUIRED_PANEL_ONLY_HOOKS)
+#define VBE_TRACE_REQUIRED_HOOKS VBE_TRACE_REQUIRED_PANEL_HOOKS
 
 #define VBE_TRACE_SNAPSHOT_LOWIO          (1u << 0)
 #define VBE_TRACE_SNAPSHOT_LCD            (1u << 1)
-#define VBE_TRACE_REQUIRED_SNAPSHOTS      (VBE_TRACE_SNAPSHOT_LOWIO | VBE_TRACE_SNAPSHOT_LCD)
+#define VBE_TRACE_REQUIRED_AFFINE_SNAPSHOTS VBE_TRACE_SNAPSHOT_LOWIO
+#define VBE_TRACE_REQUIRED_PANEL_SNAPSHOTS \
+    (VBE_TRACE_SNAPSHOT_LOWIO | VBE_TRACE_SNAPSHOT_LCD)
+#define VBE_TRACE_REQUIRED_SNAPSHOTS VBE_TRACE_REQUIRED_PANEL_SNAPSHOTS
 #define VBE_TRACE_SNAPSHOT_STABLE         (1u << 0)
 
 #define VBE_TRACE_FAIL_CSC_A              (1u << 0)
@@ -60,6 +69,10 @@
 
 #define VBE_TRACE_CAPTURE_AUTHORITATIVE   1u
 #define VBE_TRACE_CAPTURE_PARTIAL         2u
+
+#define VBE_TRACE_PANEL_READ_NONE         0u
+#define VBE_TRACE_PANEL_READ_PROVEN_ONLY  1u
+#define VBE_TRACE_PANEL_READ_HAS_UNCERTAIN 2u
 
 #define VBE_TRACE_ERR_INVALID             (-1)
 #define VBE_TRACE_ERR_BUSY                (-2)
@@ -165,11 +178,23 @@ typedef struct VbeTraceDumpHeader {
     uint32_t post_snapshot_size;
     uint32_t record_size;
     uint32_t record_count;
+    /* Backward-compatible aggregate: equals panel_capture_quality. */
     uint32_t capture_quality;
     uint32_t pre_snapshot_present;
     uint32_t pre_snapshot_retry_count;
     uint32_t post_snapshot_retry_count;
     uint32_t validation_flags;
+    uint32_t affine_required_mask;
+    uint32_t affine_missing_required_mask;
+    uint32_t panel_required_mask;
+    uint32_t panel_missing_required_mask;
+    uint32_t affine_required_snapshot_mask;
+    uint32_t affine_missing_required_snapshot_mask;
+    uint32_t panel_required_snapshot_mask;
+    uint32_t panel_missing_required_snapshot_mask;
+    uint32_t affine_capture_quality;
+    uint32_t panel_capture_quality;
+    uint32_t panel_read_validity;
     uint32_t reserved[3];
 } VbeTraceDumpHeader;
 
