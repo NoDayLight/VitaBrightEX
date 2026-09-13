@@ -17,6 +17,7 @@ env:
   VITA_HEADERS_SHA: 5e1e7d38d766e4c1634a77f6e5249caab8c8f9cb
   VDPM_SHA: c83b88a54ec13372515eeb8b3bdca4b10c36d721
   VITA_TOOLCHAIN_SHA: eacff34d18e9872a78c0e520e1997ef71900ebb4
+  LEGACY_V13_SHA: f1e8cba5087c08114890fc1cd0c7a1a462e893ac
   PY2_IMAGE: python@sha256:d8fac68ebdc45b8d66d53f1ed6c1532da81109a8f5532a6ca0c951ed31107d70
 
 jobs:
@@ -36,6 +37,7 @@ jobs:
             "vita-headers=$VITA_HEADERS_SHA" \
             "vdpm=$VDPM_SHA" \
             "vita-toolchain=$VITA_TOOLCHAIN_SHA" \
+            "legacy-v1.3=$LEGACY_V13_SHA" \
             "python2-image=$PY2_IMAGE" \
             "pycryptodome=3.9.9" \
             "enum34=1.1.10" \
@@ -58,7 +60,7 @@ jobs:
           mdir -V || true
           python3 -m pip install --disable-pip-version-check --user capstone==5.0.3
 
-      - name: Fetch pinned format and extraction references
+      - name: Fetch pinned references
         shell: bash
         run: |
           set -euxo pipefail
@@ -75,6 +77,7 @@ jobs:
           fetch_exact https://github.com/vitasdk/vita-headers.git "$VITA_HEADERS_SHA" vita-headers-reference
           fetch_exact https://github.com/vitasdk/vdpm.git "$VDPM_SHA" vdpm-reference
           fetch_exact https://github.com/vitasdk/vita-toolchain.git "$VITA_TOOLCHAIN_SHA" vita-toolchain-reference
+          fetch_exact https://github.com/Zushikina-kun/VitaBrightEX.git "$LEGACY_V13_SHA" legacy-v13
           cp sceutils-audit/keys_external.py sceutils-audit/keys.py
           mkdir -p sceutils-audit/unarzl
           : > sceutils-audit/unarzl/unarzl
@@ -95,10 +98,7 @@ jobs:
           if not os.path.isfile('fw/PUP_dec/os0.bin'):
               raise SystemExit('os0.bin was not produced')
           PY
-          docker run --rm \
-            -v "$PWD:/work" -w /work \
-            "$PY2_IMAGE" \
-            bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 && python extract_os0.py"
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 && python extract_os0.py"
           sudo chown -R "$(id -u):$(id -g)" fw
           echo '35480a01ea783df859326d8698831afd3e850717f5b7785ab9964eab23712856  fw/PUP_dec/os0.bin' | sha256sum -c -
           file fw/PUP_dec/os0.bin
@@ -108,10 +108,6 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p fw/raw
-          echo '=== os0 root ==='
-          mdir -i fw/PUP_dec/os0.bin ::
-          echo '=== os0:/kd ==='
-          mdir -i fw/PUP_dec/os0.bin ::/kd
           for module in lowio display lcd oled; do
             echo "extracting os0:/kd/${module}.skprx"
             mcopy -n -i fw/PUP_dec/os0.bin "::/kd/${module}.skprx" "fw/raw/${module}.skprx"
@@ -125,36 +121,43 @@ jobs:
           set -euxo pipefail
           mkdir -p fw/elf
           for module in lowio display lcd oled; do
-            docker run --rm \
-              -v "$PWD:/work" -w /work \
-              "$PY2_IMAGE" \
-              bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python sceutils-audit/self2elf.py -i fw/raw/${module}.skprx -o fw/elf/${module}.elf >/dev/null"
+            docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python sceutils-audit/self2elf.py -i fw/raw/${module}.skprx -o fw/elf/${module}.elf >/dev/null"
           done
           sudo chown -R "$(id -u):$(id -g)" fw/elf
           file fw/elf/*.elf
           sha256sum fw/elf/*.elf
 
-      - name: Deterministically map target exports, imports and branch callers
+      - name: Emit proof-grade target CFG and call-site evidence
         shell: bash
         run: |
           set -euxo pipefail
-          python3 research/vita_elf_audit.py \
-            fw/elf/lowio.elf fw/elf/display.elf fw/elf/lcd.elf fw/elf/oled.elf \
-            --json audit-365.json | tee audit-365.txt
-          echo '=== target NID count ==='
-          grep -Ec '  (EXPORT|IMPORT).*nid=0x(0FCBF457|357EAE24|D64F4C6B)' audit-365.txt
+          python3 research/vita_elf_audit.py fw/elf/lowio.elf fw/elf/display.elf fw/elf/lcd.elf fw/elf/oled.elf --json audit-365.json | tee audit-365.txt
+          python3 - <<'PY'
+          import json
+          records=json.load(open('audit-365.json'))
+          display=next(x for x in records if x['module']=='SceDisplay')
+          bynid={x['nid']:x for x in display['target_imports']}
+          for nid in (0x0FCBF457,0x357EAE24,0xD64F4C6B):
+              if nid not in bynid or not bynid[nid]['proven_callsites']:
+                  raise SystemExit('no PROVEN_CALLSITE for IFTU import 0x%08X' % nid)
+              print('0x%08X proven_calls=%d candidate_xrefs=%d' % (nid,len(bynid[nid]['proven_callsites']),len(bynid[nid]['candidate_xrefs'])))
+          PY
+
+      - name: Prove legacy v1.3 IFTU ABI mismatch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sha256sum legacy-v13/screen_filter.c
+          python3 research/prove_legacy_iftu_abi.py --lowio fw/elf/lowio.elf --legacy-screen-filter legacy-v13/screen_filter.c
 
       - name: Verify known static layout evidence
         shell: bash
         run: |
           set -euxo pipefail
-          python3 research/verify_static_layouts.py \
-            --lcd fw/elf/lcd.elf --oled fw/elf/oled.elf
+          python3 research/verify_static_layouts.py --lcd fw/elf/lcd.elf --oled fw/elf/oled.elf
 
       - name: Remove proprietary firmware bytes before job completion
         if: always()
         shell: bash
         run: |
-          sudo rm -rf \
-            PSP2UPDAT-365.PUP fw sceutils-audit extract_os0.py \
-            vlr-reference vita-headers-reference vdpm-reference vita-toolchain-reference
+          sudo rm -rf PSP2UPDAT-365.PUP fw sceutils-audit extract_os0.py vlr-reference vita-headers-reference vdpm-reference vita-toolchain-reference legacy-v13 audit-365.json audit-365.txt
