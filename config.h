@@ -1,6 +1,8 @@
 #pragma once
 #include "source_authority.h"
 
+#define CFG_FILE1 "ur0:tai/vitabrightex.cfg"
+#define CFG_FILE2 "ux0:tai/vitabrightex.cfg"
 #define VBE_CONFIG_PATH_MAX 128
 
 enum {
