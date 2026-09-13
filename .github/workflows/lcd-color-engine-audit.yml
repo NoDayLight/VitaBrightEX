@@ -1,0 +1,134 @@
+name: LCD color engine research
+
+on:
+  push:
+    branches:
+      - research-lcd-color-engine
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PUP_URL: https://web.archive.org/web/20180630222648id_/http://dus01.psp2.update.playstation.net/update/psp2/image/2017_0317/rel_0a0f2a9ae58968ac5d1d2127049c3cba/PSP2UPDAT.PUP
+  PUP_MD5: 0a0f2a9ae58968ac5d1d2127049c3cba
+  PUP_SHA256: 86859b3071681268b6d0beb5ef691da874b6726e85b6f06a1cdf6a0e183e77c6
+  SCEUTILS_SHA: 0466d003246ec986ab6189e6719dcb196a40fb02
+  VITA_HEADERS_SHA: 5e1e7d38d766e4c1634a77f6e5249caab8c8f9cb
+  PY2_IMAGE: python@sha256:d8fac68ebdc45b8d66d53f1ed6c1532da81109a8f5532a6ca0c951ed31107d70
+
+jobs:
+  retail-365:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Record exact research inputs
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            "workflow_commit=$GITHUB_SHA" \
+            "sceutils=$SCEUTILS_SHA" \
+            "vita-headers=$VITA_HEADERS_SHA" \
+            "python2-image=$PY2_IMAGE" \
+            "capstone=5.0.3"
+
+      - name: Download and verify retail 3.65 PUP
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 5 --retry-delay 2 "$PUP_URL" -o PSP2UPDAT-365.PUP
+          echo "$PUP_MD5  PSP2UPDAT-365.PUP" | md5sum -c -
+          echo "$PUP_SHA256  PSP2UPDAT-365.PUP" | sha256sum -c -
+
+      - name: Install deterministic analysis prerequisites
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y mtools file
+          python3 -m pip install --disable-pip-version-check --user capstone==5.0.3
+
+      - name: Fetch pinned references
+        run: |
+          set -euxo pipefail
+          fetch_exact() {
+            repo="$1"; sha="$2"; dir="$3"
+            git init -q "$dir"
+            git -C "$dir" remote add origin "$repo"
+            git -C "$dir" fetch -q --depth 1 origin "$sha"
+            git -C "$dir" checkout -q --detach FETCH_HEAD
+            test "$(git -C "$dir" rev-parse HEAD)" = "$sha"
+          }
+          fetch_exact https://github.com/RealYoti/sceutils.git "$SCEUTILS_SHA" sceutils-audit
+          fetch_exact https://github.com/vitasdk/vita-headers.git "$VITA_HEADERS_SHA" vita-headers-reference
+          cp sceutils-audit/keys_external.py sceutils-audit/keys.py
+          mkdir -p sceutils-audit/unarzl
+          : > sceutils-audit/unarzl/unarzl
+
+      - name: Decrypt os0 and exact target modules
+        run: |
+          set -euxo pipefail
+          cat > extract_os0.py <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, 'sceutils-audit')
+          import pup_fiction
+          os.makedirs('fw/PUP')
+          os.makedirs('fw/PUP_dec')
+          pup_fiction.pup_extract_files('PSP2UPDAT-365.PUP', 'fw/PUP')
+          pup_fiction.pup_decrypt_packages('fw/PUP', 'fw/PUP_dec')
+          if not os.path.isfile('fw/PUP_dec/os0.bin'):
+              raise SystemExit('os0.bin was not produced')
+          PY
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python extract_os0.py"
+          sudo chown -R "$(id -u):$(id -g)" fw
+          echo '35480a01ea783df859326d8698831afd3e850717f5b7785ab9964eab23712856  fw/PUP_dec/os0.bin' | sha256sum -c -
+          mkdir -p fw/raw fw/elf
+          for module in lowio display lcd; do
+            mcopy -n -i fw/PUP_dec/os0.bin "::/kd/${module}.skprx" "fw/raw/${module}.skprx"
+            test -s "fw/raw/${module}.skprx"
+            docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python sceutils-audit/self2elf.py -i fw/raw/${module}.skprx -o fw/elf/${module}.elf >/dev/null"
+          done
+          sudo chown -R "$(id -u):$(id -g)" fw/elf
+          sha256sum fw/elf/*.elf
+
+      - name: Audit complete IFTU affine pipeline
+        run: |
+          set -euxo pipefail
+          python3 research/iftu_pipeline_audit.py \
+            --lowio fw/elf/lowio.elf \
+            --display fw/elf/display.elf \
+            --json iftu-pipeline-365.json | tee iftu-pipeline-365.txt
+
+      - name: Audit complete SceLcd DSI traffic
+        run: |
+          set -euxo pipefail
+          python3 research/lcd_dsi_audit.py \
+            --lcd fw/elf/lcd.elf \
+            --json lcd-dsi-365.json | tee lcd-dsi-365.txt
+
+      - name: Assert pinned public structure/API evidence
+        run: |
+          set -euxo pipefail
+          grep -F 'VITASDK_BUILD_ASSERT_EQ(0x3C, SceIftuCscParams);' vita-headers-reference/include/psp2kern/lowio/iftu.h
+          grep -F 'SceIftuCscParams *csc_params1;' vita-headers-reference/include/psp2kern/lowio/iftu.h
+          grep -F 'SceIftuCscParams *csc_params2;' vita-headers-reference/include/psp2kern/lowio/iftu.h
+          grep -F 'unsigned int csc_control;' vita-headers-reference/include/psp2kern/lowio/iftu.h
+          grep -F 'SCE_DSI_HEAD_OLED_LCD' vita-headers-reference/include/psp2kern/lowio/dsi.h
+          grep -F 'ksceDsiDcsShortWrite' vita-headers-reference/include/psp2kern/lowio/dsi.h
+          grep -F 'ksceDsiDcsRead' vita-headers-reference/include/psp2kern/lowio/dsi.h
+
+      - name: Upload derived research evidence only
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: lcd-color-engine-derived-evidence
+          path: |
+            iftu-pipeline-365.json
+            iftu-pipeline-365.txt
+            lcd-dsi-365.json
+            lcd-dsi-365.txt
+
+      - name: Remove proprietary firmware bytes before completion
+        if: always()
+        run: |
+          sudo rm -rf PSP2UPDAT-365.PUP fw sceutils-audit extract_os0.py vita-headers-reference
