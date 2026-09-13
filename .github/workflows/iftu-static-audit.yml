@@ -150,6 +150,16 @@ jobs:
           sha256sum legacy-v13/screen_filter.c
           python3 research/prove_legacy_iftu_abi.py --lowio fw/elf/lowio.elf --legacy-screen-filter legacy-v13/screen_filter.c
 
+      - name: Audit state consumers, invert restoration, OLED refs and nonlinear candidates
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 research/display_state_audit.py \
+            --lowio fw/elf/lowio.elf \
+            --display fw/elf/display.elf \
+            --lcd fw/elf/lcd.elf \
+            --oled fw/elf/oled.elf
+
       - name: Verify known static layout evidence
         shell: bash
         run: |
