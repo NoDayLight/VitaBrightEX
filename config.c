@@ -8,9 +8,28 @@
 #define CONFIG_READ_CHUNK 256
 
 VitaBrightConfig g_config;
+static VbeSourceIdentity g_config_source = {
+    .kind = VBE_SOURCE_ID_NONE,
+    .path = {0},
+};
 
 void config_reset_defaults(void) {
     vbe_config_defaults(&g_config);
+    vbe_source_identity_compiled(&g_config_source);
+}
+
+void config_get_source(VbeSourceIdentity *out) {
+    vbe_source_identity_copy(out, &g_config_source);
+}
+
+void config_snapshot(VbeConfigSnapshot *out) {
+    out->config = g_config;
+    vbe_source_identity_copy(&out->source, &g_config_source);
+}
+
+void config_restore(const VbeConfigSnapshot *snapshot) {
+    g_config = snapshot->config;
+    vbe_source_identity_copy(&g_config_source, &snapshot->source);
 }
 
 static VbeSourceOutcome config_read_source(const char *path,
@@ -48,9 +67,16 @@ static VbeSourceOutcome config_read_source(const char *path,
 }
 
 static int config_accept_source(VbeSourceOutcome source,
-                                const VitaBrightConfig *candidate) {
+                                const VitaBrightConfig *candidate,
+                                const char *path) {
     if (source.decision == VBE_SOURCE_USE) {
+        VbeSourceIdentity candidate_source;
+        if (vbe_source_identity_file(&candidate_source, path) < 0) {
+            status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 0, VBE_ERR_CONFIG, -1);
+            return -1;
+        }
         g_config = *candidate;
+        vbe_source_identity_copy(&g_config_source, &candidate_source);
         status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 1, VBE_ERR_CONFIG, 0);
         return 0;
     }
@@ -67,7 +93,7 @@ static int config_accept_source(VbeSourceOutcome source,
 int config_load(void) {
     VitaBrightConfig candidate;
     VbeSourceOutcome source = config_read_source(CFG_FILE1, &candidate);
-    int decision = config_accept_source(source, &candidate);
+    int decision = config_accept_source(source, &candidate, CFG_FILE1);
     if (decision == 0) {
         LOG("[CFG] Loaded authoritative source " CFG_FILE1 "\n");
         return 0;
@@ -79,7 +105,7 @@ int config_load(void) {
     }
 
     source = config_read_source(CFG_FILE2, &candidate);
-    decision = config_accept_source(source, &candidate);
+    decision = config_accept_source(source, &candidate, CFG_FILE2);
     if (decision == 0) {
         LOG("[CFG] Loaded fallback source " CFG_FILE2 "\n");
         return 0;
@@ -90,10 +116,9 @@ int config_load(void) {
         return decision;
     }
 
-    VitaBrightConfig defaults;
-    vbe_config_defaults(&defaults);
-    g_config = defaults;
+    vbe_config_defaults(&g_config);
+    vbe_source_identity_compiled(&g_config_source);
     status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 1, VBE_ERR_CONFIG, 0);
-    LOG("[CFG] Both documented config sources are absent; using defaults\n");
+    LOG("[CFG] Both documented config sources are absent; using compiled defaults\n");
     return 0;
 }
