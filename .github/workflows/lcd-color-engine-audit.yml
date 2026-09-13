@@ -83,12 +83,14 @@ jobs:
           docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python extract_os0.py"
           sudo chown -R "$(id -u):$(id -g)" fw
           echo '35480a01ea783df859326d8698831afd3e850717f5b7785ab9964eab23712856  fw/PUP_dec/os0.bin' | sha256sum -c -
-          mkdir -p fw/raw-all fw/elf-all
-          mdir -b -i fw/PUP_dec/os0.bin "::/kd/*.skprx" | tr -d '\r' | sort > kernel-skprx-index.txt
-          while IFS= read -r src; do
-            test -n "$src" || continue
-            base="$(basename "$src")"
-            mcopy -n -i fw/PUP_dec/os0.bin "$src" "fw/raw-all/$base"
+          mkdir -p fw/raw-all fw/elf-all fw/os0-tree
+          mcopy -s -n -i fw/PUP_dec/os0.bin "::/kd" fw/os0-tree
+          find fw/os0-tree -type f -name '*.skprx' -printf '%f\n' | sort -u > kernel-skprx-index.txt
+          test -s kernel-skprx-index.txt
+          while IFS= read -r base; do
+            src="$(find fw/os0-tree -type f -name "$base" -print -quit)"
+            test -n "$src"
+            cp "$src" "fw/raw-all/$base"
           done < kernel-skprx-index.txt
           docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc '
             pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null
