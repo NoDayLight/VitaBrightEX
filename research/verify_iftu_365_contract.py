@@ -103,48 +103,60 @@ def assert_legacy_layout(legacy: str) -> None:
         fail("legacy three-argument ABI declaration missing")
 
 
-def assert_setter(lowio: VitaElf, nid: int, entry: int, cache_off: int,
-                  copy_start: int, null_target: int, invalid_target: int) -> None:
+def assert_setter(lowio: VitaElf, nid: int, expected: dict[int, tuple[str, str]]) -> None:
     _fn, cfg = cfg_for(lowio, nid)
     by = {x.address: x for x in instructions(cfg)}
-
-    # r0 is bounded to 0..4 and r1 is saved as the optional state pointer.
-    assert_instruction(by, entry, "cmp", "r0,#4")
-    assert_instruction(by, entry + 6, "mov", "r4,r1")
-    assert_instruction(by, copy_start - 0x0C, "cbz", "r4,#0x%08x" % null_target)
-
-    # Destination is one of the adjacent 0x3C cached blocks. The bulk loop copies
-    # 3 * 16 bytes by advancing r3 to source+0x30. Three explicit trailing word
-    # loads/stores then copy offsets +0x30,+0x34,+0x38, for 0x3C total.
-    assert_instruction(by, copy_start - 8, "mov", "r3,r4")
-    assert_instruction(by, copy_start - 6, "add.w", "r2,r%d,#0x%x" %
-                       (6 if nid == SET1_NID else 7, cache_off))
-    assert_instruction(by, copy_start - 2, "add.w", "r0,r4,#0x30")
-    tail = {
-        copy_start + 0x28: ("ldr.w", "lr,[r3]"),
-        copy_start + 0x2C: ("ldr", "r0,[r3,#4]"),
-        copy_start + 0x2E: ("ldr", "r3,[r3,#8]"),
-        copy_start + 0x30: ("str.w", "lr,[r2]"),
-        copy_start + 0x34: ("str", "r0,[r2,#4]"),
-        copy_start + 0x36: ("str", "r3,[r2,#8]"),
-    }
-    for va, (mn, ops) in tail.items():
-        assert_instruction(by, va, mn, ops)
-
-    # The rejected r0>4 path returns 0x803F0700 exactly: MOV{W} #0x700 + MOVT #0x803f.
-    assert_instruction(by, invalid_target, "mov.w", "r0,#0x700")
-    assert_instruction(by, invalid_target + 4, "movt", "r0,#0x803f")
-
-    null = by.get(null_target)
-    if null is None or ("#0x%x" % cache_off) not in text(null):
-        fail("NULL path does not select cached +0x%X state" % cache_off)
+    for va, (mnemonic, operands) in expected.items():
+        assert_instruction(by, va, mnemonic, operands)
 
 
 def assert_plane_and_3c_copy(lowio: VitaElf) -> None:
-    assert_setter(lowio, SET1_NID, 0x81005D48, 0x10C,
-                  0x81005D7E, 0x81005DB8, 0x81005E18)
-    assert_setter(lowio, SET2_NID, 0x81005E24, 0x148,
-                  0x81005E5C, 0x81005E96, 0x81005F16)
+    set1 = {
+        0x81005D48: ("cmp", "r0,#4"),
+        0x81005D4E: ("mov", "r4,r1"),
+        0x81005D72: ("cbz", "r4,#0x81005db8"),
+        0x81005D74: ("mov", "r3,r4"),
+        0x81005D76: ("add.w", "r2,r6,#0x10c"),
+        0x81005D7A: ("add.w", "r0,r4,#0x30"),
+        0x81005D7E: ("ldr.w", "sl,[r3]"),
+        0x81005D82: ("adds", "r3,#0x10"),
+        0x81005D88: ("adds", "r2,#0x10"),
+        0x81005D92: ("cmp", "r3,r0"),
+        0x81005DA4: ("bne", "#0x81005d7e"),
+        0x81005DA6: ("ldr.w", "lr,[r3]"),
+        0x81005DAA: ("ldr", "r0,[r3,#4]"),
+        0x81005DAC: ("ldr", "r3,[r3,#8]"),
+        0x81005DAE: ("str.w", "lr,[r2]"),
+        0x81005DB2: ("str", "r0,[r2,#4]"),
+        0x81005DB4: ("str", "r3,[r2,#8]"),
+        0x81005DB8: ("add.w", "r4,r6,#0x10c"),
+        0x81005E18: ("mov.w", "r0,#0x700"),
+        0x81005E1C: ("movt", "r0,#0x803f"),
+    }
+    set2 = {
+        0x81005E24: ("cmp", "r0,#4"),
+        0x81005E2A: ("mov", "r4,r1"),
+        0x81005E50: ("cbz", "r4,#0x81005e96"),
+        0x81005E52: ("mov", "r3,r4"),
+        0x81005E54: ("add.w", "r2,r7,#0x148"),
+        0x81005E58: ("add.w", "r0,r4,#0x30"),
+        0x81005E5C: ("ldr.w", "sl,[r3]"),
+        0x81005E60: ("adds", "r3,#0x10"),
+        0x81005E66: ("adds", "r2,#0x10"),
+        0x81005E70: ("cmp", "r3,r0"),
+        0x81005E82: ("bne", "#0x81005e5c"),
+        0x81005E84: ("ldr.w", "lr,[r3]"),
+        0x81005E88: ("ldr", "r0,[r3,#4]"),
+        0x81005E8A: ("ldr", "r3,[r3,#8]"),
+        0x81005E8C: ("str.w", "lr,[r2]"),
+        0x81005E90: ("str", "r0,[r2,#4]"),
+        0x81005E92: ("str", "r3,[r2,#8]"),
+        0x81005E96: ("add.w", "r4,r7,#0x148"),
+        0x81005F16: ("mov.w", "r0,#0x700"),
+        0x81005F1A: ("movt", "r0,#0x803f"),
+    }
+    assert_setter(lowio, SET1_NID, set1)
+    assert_setter(lowio, SET2_NID, set2)
     print("retail setter plane semantics: STATICALLY PROVEN (r0 0..4; r0>4 => 0x803F0700)")
     print("retail CSC object copy size: STATICALLY PROVEN 0x3C in both setters")
     print("cached objects: +0x10C and +0x148, adjacent by exactly 0x3C")
