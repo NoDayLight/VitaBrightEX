@@ -7,6 +7,8 @@ VbeFilterRequestPolicy vbe_filter_request_policy(const ScreenFilterParams *param
         .unsupported_domains = 0,
         .csc_state = VBE_CAP_INACTIVE,
         .transfer_state = VBE_CAP_INACTIVE,
+        .result = VBE_RESULT_OK,
+        .error = VBE_ERR_NONE,
     };
 
     if (params->invert)
@@ -27,6 +29,9 @@ VbeFilterRequestPolicy vbe_filter_request_policy(const ScreenFilterParams *param
         out.csc_state = VBE_CAP_UNSUPPORTED;
     if (out.requested_domains & VBE_DISPLAY_DOMAIN_TRANSFER)
         out.transfer_state = VBE_CAP_UNSUPPORTED;
+
+    if (out.unsupported_domains != 0)
+        out.result = VBE_RESULT_UNSUPPORTED;
 
     return out;
 }

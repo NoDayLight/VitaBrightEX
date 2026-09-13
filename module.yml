@@ -28,5 +28,6 @@ vitabright:
         - vitabrightLcdPersistBrightnessValues
         - vitabrightLcdReapplyColor
         - vitabrightFilterGetParams
+        - vitabrightFilterGetState
         - vitabrightFilterSetParams
         - vitabrightFilterReset

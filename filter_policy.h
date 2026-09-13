@@ -10,6 +10,8 @@ typedef struct {
     uint32_t unsupported_domains;
     int csc_state;
     int transfer_state;
+    int result;
+    int error;
 } VbeFilterRequestPolicy;
 
 VbeFilterRequestPolicy vbe_filter_request_policy(const ScreenFilterParams *params);

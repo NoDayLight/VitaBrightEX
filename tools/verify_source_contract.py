@@ -126,7 +126,7 @@ require_before(ROOT / "main.c", "state_lock_init()", "oled_enable_hooks()",
                "OLED backend can initialize before synchronization commit boundary")
 require_before(ROOT / "main.c", "state_lock_init()", "color_space_apply_config()",
                "color-space mutation can begin before synchronization commit boundary")
-require_before(ROOT / "main.c", "state_lock_init()", "screen_filter_apply(",
+require_before(ROOT / "main.c", "state_lock_init()", "screen_filter_apply_config()",
                "filter mutation can begin before synchronization commit boundary")
 require_before(ROOT / "main.c", "vbe_module_stop_mode", "state_lock_begin_shutdown()",
                "module stop enters runtime shutdown before classifying inert/runtime lifecycle")
@@ -138,7 +138,7 @@ require(ROOT / "status_error_core.h", "SYNC > BRIGHTNESS > CONFIG > COLOR_SPACE 
         "legacy summary precedence is no longer explicit")
 require(ROOT / "filter_policy.c", "VBE_RESULT_UNSUPPORTED",
         "unsupported filter request no longer uses named capability result")
-require(ROOT / "filter_policy.c", "policy.error = VBE_ERR_NONE",
+require(ROOT / "filter_policy.c", "VBE_ERR_NONE",
         "unsupported filter policy became a runtime error")
 require(ROOT / "screen_filter.c", "vbe_filter_request_policy",
         "screen filter bypasses production shared unsupported policy")
@@ -154,6 +154,7 @@ for symbol in (
     "vitabrightGetDiagnostics", "vitabrightGetBuildId",
     "vitabrightColorSpaceGetMode", "vitabrightColorSpaceSetMode",
     "vitabrightOledPersistLut", "vitabrightLcdPersistBrightnessValues",
+    "vitabrightFilterGetState",
 ):
     require(ROOT / "module.yml", symbol, f"generated ABI is missing {symbol}")
 
