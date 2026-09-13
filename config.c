@@ -1,6 +1,6 @@
 #include "config.h"
 #include "config_parser.h"
-#include "config_state_core.h"
+#include "config_request_core.h"
 #include "log.h"
 #include "source_authority.h"
 #include "status.h"
@@ -23,12 +23,9 @@ void config_get_source(VbeSourceIdentity *out) {
     vbe_source_identity_copy(out, &g_config_source);
 }
 
-void config_snapshot(VbeConfigSnapshot *out) {
-    vbe_config_state_snapshot(out, &g_config, &g_config_source);
-}
-
-void config_restore(const VbeConfigSnapshot *snapshot) {
-    vbe_config_state_restore(&g_config, &g_config_source, snapshot);
+void config_commit_request(const VbeConfigCandidate *candidate) {
+    vbe_config_request_commit(&g_config, &g_config_source, candidate);
+    status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 1, VBE_ERR_CONFIG, 0);
 }
 
 static VbeSourceOutcome config_read_source(const char *path,
@@ -42,7 +39,6 @@ static VbeSourceOutcome config_read_source(const char *path,
     unsigned char buffer[CONFIG_READ_CHUNK];
     int read_result = 0;
     int parse_result = 0;
-
     while (read_result == 0 && parse_result == 0) {
         int read_ret = ksceIoRead(fd, buffer, sizeof(buffer));
         if (read_ret < 0) {
@@ -65,36 +61,33 @@ static VbeSourceOutcome config_read_source(const char *path,
     return vbe_source_evaluate(fd, read_result, parse_result, close_result);
 }
 
-static int config_accept_source(VbeSourceOutcome source,
-                                const VitaBrightConfig *candidate,
-                                const char *path) {
+static int candidate_from_source(VbeConfigCandidate *out,
+                                 const char *path,
+                                 VbeSourceOutcome source,
+                                 const VitaBrightConfig *config) {
     if (source.decision == VBE_SOURCE_USE) {
-        VbeSourceIdentity candidate_source;
-        if (vbe_source_identity_file(&candidate_source, path) < 0) {
-            status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 0, VBE_ERR_CONFIG, -1);
+        out->config = *config;
+        if (vbe_source_identity_file(&out->source, path) < 0) {
+            status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 0,
+                                VBE_ERR_CONFIG, -1);
             return -1;
         }
-        g_config = *candidate;
-        vbe_source_identity_copy(&g_config_source, &candidate_source);
-        status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 1, VBE_ERR_CONFIG, 0);
         return 0;
     }
-
     if (source.decision == VBE_SOURCE_FAIL) {
-        status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 0, VBE_ERR_CONFIG,
-                            source.error);
+        status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 0,
+                            VBE_ERR_CONFIG, source.error);
         return source.error;
     }
-
-    return 1; /* Explicit NOT_FOUND: caller may try its documented fallback. */
+    return 1;
 }
 
-int config_load(void) {
-    VitaBrightConfig candidate;
-    VbeSourceOutcome source = config_read_source(CFG_FILE1, &candidate);
-    int decision = config_accept_source(source, &candidate, CFG_FILE1);
+int config_load_candidate(VbeConfigCandidate *out) {
+    VitaBrightConfig parsed;
+    VbeSourceOutcome source = config_read_source(CFG_FILE1, &parsed);
+    int decision = candidate_from_source(out, CFG_FILE1, source, &parsed);
     if (decision == 0) {
-        LOG("[CFG] Loaded authoritative source " CFG_FILE1 "\n");
+        LOG("[CFG] Accepted candidate source " CFG_FILE1 "\n");
         return 0;
     }
     if (decision < 0) {
@@ -103,10 +96,10 @@ int config_load(void) {
         return decision;
     }
 
-    source = config_read_source(CFG_FILE2, &candidate);
-    decision = config_accept_source(source, &candidate, CFG_FILE2);
+    source = config_read_source(CFG_FILE2, &parsed);
+    decision = candidate_from_source(out, CFG_FILE2, source, &parsed);
     if (decision == 0) {
-        LOG("[CFG] Loaded fallback source " CFG_FILE2 "\n");
+        LOG("[CFG] Accepted candidate source " CFG_FILE2 "\n");
         return 0;
     }
     if (decision < 0) {
@@ -115,9 +108,8 @@ int config_load(void) {
         return decision;
     }
 
-    vbe_config_defaults(&g_config);
-    vbe_source_identity_compiled(&g_config_source);
-    status_stage_result(VBE_ERROR_DOMAIN_CONFIG, 1, VBE_ERR_CONFIG, 0);
-    LOG("[CFG] Both documented config sources are absent; using compiled defaults\n");
+    vbe_config_defaults(&out->config);
+    vbe_source_identity_compiled(&out->source);
+    LOG("[CFG] Both documented config sources absent; candidate is compiled defaults\n");
     return 0;
 }

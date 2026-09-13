@@ -25,6 +25,32 @@ static int detect_is_lcd(void) {
     return (*(uint8_t *)(ksceKernelSysrootGetKblParam() + 0xE8) & 9) != 0;
 }
 
+static int selected_backend_mutation_safe(void) {
+    return g_is_oled ? oled_backend_mutation_safe()
+                     : lcd_backend_mutation_safe();
+}
+
+static void reconcile_after_brightness(int *result) {
+    if (selected_backend_mutation_safe()) {
+        int color_ret = color_space_apply_config();
+        *result = vbe_result_compose(*result, color_ret);
+        if (color_ret < 0)
+            LOG("[CORE] color-space reconcile failed: 0x%08X\n", color_ret);
+    } else {
+        LOG("[CORE] brightness ownership degraded; skipping further hardware mutation\n");
+    }
+
+    /* Generic filter v1.4 reconciliation is request-state only: all mutable
+     * hardware domains are capability-gated unsupported. It remains safe to
+     * record the accepted request even when brightness ownership is degraded. */
+    int filter_ret = screen_filter_apply_config();
+    *result = vbe_result_compose(*result, filter_ret);
+    if (filter_ret == VBE_RESULT_UNSUPPORTED)
+        LOG("[CORE] accepted config requests unsupported generic filter domain\n");
+    else if (filter_ret < 0)
+        LOG("[CORE] filter request-state reconcile failed: 0x%08X\n", filter_ret);
+}
+
 void _start() __attribute__((weak, alias("module_start")));
 int module_start(SceSize argc, const void *args) {
     (void)argc;
@@ -39,55 +65,41 @@ int module_start(SceSize argc, const void *args) {
     if (state_lock_init() < 0)
         return SCE_KERNEL_START_SUCCESS;
 
-    /* Successful synchronization creation is the runtime-init commit point.
-     * Everything below may acquire session/backend ownership. */
     g_module_lifecycle = VBE_MODULE_RUNTIME;
 
-    int config_ret = config_load();
-    if (config_ret < 0)
-        LOG("[CORE] authoritative config rejected: 0x%08X\n", config_ret);
+    VbeConfigCandidate config_candidate;
+    int config_ret = config_load_candidate(&config_candidate);
+    if (config_ret >= 0)
+        config_commit_request(&config_candidate);
+    else
+        LOG("[CORE] config candidate rejected; retained compiled-safe accepted request: 0x%08X\n",
+            config_ret);
 
     int brightness_ret = is_lcd ? lcd_enable_hooks() : oled_enable_hooks();
     if (brightness_ret < 0)
         LOG("[CORE] selected brightness backend unavailable: 0x%08X\n",
             brightness_ret);
 
-    int color_ret = color_space_apply_config();
-    if (color_ret < 0)
-        LOG("[CORE] color-space capability unavailable: 0x%08X\n", color_ret);
-
-    int filter_ret = screen_filter_apply_config();
-    if (filter_ret == VBE_RESULT_UNSUPPORTED)
-        LOG("[CORE] config requests an unsupported filter domain\n");
-    else if (filter_ret < 0)
-        LOG("[CORE] filter runtime failure: 0x%08X\n", filter_ret);
-
+    int result = vbe_result_compose(config_ret, brightness_ret);
+    reconcile_after_brightness(&result);
+    (void)result;
     return SCE_KERNEL_START_SUCCESS;
 }
 
 int vitabright_reload_locked(void) {
+    VbeConfigCandidate candidate;
+    int config_ret = config_load_candidate(&candidate);
+    if (config_ret < 0)
+        return config_ret;
+
+    /* A valid document is accepted request/provenance. Hardware domains then
+     * reconcile independently; one failed-clean domain never reverts it. */
+    config_commit_request(&candidate);
+
     int result = VBE_RESULT_OK;
-    VbeConfigSnapshot previous_config;
-    config_snapshot(&previous_config);
-
-    int config_ret = config_load();
-    result = vbe_result_compose(result, config_ret);
-
     int brightness_ret = g_is_oled ? oled_reload_backend() : lcd_reload_backend();
     result = vbe_result_compose(result, brightness_ret);
-
-    /* The config/source candidate is not externally observable during this
-     * locked transition. A failed backend replacement restores the previous
-     * committed config and exact FILE/COMPILED identity before returning. */
-    if (config_ret >= 0 && brightness_ret < 0)
-        config_restore(&previous_config);
-
-    int color_ret = color_space_apply_config();
-    result = vbe_result_compose(result, color_ret);
-
-    int filter_ret = screen_filter_apply_config();
-    result = vbe_result_compose(result, filter_ret);
-
+    reconcile_after_brightness(&result);
     return result;
 }
 

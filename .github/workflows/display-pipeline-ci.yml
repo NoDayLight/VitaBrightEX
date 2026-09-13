@@ -14,23 +14,28 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Existing semantic contracts
+      - name: Final semantic contracts
         run: |
           python3 tools/verify_source_contract.py
           python3 tools/verify_parser_contract.py
           python3 tools/generate_cct_table.py --check
+          python3 tools/generate_oled_stock_signatures.py --check
           python3 tools/validate_packaged_assets.py
 
       - name: Display production-shared regressions
         run: |
           cc -std=c99 -Wall -Wextra -Werror -I. tests/result_core_host.c result_core.c -o /tmp/result-test
           /tmp/result-test
-          cc -std=c99 -Wall -Wextra -Werror -I. tests/config_source_state_host.c config_state_core.c source_authority.c -o /tmp/config-source-test
-          /tmp/config-source-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/config_source_state_host.c config_request_core.c transaction_core.c source_authority.c -o /tmp/config-request-test
+          /tmp/config-request-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/color_space_state_host.c color_space_state_core.c -o /tmp/color-ownership-test
+          /tmp/color-ownership-test
           cc -std=c99 -Wall -Wextra -Werror -I. tests/filter_policy_host.c filter_policy.c filter_state_core.c -o /tmp/filter-policy-test
           /tmp/filter-policy-test
           cc -std=c99 -Wall -Wextra -Werror -I. tests/filter_state_host.c filter_state_core.c -o /tmp/filter-state-test
           /tmp/filter-state-test
+          cc -std=c99 -Wall -Wextra -Werror -I. tests/oled_layout_host.c oled/layout_core.c -o /tmp/oled-layout-test
+          /tmp/oled-layout-test
           cc -std=c99 -Wall -Wextra -Werror -I. tests/oled_transform_host.c oled/transform_core.c -o /tmp/oled-transform-test
           /tmp/oled-transform-test
           cc -std=c99 -Wall -Wextra -Werror -I. tests/oled_state_host.c oled/state_core.c oled/transform_core.c source_authority.c -o /tmp/oled-state-test

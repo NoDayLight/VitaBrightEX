@@ -23,6 +23,7 @@ vitabright:
         - vitabrightOledPersistLut
         - vitabrightOledReload
         - vitabrightOledGetPanelType
+        - vitabrightOledGetTransformState
         - vitabrightLcdGetBrightnessValues
         - vitabrightLcdSetBrightnessValues
         - vitabrightLcdPersistBrightnessValues

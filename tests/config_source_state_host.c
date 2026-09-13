@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
-#include "../config_state_core.h"
-#include "../source_authority.h"
+#include "../config_request_core.h"
+#include "../transaction_core.h"
 
 static int ok(int condition, const char *name) {
     if (condition) return 0;
@@ -14,46 +14,58 @@ int main(void) {
     VitaBrightConfig live = {0};
     live.filter_cct = 6500;
     live.display_color_space_mode = 0;
-
     VbeSourceIdentity live_source;
     failures += ok(vbe_source_identity_file(&live_source, "ux0:A") == 0,
-                   "previous file identity created");
+                   "live FILE A identity created");
 
-    VbeConfigSnapshot previous;
-    vbe_config_state_snapshot(&previous, &live, &live_source);
+    VbeConfigCandidate candidate = {0};
+    candidate.config = live;
+    candidate.config.filter_cct = 5000;
+    candidate.config.display_color_space_mode = 1;
+    failures += ok(vbe_source_identity_file(&candidate.source, "ur0:B") == 0,
+                   "candidate FILE B identity created");
 
-    /* Candidate FILE ur0:B was parsed, but its backend replacement fails clean.
-     * The reload coordinator restores this exact snapshot. */
-    live.filter_cct = 5000;
-    live.display_color_space_mode = 1;
-    failures += ok(vbe_source_identity_file(&live_source, "ur0:B") == 0,
-                   "candidate file identity created");
-    vbe_config_state_restore(&live, &live_source, &previous);
-    failures += ok(live.filter_cct == 6500 && live.display_color_space_mode == 0,
-                   "failed replacement restores previous config");
-    failures += ok(live_source.kind == VBE_SOURCE_ID_FILE &&
+    failures += ok(live.filter_cct == 6500 &&
+                   live.display_color_space_mode == 0 &&
                    strcmp(live_source.path, "ux0:A") == 0,
-                   "failed replacement restores previous FILE source");
-    failures += ok(vbe_source_identity_is_file(&live_source) &&
-                   strcmp(live_source.path, "ux0:A") == 0,
-                   "future authoritative-file decision still targets ux0:A");
+                   "candidate construction leaves accepted request untouched");
 
-    VbeSourceIdentity compiled;
-    vbe_source_identity_compiled(&compiled);
-    failures += ok(compiled.kind == VBE_SOURCE_ID_COMPILED &&
-                   compiled.path[0] == '\0' &&
-                   !vbe_source_identity_is_file(&compiled),
-                   "both files missing can become COMPILED without fake path");
+    vbe_config_request_commit(&live, &live_source, &candidate);
+    failures += ok(live.filter_cct == 5000 &&
+                   live.display_color_space_mode == 1 &&
+                   live_source.kind == VBE_SOURCE_ID_FILE &&
+                   strcmp(live_source.path, "ur0:B") == 0,
+                   "candidate commit accepts FILE B request and provenance");
 
-    VbeSourceOutcome malformed_preferred = vbe_source_evaluate(4, 0, -1, 0);
-    failures += ok(malformed_preferred.decision == VBE_SOURCE_FAIL &&
-                   malformed_preferred.stage == VBE_SOURCE_STAGE_PARSE,
+    /* A clean backend replacement failure/rollback is independent of config
+     * request provenance. The hardware can remain on source A while the
+     * accepted request remains FILE B for future reconciliation. */
+    VbeSourceIdentity oled_committed;
+    failures += ok(vbe_source_identity_file(&oled_committed, "ux0:oled-A") == 0,
+                   "previous OLED source created");
+    VbeTxnAttempt requested = vbe_txn_failed_clean(17, -17);
+    VbeTxnAttempt rollback = vbe_txn_ok();
+    failures += ok(vbe_txn_public_result(requested, 1, rollback) < 0,
+                   "failed-clean replacement still reports requested failure");
+    failures += ok(strcmp(live_source.path, "ur0:B") == 0 &&
+                   strcmp(oled_committed.path, "ux0:oled-A") == 0,
+                   "backend rollback cannot revert accepted config request");
+
+    VbeSourceOutcome malformed = vbe_source_evaluate(4, 0, -1, 0);
+    failures += ok(malformed.decision == VBE_SOURCE_FAIL &&
+                   malformed.stage == VBE_SOURCE_STAGE_PARSE,
                    "malformed preferred FILE is terminal, not fallback");
-    failures += ok(live_source.kind == VBE_SOURCE_ID_FILE &&
-                   strcmp(live_source.path, "ux0:A") == 0,
-                   "malformed candidate does not alter committed source");
+    failures += ok(strcmp(live_source.path, "ur0:B") == 0,
+                   "rejected malformed candidate cannot alter accepted request");
+
+    VbeConfigCandidate compiled = {0};
+    vbe_source_identity_compiled(&compiled.source);
+    failures += ok(compiled.source.kind == VBE_SOURCE_ID_COMPILED &&
+                   compiled.source.path[0] == '\0' &&
+                   !vbe_source_identity_is_file(&compiled.source),
+                   "both missing sources can yield COMPILED without fake path");
 
     if (failures) return 1;
-    puts("config source identity rollback regressions: OK");
+    puts("config request-state regressions: OK");
     return 0;
 }
