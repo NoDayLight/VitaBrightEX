@@ -17,6 +17,11 @@ typedef struct {
     int color_r_bias;
     int color_g_bias;
     int color_b_bias;
+    int oled_warm_enabled;
+    int oled_warm_first_row;
+    int oled_warm_r_offset;
+    int oled_warm_g_offset;
+    int oled_warm_b_offset;
     int night_mode_enabled;
     int night_mode_threshold;
     int display_color_space_mode;
@@ -33,12 +38,11 @@ typedef struct {
 typedef struct {
     VitaBrightConfig config;
     VbeSourceIdentity source;
-} VbeConfigSnapshot;
+} VbeConfigCandidate;
 
 extern VitaBrightConfig g_config;
 
 void config_reset_defaults(void);
-int config_load(void);
+int config_load_candidate(VbeConfigCandidate *out);
+void config_commit_request(const VbeConfigCandidate *candidate);
 void config_get_source(VbeSourceIdentity *out);
-void config_snapshot(VbeConfigSnapshot *out);
-void config_restore(const VbeConfigSnapshot *snapshot);
