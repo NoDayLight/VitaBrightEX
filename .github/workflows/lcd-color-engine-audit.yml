@@ -113,6 +113,11 @@ jobs:
           grep -F 'f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744  fw/elf-all/lowio.elf' kernel-elf-sha256.txt
           printf 'kernel_skprx=%s decrypted_elf=%s failures=%s\n' "$(wc -l < kernel-skprx-index.txt)" "$(find fw/elf-all -name '*.elf' | wc -l)" "$(wc -l < fw/decrypt-failures.txt)"
 
+      - name: Validate analyser authority and all imports
+        run: |
+          set -euxo pipefail
+          python3 research/analysis_authority_audit.py --elf-dir fw/elf-all --display fw/elf-all/display.elf --json analysis-authority.json | tee analysis-authority.txt
+
       - name: Audit IFTU affine pipeline
         run: |
           set -euxo pipefail
@@ -167,6 +172,8 @@ jobs:
           path: |
             kernel-skprx-index.txt
             kernel-elf-sha256.txt
+            analysis-authority.json
+            analysis-authority.txt
             iftu-pipeline-365.json
             iftu-pipeline-365.txt
             display-export-map.json
