@@ -156,7 +156,11 @@ int vbeTraceRead(VbeTraceRecord *out,uint32_t capacity,uint32_t *written){
     uint32_t cs,n,i,start;int ret=0;if(!out||!written)return VBE_TRACE_ERR_INVALID;if(!vbe_observer_core_stable_paused(&g_lifecycle))return VBE_TRACE_ERR_BUSY;
     n=vbe_trace_ring_count(&g_ring,VBE_TRACE_RECORD_CAPACITY);if(n>capacity)n=capacity;start=g_ring.read_ticket;ENTER_SYSCALL(cs);
     for(i=0;i<n&&ret>=0;i++)ret=ksceKernelMemcpyKernelToUser(&out[i],&g_records[(start+i)%VBE_TRACE_RECORD_CAPACITY],sizeof(VbeTraceRecord));
-    if(ret>=0)ret=ksceKernelMemcpyKernelToUser(written,&n,sizeof(n));EXIT_SYSCALL(cs);return ret;
+    if(ret>=0){
+        ret=ksceKernelMemcpyKernelToUser(written,&n,sizeof(n));
+    }
+    EXIT_SYSCALL(cs);
+    return ret;
 }
 int vbeTraceMark(uint32_t marker){
     int capture;VbeTraceRecord *r;if(marker<1u||marker>VBE_MARK_MAX)return VBE_TRACE_ERR_INVALID;
