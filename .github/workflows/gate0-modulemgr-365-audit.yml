@@ -1,0 +1,68 @@
+name: Gate-0 exact 3.65 Modulemgr audit
+on:
+  push:
+    branches: [research-lcd-color-engine]
+    paths:
+      - '.github/workflows/gate0-modulemgr-365-audit.yml'
+      - 'research/gate0_v7_modulemgr_retail_audit.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  PUP_URL: https://web.archive.org/web/20180630222648id_/http://dus01.psp2.update.playstation.net/update/psp2/image/2017_0317/rel_0a0f2a9ae58968ac5d1d2127049c3cba/PSP2UPDAT.PUP
+  PUP_SHA256: 86859b3071681268b6d0beb5ef691da874b6726e85b6f06a1cdf6a0e183e77c6
+  SCEUTILS_SHA: 0466d003246ec986ab6189e6719dcb196a40fb02
+  PY2_IMAGE: python@sha256:d8fac68ebdc45b8d66d53f1ed6c1532da81109a8f5532a6ca0c951ed31107d70
+jobs:
+  modulemgr-365:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Recover exact retail 3.65 Modulemgr and audit only required exports
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -m py_compile research/gate0_v7_modulemgr_retail_audit.py research/vita_elf_audit.py research/vita_elf_legacy.py
+          curl -fL --retry 5 --retry-delay 2 "$PUP_URL" -o PSP2UPDAT-365.PUP
+          echo "$PUP_SHA256  PSP2UPDAT-365.PUP" | sha256sum -c -
+          sudo apt-get update
+          sudo apt-get install -y mtools
+          python3 -m pip install --disable-pip-version-check --user capstone==5.0.3
+          git init -q sceutils-audit
+          git -C sceutils-audit remote add origin https://github.com/RealYoti/sceutils.git
+          git -C sceutils-audit fetch -q --depth 1 origin "$SCEUTILS_SHA"
+          git -C sceutils-audit checkout -q --detach FETCH_HEAD
+          test "$(git -C sceutils-audit rev-parse HEAD)" = "$SCEUTILS_SHA"
+          cp sceutils-audit/keys_external.py sceutils-audit/keys.py
+          mkdir -p sceutils-audit/unarzl
+          : > sceutils-audit/unarzl/unarzl
+          cat > extract_fw.py <<'PY'
+          import os,sys
+          sys.path.insert(0,'sceutils-audit')
+          import pup_fiction
+          os.makedirs('fw/PUP'); os.makedirs('fw/PUP_dec')
+          pup_fiction.pup_extract_files('PSP2UPDAT-365.PUP','fw/PUP')
+          pup_fiction.pup_decrypt_packages('fw/PUP','fw/PUP_dec')
+          PY
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python extract_fw.py"
+          sudo chown -R "$(id -u):$(id -g)" fw
+          echo '35480a01ea783df859326d8698831afd3e850717f5b7785ab9964eab23712856  fw/PUP_dec/os0.bin' | sha256sum -c -
+          mkdir -p fw/os0-tree fw/raw fw/elf
+          mcopy -s -n -i fw/PUP_dec/os0.bin '::/kd' fw/os0-tree
+          src="$(find fw/os0-tree -type f -iname 'modulemgr.skprx' -print -quit)"
+          test -n "$src"
+          cp "$src" fw/raw/modulemgr.skprx
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc 'pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python sceutils-audit/self2elf.py -i fw/raw/modulemgr.skprx -o fw/elf/modulemgr.elf >/dev/null'
+          sudo chown "$(id -u):$(id -g)" fw/elf/modulemgr.elf
+          python3 research/gate0_v7_modulemgr_retail_audit.py --modulemgr fw/elf/modulemgr.elf --json modulemgr-retail-365.json --text modulemgr-retail-365.txt
+          cat modulemgr-retail-365.txt
+          printf 'workflow_commit=%s\npup_sha256=%s\nos0_sha256=35480a01ea783df859326d8698831afd3e850717f5b7785ab9964eab23712856\nsceutils_commit=%s\n' "$GITHUB_SHA" "$PUP_SHA256" "$SCEUTILS_SHA" > modulemgr-retail-365-provenance.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gate0-modulemgr-365-${{ github.sha }}
+          path: |
+            modulemgr-retail-365.json
+            modulemgr-retail-365.txt
+            modulemgr-retail-365-provenance.txt
+          if-no-files-found: error
