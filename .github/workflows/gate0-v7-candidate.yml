@@ -135,11 +135,13 @@ jobs:
         run: |
           set -euxo pipefail
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > gate0-v7.zip
-          archive_sha="$(sha256sum gate0-v7.zip | cut -d' ' -f1)"; test "sha256:$archive_sha" = "$EXPECTED_DIGEST"
+          archive_sha="$(sha256sum gate0-v7.zip | cut -d' ' -f1)"
+          expected_sha="${EXPECTED_DIGEST#sha256:}"
+          test "$archive_sha" = "$expected_sha"
           mkdir unpacked; unzip -q gate0-v7.zip -d unpacked
           test "$(cat unpacked/WORKFLOW_COMMIT.txt)" = "$GITHUB_SHA"; (cd unpacked && sha256sum -c SHA256SUMS)
           grep -F '#define VBE_TRACE_VERSION 7u' unpacked/gate0_protocol_v7.h; grep -F '#define VBE_TRACE_RECORD_SIZE 128u' unpacked/gate0_protocol_v7.h
-          printf 'artifact_id=%s\ngithub_digest=%s\narchive_sha256=%s\nworkflow_commit=%s\nskprx_sha256=%s\ndrain_vpk_sha256=%s\nSHA256SUMS_verification=PASS\n' "$ARTIFACT_ID" "$EXPECTED_DIGEST" "$archive_sha" "$(cat unpacked/WORKFLOW_COMMIT.txt)" "$(sha256sum unpacked/vbe_color_trace.skprx|cut -d' ' -f1)" "$(sha256sum unpacked/vbe_color_trace_drain.vpk|cut -d' ' -f1)" | tee independent-verification.txt
+          printf 'artifact_id=%s\ngithub_digest=sha256:%s\narchive_sha256=%s\nworkflow_commit=%s\nskprx_sha256=%s\ndrain_vpk_sha256=%s\nSHA256SUMS_verification=PASS\n' "$ARTIFACT_ID" "$expected_sha" "$archive_sha" "$(cat unpacked/WORKFLOW_COMMIT.txt)" "$(sha256sum unpacked/vbe_color_trace.skprx|cut -d' ' -f1)" "$(sha256sum unpacked/vbe_color_trace_drain.vpk|cut -d' ' -f1)" | tee independent-verification.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: vbe-gate0-v7-independent-${{ github.sha }}
