@@ -10,19 +10,23 @@ permissions:
   contents: read
 
 jobs:
-  gate0-host-v5:
+  gate0-host-v6:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - name: Verify exact protocol-v5 host ABI and evidence engine
+      - name: Verify exact protocol-v6 host ABI and evidence engine
         run: |
           set -euxo pipefail
-          python3 -m py_compile research/gate0_trace_decode.py research/gate0_decision_audit.py research/gate0_trace_synthetic_tests.py
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 -m py_compile research/gate0_trace_decode.py research/gate0_decision_audit.py research/gate0_trace_synthetic_tests.py research/gate0_hook_source_audit.py
+          python3 research/gate0_hook_source_audit.py
           out="$(python3 research/gate0_trace_synthetic_tests.py)"
           printf '%s\n' "$out"
-          grep -F 'gate0 synthetic tests: 21 PASS' <<<"$out"
-          grep -F 'VERSION=5' research/gate0_trace_decode.py
-          grep -F 'RECORD_SIZE=304' research/gate0_trace_decode.py
-          grep -F 'HEADER_SIZE=108' research/gate0_trace_decode.py
-          grep -F "unsupported trace version (v5 required)" research/gate0_trace_decode.py
+          grep -F 'gate0 synthetic tests: 10 PASS' <<<"$out"
+          grep -F 'VERSION=6' research/gate0_trace_decode.py
+          grep -F "not exact Gate-0 protocol v6" research/gate0_trace_decode.py
+          ! grep -F 'VBE_TRACE_FLAG_TRUNCATED' research/diagnostics/gate0_trace/main.c
+          grep -F 'VBE_TRACE_FLAG_READ_NOT_CAPTURED_UNPROVEN' research/diagnostics/gate0_trace/main.c
+          cc -std=c99 -Wall -Wextra -Werror -pthread -Iresearch research/gate0_ring_host_test.c -o gate0-ring-test
+          ./gate0-ring-test
           printf 'workflow_commit=%s\n' "$GITHUB_SHA"
