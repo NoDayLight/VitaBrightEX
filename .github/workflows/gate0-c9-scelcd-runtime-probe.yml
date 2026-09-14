@@ -1,0 +1,68 @@
+name: Gate-0 Candidate-9 SceLcd runtime byte probe
+on:
+  push:
+    branches: [gate0-c9-scelcd-runtime-probe]
+    paths:
+      - 'research/diagnostics/scelcd_runtime_probe/**'
+      - '.github/workflows/gate0-c9-scelcd-runtime-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+  VDPM_SHA: c83b88a54ec13372515eeb8b3bdca4b10c36d721
+  AUTHORIZED_C9_SHA: 5a1a1ac29340f4a5345b08fc74ac5942559b9428
+  AUTHORIZED_C9_SKPRX_SHA256: d77febc06c7016d1794b6175d35d1d8aed1b41473279943b0b46718c65241a2a
+  FROZEN_DRAIN_SELF_SHA256: 73f769832a1e1b65261fbc1fb68f79dd515e02c6842691a39accf7b531a54c3b
+jobs:
+  build-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify diagnostic-only boundary
+        run: |
+          set -euxo pipefail
+          test "$(git hash-object research/diagnostics/gate0_observer/main.c)" = 5a6278c39494eecdedef2affa6ac3ee3a656d38a
+          test "$(git hash-object research/diagnostics/gate0_observer/CMakeLists.txt)" = febf96ccd3e1738f01a57047d429a967fdacc444
+          test "$(git hash-object research/diagnostics/gate0_observer/retail_365_layout.h)" = bc78296033687095287604aba1d09688847c1928
+          test "$(git hash-object research/diagnostics/gate0_observer/gate0_protocol_v7.h)" = b83c3ea5cf59759657abad574aaf0355701569e9
+          ! grep -R 'taiHook\|TAI_CONTINUE' research/diagnostics/scelcd_runtime_probe
+          grep -F 'VBE_SCELCD_WRITER_OFFSET 0xA54u' research/diagnostics/scelcd_runtime_probe/probe_protocol.h
+          grep -F 'VBE_SCELCD_READER_OFFSET 0x5B4u' research/diagnostics/scelcd_runtime_probe/probe_protocol.h
+      - name: Bootstrap pinned VitaSDK and build authorized baseline plus probe
+        run: |
+          set -euxo pipefail
+          git init -q vdpm && git -C vdpm remote add origin https://github.com/vitasdk/vdpm.git
+          git -C vdpm fetch -q --depth 1 origin "$VDPM_SHA" && git -C vdpm checkout -q --detach FETCH_HEAD
+          bash vdpm/bootstrap-vitasdk.sh
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+          "$VITASDK/bin/vdpm" install taihen
+          cmake -S research/diagnostics/gate0_observer -B authorized-c9-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          cmake --build authorized-c9-build --parallel
+          echo "$AUTHORIZED_C9_SKPRX_SHA256  authorized-c9-build/vbe_color_trace.skprx" | sha256sum -c -
+          echo "$FROZEN_DRAIN_SELF_SHA256  authorized-c9-build/vbe_color_trace_drain.self" | sha256sum -c -
+          cmake -S research/diagnostics/scelcd_runtime_probe -B scelcd-probe-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          cmake --build scelcd-probe-build --parallel
+          test -s scelcd-probe-build/vbe_scelcd_runtime_probe.skprx
+          test -s scelcd-probe-build/vbe_scelcd_runtime_probe_drain.self
+          test -s scelcd-probe-build/vbe_scelcd_runtime_probe.vpk
+      - name: Package exact diagnostic probe
+        run: |
+          set -euxo pipefail
+          mkdir package
+          cp scelcd-probe-build/vbe_scelcd_runtime_probe.skprx package/
+          cp scelcd-probe-build/vbe_scelcd_runtime_probe_drain.self package/
+          cp scelcd-probe-build/vbe_scelcd_runtime_probe.vpk package/
+          cp research/diagnostics/scelcd_runtime_probe/probe_protocol.h package/
+          printf '%s\n' "$GITHUB_SHA" > package/WORKFLOW_COMMIT.txt
+          printf 'authorized_candidate9=%s\nauthorized_candidate9_skprx_sha256=%s\nfrozen_drain_self_sha256=%s\nprobe_policy=ZERO_HOOK_READ_ONLY_BOOT_SNAPSHOT\n' "$AUTHORIZED_C9_SHA" "$AUTHORIZED_C9_SKPRX_SHA256" "$FROZEN_DRAIN_SELF_SHA256" > package/PROVENANCE.txt
+          (cd package && sha256sum vbe_scelcd_runtime_probe.skprx vbe_scelcd_runtime_probe_drain.self vbe_scelcd_runtime_probe.vpk probe_protocol.h WORKFLOW_COMMIT.txt PROVENANCE.txt > SHA256SUMS && sha256sum -c SHA256SUMS)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vbe-c9-scelcd-runtime-probe-${{ github.sha }}
+          path: package/
+          if-no-files-found: error
+          compression-level: 6
