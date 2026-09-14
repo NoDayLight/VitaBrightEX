@@ -1,0 +1,69 @@
+name: Gate-0 Candidate-9 read-only status probe
+on:
+  push:
+    branches: [gate0-c9-status-probe]
+    paths:
+      - 'research/diagnostics/gate0_observer/status_probe.c'
+      - 'research/diagnostics/gate0_observer/CMakeLists.txt'
+      - '.github/workflows/gate0-c9-status-probe.yml'
+permissions:
+  contents: read
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+  VDPM_SHA: c83b88a54ec13372515eeb8b3bdca4b10c36d721
+  AUTHORIZED_C9_SHA: 5a1a1ac29340f4a5345b08fc74ac5942559b9428
+  AUTHORIZED_C9_SKPRX_SHA256: d77febc06c7016d1794b6175d35d1d8aed1b41473279943b0b46718c65241a2a
+  FROZEN_DRAIN_SELF_SHA256: 73f769832a1e1b65261fbc1fb68f79dd515e02c6842691a39accf7b531a54c3b
+jobs:
+  build-probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify diagnostic-only source boundary
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git hash-object research/diagnostics/gate0_observer/main.c)" = 5a6278c39494eecdedef2affa6ac3ee3a656d38a
+          test "$(git hash-object research/diagnostics/gate0_observer/gate0_protocol_v7.h)" = b83c3ea5cf59759657abad574aaf0355701569e9
+          test "$(git hash-object research/diagnostics/gate0_observer/observer_lifecycle_core.h)" = 1837155f94a037db9e53d8c52919bc93f6079035
+          test "$(git hash-object research/diagnostics/gate0_observer/trace_ring_core.h)" = 43cb06954714249f54143e1347cc8cd52b7fea99
+          test "$(git hash-object research/diagnostics/gate0_observer/drain.c)" = aefeeb018790ca4e59ee1d7f3b1b9f766b45a358
+          grep -F 'dump.status_return = vbeTraceGetStatus(&dump.status);' research/diagnostics/gate0_observer/status_probe.c
+          ! grep -E 'vbeTrace(Pause|Reset|Read|Mark|Quiesce)[[:space:]]*\(' research/diagnostics/gate0_observer/status_probe.c
+      - name: Bootstrap pinned VitaSDK and build
+        run: |
+          set -euxo pipefail
+          git init -q vdpm
+          git -C vdpm remote add origin https://github.com/vitasdk/vdpm.git
+          git -C vdpm fetch -q --depth 1 origin "$VDPM_SHA"
+          git -C vdpm checkout -q --detach FETCH_HEAD
+          test "$(git -C vdpm rev-parse HEAD)" = "$VDPM_SHA"
+          bash vdpm/bootstrap-vitasdk.sh
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+          "$VITASDK/bin/vdpm" install taihen
+          cmake -S research/diagnostics/gate0_observer -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          cmake --build build --parallel
+          echo "$AUTHORIZED_C9_SKPRX_SHA256  build/vbe_color_trace.skprx" | sha256sum -c -
+          echo "$FROZEN_DRAIN_SELF_SHA256  build/vbe_color_trace_drain.self" | sha256sum -c -
+          test -s build/vbe_color_trace_status_probe.vpk
+          test -s build/vbe_color_trace_status_probe.self
+          unzip -q build/vbe_color_trace_status_probe.vpk -d probe-vpk
+          cmp build/vbe_color_trace_status_probe.self probe-vpk/eboot.bin
+          strings probe-vpk/sce_sys/param.sfo | grep -F VBESTAT09
+      - name: Package exact probe
+        run: |
+          set -euxo pipefail
+          mkdir package
+          cp build/vbe_color_trace_status_probe.vpk build/vbe_color_trace_status_probe.self package/
+          cp research/diagnostics/gate0_observer/status_probe.c package/
+          printf '%s\n' "$GITHUB_SHA" > package/WORKFLOW_COMMIT.txt
+          printf '%s\n' "$AUTHORIZED_C9_SHA" > package/AUTHORIZED_C9_COMMIT.txt
+          printf '%s  %s\n' "$AUTHORIZED_C9_SKPRX_SHA256" vbe_color_trace.skprx > package/AUTHORIZED_C9_SKPRX_SHA256.txt
+          (cd package && sha256sum vbe_color_trace_status_probe.vpk vbe_color_trace_status_probe.self status_probe.c WORKFLOW_COMMIT.txt AUTHORIZED_C9_COMMIT.txt AUTHORIZED_C9_SKPRX_SHA256.txt > SHA256SUMS && sha256sum -c SHA256SUMS)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vbe-c9-status-probe-${{ github.sha }}
+          path: package/
+          if-no-files-found: error
+          compression-level: 6
