@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import argparse
+import json
 import re
 from pathlib import Path
 from gate0_v7_import_manifest import load_names
 
 LINE = re.compile(r'^library=(\S+) library_nid=(0x[0-9A-F]{8}) function_nid=(0x[0-9A-F]{8}) function_name=(\S+)$')
 OLD_MODULEMGR = ('SceModulemgrForKernel', 0xC445FA63, 0xD269F915)
+SYSTEM_SW_VERSION = ('SceModulemgrForDriver', 0xD4A60A52, 0x5182E212)
 NEW_RUNTIME_LIBRARY = 0x92C9FFC2
 NEW_RUNTIME_FUNCTION = 0xDAA90093
 
@@ -31,6 +33,7 @@ def main():
     ap.add_argument('--new', required=True, type=Path)
     ap.add_argument('--db360', required=True, type=Path)
     ap.add_argument('--db363', required=True, type=Path)
+    ap.add_argument('--retail-modulemgr-json', required=True, type=Path)
     ap.add_argument('--report', required=True, type=Path)
     args = ap.parse_args()
 
@@ -52,15 +55,35 @@ def main():
         raise SystemExit(f'unexpected direct import addition: {sorted(added)}')
     resolver_import = next(iter(added))
 
+    retail = json.loads(args.retail_modulemgr_json.read_text())
+    if retail.get('firmware') != '3.65' or retail.get('module') != 'SceKernelModulemgr':
+        raise SystemExit('retail Modulemgr evidence is not exact firmware 3.65 SceKernelModulemgr')
+    sw = retail.get('system_sw_version_direct_import', {})
+    retail_sw_proven = (
+        sw.get('library_name') == SYSTEM_SW_VERSION[0]
+        and sw.get('library_nid') == f'0x{SYSTEM_SW_VERSION[1]:08X}'
+        and sw.get('function_nid') == f'0x{SYSTEM_SW_VERSION[2]:08X}'
+        and sw.get('present') is True
+        and sw.get('hit_count') == 1
+    )
+
     n360 = load_names([args.db360])
     n363 = load_names([args.db363])
     classifications = []
     for lib, lnid, fnid, shown_name in new:
+        k = (lib, lnid, fnid)
         if lib.lower().startswith('taihen'):
             cls = 'TAIHEN_PLUGIN_OWNED'
             name = shown_name
+        elif k == SYSTEM_SW_VERSION:
+            if not retail_sw_proven:
+                raise SystemExit(
+                    'remaining direct SceModulemgrForDriver/ksceKernelGetSystemSwVersion import '
+                    'is not exported by exact retail 3.65 SceKernelModulemgr'
+                )
+            cls = 'RETAIL_365_PROVEN'
+            name = 'ksceKernelGetSystemSwVersion'
         else:
-            k = (lib, lnid, fnid)
             name360 = n360.get(k)
             name363 = n363.get(k)
             if not name360 or not name363 or name360 != name363:
