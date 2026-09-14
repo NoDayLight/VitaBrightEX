@@ -16,5 +16,6 @@ int main(int argc,char **argv){VbeTraceStatus st;VbeTraceDumpHeader h;uint32_t n
     h.required_hook_mask=st.required_hook_mask;h.missing_required_mask=st.missing_required_mask;h.lost_records=st.lost_records;h.ring_epoch=st.ring_epoch;h.lifecycle=st.lifecycle;
     fd=sceIoOpen("ux0:data/vbe_gate0a_trace.bin",SCE_O_WRONLY|SCE_O_CREAT|SCE_O_TRUNC,0666);if(fd<0)return 16;
     if(write_all(fd,&h,sizeof(h))<0||write_all(fd,&st,sizeof(st))<0||write_all(fd,records,n*sizeof(VbeTraceRecord))<0){sceIoClose(fd);return 17;}sceIoClose(fd);
-    if(vbeTraceReset(1)<0)return 18;return 0;
+    if(vbeTraceReset(1)<0)return 18;
+    return 0;
 }
