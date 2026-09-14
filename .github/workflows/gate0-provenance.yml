@@ -1,0 +1,194 @@
+name: Gate-0 ABI provenance closure
+
+on:
+  push:
+    branches:
+      - research-lcd-color-engine
+    paths:
+      - .github/workflows/gate0-provenance.yml
+      - research/abi_provenance_capture.py
+      - research/trace_abi_audit.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PUP_URL: https://web.archive.org/web/20180630222648id_/http://dus01.psp2.update.playstation.net/update/psp2/image/2017_0317/rel_0a0f2a9ae58968ac5d1d2127049c3cba/PSP2UPDAT.PUP
+  PUP_MD5: 0a0f2a9ae58968ac5d1d2127049c3cba
+  PUP_SHA256: 86859b3071681268b6d0beb5ef691da874b6726e85b6f06a1cdf6a0e183e77c6
+  SCEUTILS_SHA: 0466d003246ec986ab6189e6719dcb196a40fb02
+  PY2_IMAGE: python@sha256:d8fac68ebdc45b8d66d53f1ed6c1532da81109a8f5532a6ca0c951ed31107d70
+
+jobs:
+  provenance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Record exact source provenance before analysis
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          status="$(git status --porcelain=v1)"
+          worktree_sha="$(sha256sum research/trace_abi_audit.py | cut -d' ' -f1)"
+          object_sha="$(git show HEAD:research/trace_abi_audit.py | sha256sum | cut -d' ' -f1)"
+          test "$head" = "$GITHUB_SHA"
+          test -z "$status"
+          test "$worktree_sha" = "$object_sha"
+          {
+            echo "workflow_commit=$GITHUB_SHA"
+            echo "git_rev_parse_head=$head"
+            echo 'git_status_porcelain_v1_begin'
+            printf '%s\n' "$status"
+            echo 'git_status_porcelain_v1_end'
+            echo 'trace_abi_git_index:'
+            git ls-files -s research/trace_abi_audit.py
+            echo 'trace_abi_worktree_sha256:'
+            sha256sum research/trace_abi_audit.py
+            echo 'trace_abi_git_object_bytes_sha256:'
+            git show HEAD:research/trace_abi_audit.py | sha256sum
+            echo 'workflow_sha256:'
+            sha256sum .github/workflows/gate0-provenance.yml
+            echo 'private_abi_analyzer_sha256s:'
+            sha256sum \
+              research/trace_abi_audit.py \
+              research/abi_provenance_capture.py \
+              research/vita_elf_audit.py \
+              research/vita_elf_legacy.py \
+              research/topology_common.py
+          } | tee research-provenance.txt
+
+      - name: Download and verify retail 3.65 PUP
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 5 --retry-delay 2 "$PUP_URL" -o PSP2UPDAT-365.PUP
+          echo "$PUP_MD5  PSP2UPDAT-365.PUP" | md5sum -c -
+          echo "$PUP_SHA256  PSP2UPDAT-365.PUP" | sha256sum -c -
+
+      - name: Install deterministic analysis prerequisites
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y mtools file
+          python3 -m pip install --disable-pip-version-check --user capstone==5.0.3
+          git init -q sceutils-audit
+          git -C sceutils-audit remote add origin https://github.com/RealYoti/sceutils.git
+          git -C sceutils-audit fetch -q --depth 1 origin "$SCEUTILS_SHA"
+          git -C sceutils-audit checkout -q --detach FETCH_HEAD
+          test "$(git -C sceutils-audit rev-parse HEAD)" = "$SCEUTILS_SHA"
+          cp sceutils-audit/keys_external.py sceutils-audit/keys.py
+          mkdir -p sceutils-audit/unarzl
+          : > sceutils-audit/unarzl/unarzl
+
+      - name: Recover exact retail LCD Lowio and display ELFs
+        run: |
+          set -euxo pipefail
+          cat > extract_fw.py <<'PY'
+          import os,sys
+          sys.path.insert(0,'sceutils-audit')
+          import pup_fiction
+          os.makedirs('fw/PUP'); os.makedirs('fw/PUP_dec')
+          pup_fiction.pup_extract_files('PSP2UPDAT-365.PUP','fw/PUP')
+          pup_fiction.pup_decrypt_packages('fw/PUP','fw/PUP_dec')
+          if not os.path.isfile('fw/PUP_dec/os0.bin'): raise SystemExit('os0.bin was not produced')
+          PY
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python extract_fw.py"
+          sudo chown -R "$(id -u):$(id -g)" fw
+          echo '35480a01ea783df859326d8698831afd3e850717f5b7785ab9964eab23712856  fw/PUP_dec/os0.bin' | sha256sum -c -
+          mkdir -p fw/os0-tree fw/raw fw/elf
+          mcopy -s -n -i fw/PUP_dec/os0.bin "::/kd" fw/os0-tree
+          for base in lcd lowio display; do
+            src="$(find fw/os0-tree -type f -iname "$base.skprx" -print -quit)"
+            test -n "$src"
+            cp "$src" "fw/raw/$base.skprx"
+          done
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc '
+            pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null
+            for base in lcd lowio display; do python sceutils-audit/self2elf.py -i "fw/raw/$base.skprx" -o "fw/elf/$base.elf" >/dev/null; done
+          '
+          sudo chown -R "$(id -u):$(id -g)" fw/elf
+          echo '24752bb4c69f0c241701cab0364cde9cbe5c95128b6bfe02bf3263aad524246e  fw/elf/lcd.elf' | sha256sum -c -
+          echo 'f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744  fw/elf/lowio.elf' | sha256sum -c -
+          echo '83ef39adf741a4bbbc1cec67d00e2594de1d17be0f5ea6cc77c935eae46065e5  fw/elf/display.elf' | sha256sum -c -
+
+      - name: Execute unchanged legacy private-ABI assertions and retain mismatch
+        run: |
+          set -uo pipefail
+          set +e
+          python3 research/trace_abi_audit.py \
+            --lowio fw/elf/lowio.elf \
+            --lcd fw/elf/lcd.elf \
+            --json trace-private-abi.json \
+            > legacy-analyzer-output.txt 2>&1
+          status=$?
+          set -e
+          printf '%s\n' "$status" > legacy-analyzer-status.txt
+          cat legacy-analyzer-output.txt
+          echo "legacy_analyzer_exit_status=$status"
+
+      - name: Materialize provenance-clean structured diagnostic
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -f legacy-analyzer-status.txt && -f legacy-analyzer-output.txt && -f fw/elf/lowio.elf && -f fw/elf/lcd.elf && -f fw/elf/display.elf ]]; then
+            status="$(cat legacy-analyzer-status.txt)"
+            python3 research/abi_provenance_capture.py \
+              --lowio fw/elf/lowio.elf \
+              --lcd fw/elf/lcd.elf \
+              --display fw/elf/display.elf \
+              --legacy-output legacy-analyzer-output.txt \
+              --legacy-status "$status" \
+              --workflow-commit "$GITHUB_SHA" \
+              --workflow-file .github/workflows/gate0-provenance.yml \
+              --analyzer research/trace_abi_audit.py \
+              --analyzer-git-blob "$(git rev-parse HEAD:research/trace_abi_audit.py)" \
+              --json abi-diagnostic.json \
+              --text abi-diagnostic.txt
+          else
+            python3 - <<'PY'
+          import hashlib,json,subprocess
+          from pathlib import Path
+          analyzer=Path('research/trace_abi_audit.py')
+          workflow=Path('.github/workflows/gate0-provenance.yml')
+          doc={
+            'schema':1,
+            'purpose':'forensic analyzer provenance; analysis prerequisites failed before semantic diagnostic',
+            'workflow_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),
+            'analyzer':{
+              'path':str(analyzer),
+              'sha256':hashlib.sha256(analyzer.read_bytes()).hexdigest(),
+              'git_object_identity':subprocess.check_output(['git','rev-parse','HEAD:research/trace_abi_audit.py'],text=True).strip(),
+            },
+            'workflow_sha256':hashlib.sha256(workflow.read_bytes()).hexdigest(),
+            'failed_invariant':'ANALYSIS_PREREQUISITE_FAILURE',
+          }
+          Path('abi-diagnostic.json').write_text(json.dumps(doc,indent=2)+'\n')
+          Path('abi-diagnostic.txt').write_text('\n'.join([
+            'GATE0_ABI_PROVENANCE_DIAGNOSTIC',
+            'workflow_commit: '+doc['workflow_commit'],
+            'analyzer_sha256: '+doc['analyzer']['sha256'],
+            'analyzer_git_object: '+doc['analyzer']['git_object_identity'],
+            'workflow_sha256: '+doc['workflow_sha256'],
+            'failed_invariant: ANALYSIS_PREREQUISITE_FAILURE',
+          ])+'\n')
+          PY
+          fi
+          cat abi-diagnostic.txt
+          test -f research-provenance.txt
+          test -f abi-diagnostic.json
+          test -f abi-diagnostic.txt
+
+      - name: Upload provenance and ABI diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gate0-abi-provenance
+          path: |
+            research-provenance.txt
+            abi-diagnostic.json
+            abi-diagnostic.txt
+            legacy-analyzer-output.txt
+            legacy-analyzer-status.txt
+          if-no-files-found: error
