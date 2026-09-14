@@ -16,7 +16,7 @@ vita_create_self(vbe_color_trace.skprx vbe_color_trace_kernel CONFIG ${CMAKE_CUR
 vita_create_stubs(vbe_color_trace_stubs vbe_color_trace_kernel ${CMAKE_CURRENT_SOURCE_DIR}/module.yml KERNEL)
 add_executable(vbe_color_trace_drain drain.c)
 add_dependencies(vbe_color_trace_drain vbe_color_trace_stubs)
-target_link_libraries(vbe_color_trace_drain ${CMAKE_CURRENT_BINARY_DIR}/libVbeColorTrace_stub.a SceIofilemgr_stub SceLibKernel_stub SceThreadmgr_stub)
+target_link_libraries(vbe_color_trace_drain ${CMAKE_CURRENT_BINARY_DIR}/libVbeColorTrace_stub.a SceIofilemgr_stub SceLibKernel_stub SceKernelThreadMgr_stub)
 set(VITA_ELF_CREATE_FLAGS "")
 set(VITA_MAKE_FSELF_FLAGS "")
 vita_create_self(vbe_color_trace_drain.self vbe_color_trace_drain UNSAFE)
