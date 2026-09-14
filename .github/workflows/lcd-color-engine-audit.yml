@@ -20,19 +20,14 @@ env:
 jobs:
   retail-365:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Record exact research inputs
         run: |
           set -euo pipefail
-          printf '%s\n' \
-            "workflow_commit=$GITHUB_SHA" \
-            "sceutils=$SCEUTILS_SHA" \
-            "vita-headers=$VITA_HEADERS_SHA" \
-            "python2-image=$PY2_IMAGE" \
-            "capstone=5.0.3"
+          printf '%s\n' "workflow_commit=$GITHUB_SHA" "sceutils=$SCEUTILS_SHA" "vita-headers=$VITA_HEADERS_SHA" "python2-image=$PY2_IMAGE" "capstone=5.0.3"
 
       - name: Download and verify retail 3.65 PUP
         run: |
@@ -51,69 +46,79 @@ jobs:
       - name: Fetch pinned references
         run: |
           set -euxo pipefail
-          fetch_exact() {
-            repo="$1"; sha="$2"; dir="$3"
-            git init -q "$dir"
-            git -C "$dir" remote add origin "$repo"
-            git -C "$dir" fetch -q --depth 1 origin "$sha"
-            git -C "$dir" checkout -q --detach FETCH_HEAD
-            test "$(git -C "$dir" rev-parse HEAD)" = "$sha"
-          }
+          fetch_exact() { repo="$1"; sha="$2"; dir="$3"; git init -q "$dir"; git -C "$dir" remote add origin "$repo"; git -C "$dir" fetch -q --depth 1 origin "$sha"; git -C "$dir" checkout -q --detach FETCH_HEAD; test "$(git -C "$dir" rev-parse HEAD)" = "$sha"; }
           fetch_exact https://github.com/RealYoti/sceutils.git "$SCEUTILS_SHA" sceutils-audit
           fetch_exact https://github.com/vitasdk/vita-headers.git "$VITA_HEADERS_SHA" vita-headers-reference
           cp sceutils-audit/keys_external.py sceutils-audit/keys.py
           mkdir -p sceutils-audit/unarzl
           : > sceutils-audit/unarzl/unarzl
 
-      - name: Decrypt os0 and all kernel SKPRX modules
+      - name: Decrypt os0 and vs0 packages
         run: |
           set -euxo pipefail
-          cat > extract_os0.py <<'PY'
-          import os
-          import sys
-          sys.path.insert(0, 'sceutils-audit')
+          cat > extract_fw.py <<'PY'
+          import os,sys
+          sys.path.insert(0,'sceutils-audit')
           import pup_fiction
-          os.makedirs('fw/PUP')
-          os.makedirs('fw/PUP_dec')
-          pup_fiction.pup_extract_files('PSP2UPDAT-365.PUP', 'fw/PUP')
-          pup_fiction.pup_decrypt_packages('fw/PUP', 'fw/PUP_dec')
-          if not os.path.isfile('fw/PUP_dec/os0.bin'):
-              raise SystemExit('os0.bin was not produced')
+          os.makedirs('fw/PUP'); os.makedirs('fw/PUP_dec')
+          pup_fiction.pup_extract_files('PSP2UPDAT-365.PUP','fw/PUP')
+          pup_fiction.pup_decrypt_packages('fw/PUP','fw/PUP_dec')
+          for n in ('os0.bin','vs0.bin'):
+              if not os.path.isfile('fw/PUP_dec/'+n): raise SystemExit(n+' was not produced')
           PY
-          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python extract_os0.py"
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python extract_fw.py"
           sudo chown -R "$(id -u):$(id -g)" fw
           echo '35480a01ea783df859326d8698831afd3e850717f5b7785ab9964eab23712856  fw/PUP_dec/os0.bin' | sha256sum -c -
+
+      - name: Decrypt all os0 kernel SKPRX
+        run: |
+          set -euxo pipefail
           mkdir -p fw/raw-all fw/elf-all fw/os0-tree
           mcopy -s -n -i fw/PUP_dec/os0.bin "::/kd" fw/os0-tree
           find fw/os0-tree -type f -name '*.skprx' -printf '%f\n' | sort -u > kernel-skprx-index.txt
           test -s kernel-skprx-index.txt
-          while IFS= read -r base; do
-            src="$(find fw/os0-tree -type f -name "$base" -print -quit)"
-            test -n "$src"
-            cp "$src" "fw/raw-all/$base"
-          done < kernel-skprx-index.txt
+          while IFS= read -r base; do src="$(find fw/os0-tree -type f -name "$base" -print -quit)"; test -n "$src"; cp "$src" "fw/raw-all/$base"; done < kernel-skprx-index.txt
           docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc '
             pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null
             : > fw/decrypt-failures.txt
-            for f in fw/raw-all/*.skprx; do
-              b=$(basename "$f" .skprx)
-              if ! python sceutils-audit/self2elf.py -i "$f" -o "fw/elf-all/$b.elf" >/dev/null 2>&1; then
-                echo "$b.skprx" >> fw/decrypt-failures.txt
-                rm -f "fw/elf-all/$b.elf"
-              fi
-            done
+            for f in fw/raw-all/*.skprx; do b=$(basename "$f" .skprx); if ! python sceutils-audit/self2elf.py -i "$f" -o "fw/elf-all/$b.elf" >/dev/null 2>&1; then echo "$b.skprx" >> fw/decrypt-failures.txt; rm -f "fw/elf-all/$b.elf"; fi; done
           '
           sudo chown -R "$(id -u):$(id -g)" fw/elf-all fw/decrypt-failures.txt
-          test -s fw/elf-all/lowio.elf
-          test -s fw/elf-all/display.elf
-          test -s fw/elf-all/lcd.elf
+          test "$(wc -l < kernel-skprx-index.txt)" -eq 46
+          test "$(find fw/elf-all -name '*.elf' | wc -l)" -eq 46
+          test ! -s fw/decrypt-failures.txt
           sha256sum fw/elf-all/*.elf | sort > kernel-elf-sha256.txt
           grep -F '83ef39adf741a4bbbc1cec67d00e2594de1d17be0f5ea6cc77c935eae46065e5  fw/elf-all/display.elf' kernel-elf-sha256.txt
           grep -F '24752bb4c69f0c241701cab0364cde9cbe5c95128b6bfe02bf3263aad524246e  fw/elf-all/lcd.elf' kernel-elf-sha256.txt
           grep -F 'f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744  fw/elf-all/lowio.elf' kernel-elf-sha256.txt
-          printf 'kernel_skprx=%s decrypted_elf=%s failures=%s\n' "$(wc -l < kernel-skprx-index.txt)" "$(find fw/elf-all -name '*.elf' | wc -l)" "$(wc -l < fw/decrypt-failures.txt)"
 
-      - name: Validate analyser authority and all imports
+      - name: Extract and decrypt only targeted vs0 display-control modules
+        run: |
+          set -euxo pipefail
+          mkdir -p fw/vs0-tree fw/vs0-elf
+          mcopy -s -n -i fw/PUP_dec/vs0.bin "::/app/NPXS10015" fw/vs0-tree || true
+          mcopy -s -n -i fw/PUP_dec/vs0.bin "::/vsh/shell" fw/vs0-tree || true
+          mcopy -s -n -i fw/PUP_dec/vs0.bin "::/sys/external" fw/vs0-tree || true
+          find fw/vs0-tree -type f | sort > vs0-extracted-files.txt
+          : > vs0-target-candidates.txt
+          while IFS= read -r f; do
+            low="$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')"
+            base="$(basename "$low")"
+            case "$base" in *.suprx|*.skprx|*.self|eboot.bin) ;; *) continue;; esac
+            if [[ "$low" == *npxs10015* || "$low" == *vsh/shell* || "$base" == *avconfig* || "$base" == *gxm* || "$base" == *display* || "$base" == *registry* || "$base" == *regmgr* ]]; then printf '%s\n' "$f" >> vs0-target-candidates.txt; fi
+          done < vs0-extracted-files.txt
+          sort -u -o vs0-target-candidates.txt vs0-target-candidates.txt
+          test -s vs0-target-candidates.txt
+          n=0
+          while IFS= read -r f; do
+            n=$((n+1)); safe="$(printf '%s' "$f" | sed 's#^fw/vs0-tree/##; s#[^A-Za-z0-9._-]#_#g')"; out="fw/vs0-elf/$(printf '%03d' "$n")_${safe}.elf"
+            if file "$f" | grep -q 'ELF'; then cp "$f" "$out"; else docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python sceutils-audit/self2elf.py -i '$f' -o '$out' >/dev/null" || rm -f "$out"; fi
+          done < vs0-target-candidates.txt
+          sudo chown -R "$(id -u):$(id -g)" fw/vs0-elf
+          test "$(find fw/vs0-elf -name '*.elf' | wc -l)" -gt 0
+          sha256sum fw/vs0-elf/*.elf | sort > vs0-target-elf-sha256.txt
+
+      - name: Validate analyser authority and all kernel imports
         run: |
           set -euxo pipefail
           python3 research/analysis_authority_audit.py --elf-dir fw/elf-all --display fw/elf-all/display.elf --json analysis-authority.json | tee analysis-authority.txt
@@ -124,54 +129,65 @@ jobs:
           python3 research/affine_static_closure_audit.py --lowio fw/elf-all/lowio.elf --display fw/elf-all/display.elf --nid-db-root vita-headers-reference --json affine-static-closure.json | tee affine-static-closure.txt
           python3 research/affine_math_host.py --json affine-host-math.json | tee affine-host-math.txt
 
-      - name: Reconstruct valid Sony LCD working programs
+      - name: Audit exact private trace ABIs and return conventions
+        run: |
+          set -euxo pipefail
+          python3 research/trace_abi_audit.py --lowio fw/elf-all/lowio.elf --lcd fw/elf-all/lcd.elf --json trace-private-abi.json | tee trace-private-abi.txt
+
+      - name: Reconstruct Sony LCD working-program evidence honestly
         run: |
           set -euxo pipefail
           python3 research/panel_program_reconstruction_audit.py --lcd fw/elf-all/lcd.elf --json panel-program-reconstruction.json | tee panel-program-reconstruction.txt
           python3 research/lcd_state_provenance_audit.py --lcd fw/elf-all/lcd.elf --nid-db-root vita-headers-reference --json lcd-state-provenance.json | tee lcd-state-provenance.txt
+          grep -Eq 'INCOMPLETE_STATIC_RECONSTRUCTION|PROVEN_STATIC_RECONSTRUCTION' panel-program-reconstruction.txt
 
       - name: Audit suspend resume display dependency edge
         run: |
           set -euxo pipefail
           python3 research/display_lifecycle_audit.py --elf-dir fw/elf-all --nid-db-root vita-headers-reference --json display-lifecycle.json | tee display-lifecycle.txt
 
-      - name: Audit IFTU affine pipeline
+      - name: Audit complete display and IFTU topology
         run: |
           set -euxo pipefail
           python3 research/iftu_pipeline_audit.py --lowio fw/elf-all/lowio.elf --display fw/elf-all/display.elf --json iftu-pipeline-365.json | tee iftu-pipeline-365.txt
-
-      - name: Audit complete SceDisplayForDriver topology
-        run: |
-          set -euxo pipefail
           python3 research/display_topology_audit.py --display fw/elf-all/display.elf --lowio fw/elf-all/lowio.elf --nid-db-root vita-headers-reference --json display-export-map.json | tee display-export-map.txt
-
-      - name: Audit IFTU MMIO and register programming
-        run: |
-          set -euxo pipefail
           python3 research/iftu_mmio_audit.py --lowio fw/elf-all/lowio.elf --nid-db-root vita-headers-reference --json iftu-mmio-map.json | tee iftu-mmio-map.txt
-
-      - name: Audit IFTU nonlinear topology
-        run: |
-          set -euxo pipefail
+          python3 research/iftu_register_surface_audit.py --lowio fw/elf-all/lowio.elf --json iftu-register-surface.json | tee iftu-register-surface.txt
+          grep -F 'NO_SONY_USED_NONLINEAR_FACILITY_FOUND' iftu-register-surface.txt
           python3 research/iftu_nonlinear_audit.py --lowio fw/elf-all/lowio.elf --json iftu-nonlinear-map.json | tee iftu-nonlinear-map.txt
 
-      - name: Audit SceLcd panel controller topology
+      - name: Audit panel and kernel color touch points
         run: |
           set -euxo pipefail
           python3 research/lcd_dsi_audit.py --lcd fw/elf-all/lcd.elf --lowio fw/elf-all/lowio.elf --json lcd-dsi-365.json | tee lcd-dsi-365.txt
           python3 research/lcd_panel_topology_audit.py --lcd fw/elf-all/lcd.elf --nid-db-root vita-headers-reference --json panel-bus-map.json | tee panel-bus-map.txt
-
-      - name: Audit all kernel display IFTU touch points
-        run: |
-          set -euxo pipefail
           python3 research/kernel_color_topology_audit.py --elf-dir fw/elf-all --nid-db-root vita-headers-reference --json kernel-color-topology.json | tee kernel-color-topology.txt
-
-      - name: Audit registry-backed display color consumers
-        run: |
-          set -euxo pipefail
           python3 research/registry_display_audit.py --elf-dir fw/elf-all --nid-db-root vita-headers-reference --json registry-display-consumers.json | tee registry-display-consumers.txt
 
-      - name: Assert pinned public structure API evidence
+      - name: Close SceVeneziaImage isolated E5020000 branch
+        run: |
+          set -euxo pipefail
+          ven="$(find fw/elf-all -iname '*venezia*.elf' -print -quit)"
+          test -n "$ven"
+          python3 research/venezia_iftu_audit.py --elf "$ven" --json venezia-iftu.json | tee venezia-iftu.txt
+          grep -Eq 'CLOSED_AS_NON_PRODUCTION_RELEVANT|LIVE_MMIO_USE' venezia-iftu.txt
+
+      - name: Run targeted vs0 AVConfig registry and GXM closure
+        run: |
+          set -euxo pipefail
+          python3 research/vs0_display_consumer_audit.py --elf-dir fw/vs0-elf --json vs0-display-consumers.json | tee vs0-display-consumers.txt
+          python3 - <<'PY'
+          import json
+          x=json.load(open('vs0-display-consumers.json'))
+          if not x['avconfig']['implementation_exports']:
+              raise SystemExit('targeted vs0 selection did not recover AVConfig color-space implementation')
+          if not x['avconfig']['runtime_colorspace_consumers']:
+              raise SystemExit('targeted vs0 selection did not recover a live color-space consumer')
+          if not x['registry_terms'].get('color_space_mode'):
+              raise SystemExit('targeted vs0 selection did not recover a RegMgr-backed color_space_mode consumer')
+          PY
+
+      - name: Assert pinned public API evidence
         run: |
           set -euxo pipefail
           grep -F 'VITASDK_BUILD_ASSERT_EQ(0x3C, SceIftuCscParams);' vita-headers-reference/include/psp2kern/lowio/iftu.h
@@ -179,8 +195,9 @@ jobs:
           grep -F 'SceIftuCscParams *csc_params2;' vita-headers-reference/include/psp2kern/lowio/iftu.h
           grep -F 'unsigned int csc_control;' vita-headers-reference/include/psp2kern/lowio/iftu.h
           grep -F 'ksceDisplaySetColorSpaceMode: 0x8D79D187' vita-headers-reference/db/360/SceDisplay.yml
-          grep -F 'kscePervasiveSpiClockEnable: 0xDFD96BFC' vita-headers-reference/db/360/SceLowio.yml
-          grep -F 'kscePervasiveSpiResetDisable: 0xE4B145AE' vita-headers-reference/db/360/SceLowio.yml
+          grep -F 'sceAVConfigSetDisplayColorSpaceMode: 0x3414347F' vita-headers-reference/db/360/SceAVConfig.yml
+          grep -F 'sceGxmColorSurfaceSetGammaMode: 0xF5C89643' vita-headers-reference/db/360/SceGxm.yml
+          grep -F 'This does not change color_space_mode in the registry.' vita-headers-reference/include/psp2/avconfig.h
 
       - name: Upload derived topology evidence only
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -189,12 +206,16 @@ jobs:
           path: |
             kernel-skprx-index.txt
             kernel-elf-sha256.txt
+            vs0-target-candidates.txt
+            vs0-target-elf-sha256.txt
             analysis-authority.json
             analysis-authority.txt
             affine-static-closure.json
             affine-static-closure.txt
             affine-host-math.json
             affine-host-math.txt
+            trace-private-abi.json
+            trace-private-abi.txt
             panel-program-reconstruction.json
             panel-program-reconstruction.txt
             lcd-state-provenance.json
@@ -207,6 +228,8 @@ jobs:
             display-export-map.txt
             iftu-mmio-map.json
             iftu-mmio-map.txt
+            iftu-register-surface.json
+            iftu-register-surface.txt
             iftu-nonlinear-map.json
             iftu-nonlinear-map.txt
             lcd-dsi-365.json
@@ -217,8 +240,12 @@ jobs:
             kernel-color-topology.txt
             registry-display-consumers.json
             registry-display-consumers.txt
+            venezia-iftu.json
+            venezia-iftu.txt
+            vs0-display-consumers.json
+            vs0-display-consumers.txt
 
       - name: Remove proprietary firmware bytes before completion
         if: always()
         run: |
-          sudo rm -rf PSP2UPDAT-365.PUP fw sceutils-audit extract_os0.py vita-headers-reference
+          sudo rm -rf PSP2UPDAT-365.PUP fw sceutils-audit extract_fw.py vita-headers-reference

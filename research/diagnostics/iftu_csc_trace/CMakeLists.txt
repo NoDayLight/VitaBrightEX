@@ -18,6 +18,7 @@ target_link_libraries(vbe_color_trace_kernel
     taihenModuleUtils_stub
     SceModulemgrForDriver_stub
     SceSysmemForDriver_stub
+    SceThreadmgrForDriver_stub
     gcc
 )
 set_target_properties(vbe_color_trace_kernel PROPERTIES
@@ -36,10 +37,6 @@ target_link_libraries(vbe_color_trace_drain
     SceIofilemgr_stub
     SceLibKernel_stub
 )
-# vita_create_self is a CMake macro, so the kernel CONFIG flags remain in the
-# caller scope. Clear them before converting the unrelated user executable;
-# otherwise vita-elf-create incorrectly applies module.yml and demands
-# module_start from the drain app.
 set(VITA_ELF_CREATE_FLAGS "")
 set(VITA_MAKE_FSELF_FLAGS "")
 vita_create_self(vbe_color_trace_drain.self vbe_color_trace_drain UNSAFE)

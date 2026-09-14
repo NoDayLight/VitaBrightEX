@@ -3,6 +3,7 @@
 #include <psp2kern/kernel/cpu.h>
 #include <psp2kern/kernel/modulemgr.h>
 #include <psp2kern/kernel/sysmem/data_transfers.h>
+#include <psp2kern/kernel/threadmgr/thread.h>
 #include <psp2kern/lowio/iftu.h>
 #include <taihen.h>
 
@@ -28,6 +29,8 @@ static VbeTraceRecord g_records[VBE_TRACE_RECORD_CAPACITY];
 static volatile uint32_t g_enabled;
 static volatile uint32_t g_slots_reserved;
 static volatile uint32_t g_sequence;
+static volatile uint32_t g_completion_sequence;
+static volatile uint32_t g_invocation_sequence;
 static volatile uint32_t g_lost;
 static volatile uint32_t g_active_hooks;
 static volatile uint32_t g_hook_fail_mask;
@@ -89,7 +92,17 @@ static void hook_leave(void) {
     __sync_sub_and_fetch(&g_active_hooks, 1u);
 }
 
-static VbeTraceRecord *reserve_record(uint32_t capture, uint16_t event_type, int plane) {
+static uint32_t trace_thread_id(void) {
+    int id = ksceKernelGetThreadId();
+    return id < 0 ? 0u : (uint32_t)id;
+}
+
+static uint32_t new_invocation_id(void) {
+    return __sync_add_and_fetch(&g_invocation_sequence, 1u);
+}
+
+static VbeTraceRecord *reserve_record(uint32_t capture, uint16_t event_type, int plane,
+                                      uint32_t thread_id, uint32_t invocation_id) {
     uint32_t slot;
     VbeTraceRecord *r;
     if (!capture) return NULL;
@@ -101,10 +114,13 @@ static VbeTraceRecord *reserve_record(uint32_t capture, uint16_t event_type, int
     r = &g_records[slot];
     r->committed = 0;
     r->sequence = __sync_add_and_fetch(&g_sequence, 1u);
+    r->completion_sequence = 0;
+    r->thread_id = thread_id;
+    r->invocation_id = invocation_id;
     r->event_type = event_type;
     r->plane = (int16_t)plane;
     r->flags = 0;
-    r->result = 0;
+    r->raw_return = 0;
     r->arg0 = 0;
     r->arg1 = 0;
     r->payload_length = 0;
@@ -114,44 +130,62 @@ static VbeTraceRecord *reserve_record(uint32_t capture, uint16_t event_type, int
 
 static void commit_record(VbeTraceRecord *r) {
     if (r == NULL) return;
+    r->completion_sequence = __sync_add_and_fetch(&g_completion_sequence, 1u);
     __sync_synchronize();
     r->committed = VBE_TRACE_COMMITTED;
 }
 
-static void record_simple(uint32_t capture, uint16_t event_type, int plane,
-                          uint32_t arg0, uint32_t arg1, int32_t result) {
-    VbeTraceRecord *r = reserve_record(capture, event_type, plane);
+static void finish_raw_call(VbeTraceRecord *r, int32_t raw_return) {
     if (r == NULL) return;
-    r->arg0 = arg0;
-    r->arg1 = arg1;
-    r->result = result;
+    r->raw_return = raw_return;
+    r->flags |= VBE_TRACE_FLAG_RETURN_VALID;
     commit_record(r);
 }
 
-static void record_csc(uint32_t capture, uint16_t event_type, int plane,
-                       const SceIftuCscParams *params) {
-    VbeTraceRecord *r = reserve_record(capture, event_type, plane);
+static void record_simple(uint32_t capture, uint16_t event_type, int plane,
+                          uint32_t arg0, uint32_t arg1, uint32_t thread_id,
+                          uint32_t invocation_id) {
+    VbeTraceRecord *r = reserve_record(capture, event_type, plane, thread_id, invocation_id);
     if (r == NULL) return;
+    r->arg0 = arg0;
+    r->arg1 = arg1;
+    commit_record(r);
+}
+
+static void record_exit(uint32_t capture, uint16_t event_type, int plane,
+                        uint32_t arg0, uint32_t arg1, int32_t raw_return,
+                        uint32_t thread_id, uint32_t invocation_id) {
+    VbeTraceRecord *r = reserve_record(capture, event_type, plane, thread_id, invocation_id);
+    if (r == NULL) return;
+    r->arg0 = arg0;
+    r->arg1 = arg1;
+    finish_raw_call(r, raw_return);
+}
+
+static VbeTraceRecord *prepare_csc(uint32_t capture, uint16_t event_type, int plane,
+                                   const SceIftuCscParams *params, uint32_t thread_id) {
+    VbeTraceRecord *r = reserve_record(capture, event_type, plane, thread_id, 0u);
+    if (r == NULL) return NULL;
     if (params == NULL) {
         r->flags |= VBE_TRACE_FLAG_NULL;
     } else {
         r->payload_length = (uint32_t)sizeof(SceIftuCscParams);
         copy_bytes(r->payload, (const volatile uint8_t *)params, r->payload_length);
     }
-    commit_record(r);
+    return r;
 }
 
-static void record_panel_write(uint32_t capture, uint32_t command,
-                               const void *payload, uint32_t length) {
-    VbeTraceRecord *r = reserve_record(capture, VBE_TRACE_PANEL_WRITE, -1);
+static VbeTraceRecord *prepare_panel_write(uint32_t capture, uint32_t command,
+                                           const void *payload, uint32_t length,
+                                           uint32_t thread_id) {
+    VbeTraceRecord *r = reserve_record(capture, VBE_TRACE_PANEL_WRITE, -1, thread_id, 0u);
     uint32_t n;
-    if (r == NULL) return;
+    if (r == NULL) return NULL;
     r->arg0 = command & 0xFFu;
     r->arg1 = length;
     if (payload == NULL) {
         r->flags |= VBE_TRACE_FLAG_NULL;
-        commit_record(r);
-        return;
+        return r;
     }
     n = length;
     if (n > VBE_TRACE_PAYLOAD_MAX) {
@@ -160,23 +194,26 @@ static void record_panel_write(uint32_t capture, uint32_t command,
     }
     r->payload_length = n;
     copy_bytes(r->payload, (const volatile uint8_t *)payload, n);
-    commit_record(r);
+    return r;
 }
 
 static void record_panel_read_exit(uint32_t capture, uint32_t command,
-                                   const void *payload, uint32_t length, int32_t result) {
-    VbeTraceRecord *r = reserve_record(capture, VBE_TRACE_PANEL_READ_EXIT, -1);
+                                   const void *payload, uint32_t length, int32_t raw_return,
+                                   uint32_t thread_id, uint32_t invocation_id) {
+    VbeTraceRecord *r = reserve_record(capture, VBE_TRACE_PANEL_READ_EXIT, -1,
+                                       thread_id, invocation_id);
     uint32_t n;
     if (r == NULL) return;
     r->arg0 = command & 0xFFu;
     r->arg1 = length;
-    r->result = result;
+    r->raw_return = raw_return;
+    r->flags |= VBE_TRACE_FLAG_RETURN_VALID;
     if (payload == NULL) {
         r->flags |= VBE_TRACE_FLAG_NULL;
         commit_record(r);
         return;
     }
-    if (result < 0) {
+    if (raw_return != 0) {
         commit_record(r);
         return;
     }
@@ -192,111 +229,112 @@ static void record_panel_read_exit(uint32_t capture, uint32_t command,
 
 static int hook_csc_a(int plane, const SceIftuCscParams *params) {
     uint32_t capture = hook_enter();
-    int ret;
-    record_csc(capture, VBE_TRACE_CSC_A, plane, params);
-    ret = TAI_CONTINUE(int, g_ref_csc_a, plane, params);
+    uint32_t tid = trace_thread_id();
+    VbeTraceRecord *r = prepare_csc(capture, VBE_TRACE_CSC_A, plane, params, tid);
+    int ret = TAI_CONTINUE(int, g_ref_csc_a, plane, params);
+    finish_raw_call(r, ret);
     hook_leave();
     return ret;
 }
 
 static int hook_csc_b(int plane, const SceIftuCscParams *params) {
     uint32_t capture = hook_enter();
-    int ret;
-    record_csc(capture, VBE_TRACE_CSC_B, plane, params);
-    ret = TAI_CONTINUE(int, g_ref_csc_b, plane, params);
+    uint32_t tid = trace_thread_id();
+    VbeTraceRecord *r = prepare_csc(capture, VBE_TRACE_CSC_B, plane, params, tid);
+    int ret = TAI_CONTINUE(int, g_ref_csc_b, plane, params);
+    finish_raw_call(r, ret);
     hook_leave();
     return ret;
 }
 
 static int hook_display_brightness(int display, int brightness) {
-    uint32_t capture = hook_enter();
+    uint32_t capture = hook_enter(), tid = trace_thread_id(), inv = new_invocation_id();
     int ret;
     record_simple(capture, VBE_TRACE_DISPLAY_BRIGHTNESS_ENTER, display,
-                  (uint32_t)brightness, 0, 0);
+                  (uint32_t)brightness, 0, tid, inv);
     ret = TAI_CONTINUE(int, g_ref_display_brightness, display, brightness);
-    record_simple(capture, VBE_TRACE_DISPLAY_BRIGHTNESS_EXIT, display,
-                  (uint32_t)brightness, 0, ret);
+    record_exit(capture, VBE_TRACE_DISPLAY_BRIGHTNESS_EXIT, display,
+                (uint32_t)brightness, 0, ret, tid, inv);
     hook_leave();
     return ret;
 }
 
 static int hook_display_colorspace(int display, int mode) {
-    uint32_t capture = hook_enter();
+    uint32_t capture = hook_enter(), tid = trace_thread_id(), inv = new_invocation_id();
     int ret;
-    record_simple(capture, VBE_TRACE_DISPLAY_COLORSPACE_ENTER, display,
-                  (uint32_t)mode, 0, 0);
+    record_simple(capture, VBE_TRACE_DISPLAY_COLORSPACE_ENTER, display, (uint32_t)mode, 0, tid, inv);
     ret = TAI_CONTINUE(int, g_ref_display_colorspace, display, mode);
-    record_simple(capture, VBE_TRACE_DISPLAY_COLORSPACE_EXIT, display,
-                  (uint32_t)mode, 0, ret);
+    record_exit(capture, VBE_TRACE_DISPLAY_COLORSPACE_EXIT, display, (uint32_t)mode, 0, ret, tid, inv);
     hook_leave();
     return ret;
 }
 
 static int hook_lcd_brightness(unsigned int brightness) {
-    uint32_t capture = hook_enter();
+    uint32_t capture = hook_enter(), tid = trace_thread_id(), inv = new_invocation_id();
     int ret;
-    record_simple(capture, VBE_TRACE_LCD_BRIGHTNESS_ENTER, -1, brightness, 0, 0);
+    record_simple(capture, VBE_TRACE_LCD_BRIGHTNESS_ENTER, -1, brightness, 0, tid, inv);
     ret = TAI_CONTINUE(int, g_ref_lcd_brightness, brightness);
-    record_simple(capture, VBE_TRACE_LCD_BRIGHTNESS_EXIT, -1, brightness, 0, ret);
+    record_exit(capture, VBE_TRACE_LCD_BRIGHTNESS_EXIT, -1, brightness, 0, ret, tid, inv);
     hook_leave();
     return ret;
 }
 
 static int hook_lcd_colorspace(int mode) {
-    uint32_t capture = hook_enter();
+    uint32_t capture = hook_enter(), tid = trace_thread_id(), inv = new_invocation_id();
     int ret;
-    record_simple(capture, VBE_TRACE_LCD_COLORSPACE_ENTER, -1, (uint32_t)mode, 0, 0);
+    record_simple(capture, VBE_TRACE_LCD_COLORSPACE_ENTER, -1, (uint32_t)mode, 0, tid, inv);
     ret = TAI_CONTINUE(int, g_ref_lcd_colorspace, mode);
-    record_simple(capture, VBE_TRACE_LCD_COLORSPACE_EXIT, -1, (uint32_t)mode, 0, ret);
+    record_exit(capture, VBE_TRACE_LCD_COLORSPACE_EXIT, -1, (uint32_t)mode, 0, ret, tid, inv);
     hook_leave();
     return ret;
 }
 
 static int hook_display_on(void) {
-    uint32_t capture = hook_enter();
+    uint32_t capture = hook_enter(), tid = trace_thread_id(), inv = new_invocation_id();
     int ret;
-    record_simple(capture, VBE_TRACE_DISPLAY_ON_ENTER, -1, 0, 0, 0);
+    record_simple(capture, VBE_TRACE_DISPLAY_ON_ENTER, -1, 0, 0, tid, inv);
     ret = TAI_CONTINUE(int, g_ref_display_on);
-    record_simple(capture, VBE_TRACE_DISPLAY_ON_EXIT, -1, 0, 0, ret);
+    record_exit(capture, VBE_TRACE_DISPLAY_ON_EXIT, -1, 0, 0, ret, tid, inv);
     hook_leave();
     return ret;
 }
 
 static int hook_display_off(void) {
-    uint32_t capture = hook_enter();
+    uint32_t capture = hook_enter(), tid = trace_thread_id(), inv = new_invocation_id();
     int ret;
-    record_simple(capture, VBE_TRACE_DISPLAY_OFF_ENTER, -1, 0, 0, 0);
+    record_simple(capture, VBE_TRACE_DISPLAY_OFF_ENTER, -1, 0, 0, tid, inv);
     ret = TAI_CONTINUE(int, g_ref_display_off);
-    record_simple(capture, VBE_TRACE_DISPLAY_OFF_EXIT, -1, 0, 0, ret);
+    record_exit(capture, VBE_TRACE_DISPLAY_OFF_EXIT, -1, 0, 0, ret, tid, inv);
     hook_leave();
     return ret;
 }
 
 static int hook_iftu_enable(int plane) {
-    uint32_t capture = hook_enter();
+    uint32_t capture = hook_enter(), tid = trace_thread_id(), inv = new_invocation_id();
     int ret;
-    record_simple(capture, VBE_TRACE_IFTU_ENABLE_ENTER, plane, 0, 0, 0);
+    record_simple(capture, VBE_TRACE_IFTU_ENABLE_ENTER, plane, 0, 0, tid, inv);
     ret = TAI_CONTINUE(int, g_ref_iftu_enable, plane);
-    record_simple(capture, VBE_TRACE_IFTU_ENABLE_EXIT, plane, 0, 0, ret);
+    record_exit(capture, VBE_TRACE_IFTU_ENABLE_EXIT, plane, 0, 0, ret, tid, inv);
     hook_leave();
     return ret;
 }
 
 static int hook_panel_write(unsigned int command, const void *payload, unsigned int length) {
     uint32_t capture = hook_enter();
-    int ret;
-    record_panel_write(capture, command, payload, length);
-    ret = TAI_CONTINUE(int, g_ref_panel_write, command, payload, length);
+    uint32_t tid = trace_thread_id();
+    VbeTraceRecord *r = prepare_panel_write(capture, command, payload, length, tid);
+    int ret = TAI_CONTINUE(int, g_ref_panel_write, command, payload, length);
+    finish_raw_call(r, ret);
     hook_leave();
     return ret;
 }
 
 static int hook_panel_read(unsigned int command, void *payload, unsigned int length) {
-    uint32_t capture = hook_enter();
+    uint32_t capture = hook_enter(), tid = trace_thread_id(), inv = new_invocation_id();
     int ret;
-    record_simple(capture, VBE_TRACE_PANEL_READ_ENTER, -1, command & 0xFFu, length, 0);
+    record_simple(capture, VBE_TRACE_PANEL_READ_ENTER, -1, command & 0xFFu, length, tid, inv);
     ret = TAI_CONTINUE(int, g_ref_panel_read, command, payload, length);
-    record_panel_read_exit(capture, command, payload, length, ret);
+    record_panel_read_exit(capture, command, payload, length, ret, tid, inv);
     hook_leave();
     return ret;
 }
@@ -456,8 +494,7 @@ int vbeTraceGetStatus(VbeTraceStatus *out) {
     s.missing_required_mask = VBE_TRACE_REQUIRED_HOOKS & ~g_installed_hook_mask;
     s.snapshot_available_mask = g_snapshot_available_mask;
     s.required_snapshot_mask = VBE_TRACE_REQUIRED_SNAPSHOTS;
-    s.missing_required_snapshot_mask = VBE_TRACE_REQUIRED_SNAPSHOTS &
-                                       ~g_snapshot_available_mask;
+    s.missing_required_snapshot_mask = VBE_TRACE_REQUIRED_SNAPSHOTS & ~g_snapshot_available_mask;
     s.hook_fail_mask = g_hook_fail_mask;
     ENTER_SYSCALL(cpu_state);
     ret = ksceKernelMemcpyKernelToUser(out, &s, sizeof(s));
@@ -478,6 +515,8 @@ int vbeTraceReset(int enable_after_reset) {
     clear_records();
     g_slots_reserved = 0;
     g_sequence = 0;
+    g_completion_sequence = 0;
+    g_invocation_sequence = 0;
     g_lost = 0;
     __sync_synchronize();
     g_enabled = enable_after_reset ? 1u : 0u;
@@ -521,10 +560,8 @@ int vbeTraceSnapshot(VbeTraceSnapshot *out) {
     snap.version = VBE_TRACE_VERSION;
     snap.firmware_version = g_firmware_version;
     snap.available_mask = available;
-    snap.flags = bytes_equal(&a, &b, (uint32_t)sizeof(a)) ?
-                 VBE_TRACE_SNAPSHOT_STABLE : 0u;
-    copy_bytes((uint8_t *)&snap.data, (const volatile uint8_t *)&b,
-               (uint32_t)sizeof(b));
+    snap.flags = bytes_equal(&a, &b, (uint32_t)sizeof(a)) ? VBE_TRACE_SNAPSHOT_STABLE : 0u;
+    copy_bytes((uint8_t *)&snap.data, (const volatile uint8_t *)&b, (uint32_t)sizeof(b));
     ENTER_SYSCALL(cpu_state);
     ret = ksceKernelMemcpyKernelToUser(out, &snap, sizeof(snap));
     EXIT_SYSCALL(cpu_state);
@@ -549,6 +586,8 @@ int module_start(SceSize argc, const void *args) {
     g_enabled = 0;
     g_slots_reserved = 0;
     g_sequence = 0;
+    g_completion_sequence = 0;
+    g_invocation_sequence = 0;
     g_lost = 0;
     g_active_hooks = 0;
     g_hook_fail_mask = 0;

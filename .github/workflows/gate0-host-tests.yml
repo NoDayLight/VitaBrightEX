@@ -1,0 +1,28 @@
+name: Gate-0 host analysis tests
+
+on:
+  push:
+    branches:
+      - research-lcd-color-engine
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gate0-host-v5:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify exact protocol-v5 host ABI and evidence engine
+        run: |
+          set -euxo pipefail
+          python3 -m py_compile research/gate0_trace_decode.py research/gate0_decision_audit.py research/gate0_trace_synthetic_tests.py
+          out="$(python3 research/gate0_trace_synthetic_tests.py)"
+          printf '%s\n' "$out"
+          grep -F 'gate0 synthetic tests: 21 PASS' <<<"$out"
+          grep -F 'VERSION=5' research/gate0_trace_decode.py
+          grep -F 'RECORD_SIZE=304' research/gate0_trace_decode.py
+          grep -F 'HEADER_SIZE=108' research/gate0_trace_decode.py
+          grep -F "unsupported trace version (v5 required)" research/gate0_trace_decode.py
+          printf 'workflow_commit=%s\n' "$GITHUB_SHA"
