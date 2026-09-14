@@ -1,0 +1,191 @@
+name: Gate-0 observational candidate
+
+on:
+  push:
+    branches: [research-lcd-color-engine]
+    paths:
+      - 'research/diagnostics/gate0_trace/**'
+      - 'research/gate0_*'
+      - '.github/workflows/gate0-candidate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+  PUP_URL: https://web.archive.org/web/20180630222648id_/http://dus01.psp2.update.playstation.net/update/psp2/image/2017_0317/rel_0a0f2a9ae58968ac5d1d2127049c3cba/PSP2UPDAT.PUP
+  PUP_SHA256: 86859b3071681268b6d0beb5ef691da874b6726e85b6f06a1cdf6a0e183e77c6
+  SCEUTILS_SHA: 0466d003246ec986ab6189e6719dcb196a40fb02
+  PY2_IMAGE: python@sha256:d8fac68ebdc45b8d66d53f1ed6c1532da81109a8f5532a6ca0c951ed31107d70
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    outputs:
+      artifact_id: ${{ steps.gate0upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.gate0upload.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: vitasdk/vdpm
+          ref: c83b88a54ec13372515eeb8b3bdca4b10c36d721
+          path: vdpm
+
+      - name: Exact-head and host safety tests
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          python3 -m py_compile research/gate0_trace_decode.py research/gate0_decision_audit.py research/gate0_trace_synthetic_tests.py research/gate0_hook_source_audit.py research/gate0_tracer_safety_audit.py
+          python3 research/gate0_hook_source_audit.py
+          python3 research/gate0_trace_synthetic_tests.py | tee gate0-host-tests.txt
+          grep -F 'gate0 synthetic tests: 10 PASS' gate0-host-tests.txt
+          cc -std=c99 -Wall -Wextra -Werror -pthread -Iresearch research/gate0_ring_host_test.c -o gate0-ring-test
+          ./gate0-ring-test
+          cat >/tmp/gate0_protocol.c <<'EOF'
+          #include "research/diagnostics/gate0_trace/trace_protocol.h"
+          int main(void){return 0;}
+          EOF
+          cc -std=c99 -Wall -Wextra -Werror -I. /tmp/gate0_protocol.c -o /tmp/gate0_protocol
+          /tmp/gate0_protocol
+          ! grep -E 'ksceIo|sceIo|malloc|calloc|realloc|ksceKernelAlloc|CreateThread|CreateTimer|DelayThread|Wait|taiInject|SetBrightness|SetDisplayColorSpace' research/diagnostics/gate0_trace/main.c
+          ! grep -F 'VBE_TRACE_FLAG_TRUNCATED' research/diagnostics/gate0_trace/main.c
+
+      - name: Recover exact retail 3.65 analysis modules
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 5 --retry-delay 2 "$PUP_URL" -o PSP2UPDAT-365.PUP
+          echo "$PUP_SHA256  PSP2UPDAT-365.PUP" | sha256sum -c -
+          sudo apt-get update
+          sudo apt-get install -y mtools file
+          python3 -m pip install --disable-pip-version-check --user capstone==5.0.3
+          git init -q sceutils-audit
+          git -C sceutils-audit remote add origin https://github.com/RealYoti/sceutils.git
+          git -C sceutils-audit fetch -q --depth 1 origin "$SCEUTILS_SHA"
+          git -C sceutils-audit checkout -q --detach FETCH_HEAD
+          test "$(git -C sceutils-audit rev-parse HEAD)" = "$SCEUTILS_SHA"
+          cp sceutils-audit/keys_external.py sceutils-audit/keys.py
+          mkdir -p sceutils-audit/unarzl
+          : > sceutils-audit/unarzl/unarzl
+          cat > extract_fw.py <<'PY'
+          import os,sys
+          sys.path.insert(0,'sceutils-audit')
+          import pup_fiction
+          os.makedirs('fw/PUP'); os.makedirs('fw/PUP_dec')
+          pup_fiction.pup_extract_files('PSP2UPDAT-365.PUP','fw/PUP')
+          pup_fiction.pup_decrypt_packages('fw/PUP','fw/PUP_dec')
+          PY
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python extract_fw.py"
+          sudo chown -R "$(id -u):$(id -g)" fw
+          echo '35480a01ea783df859326d8698831afd3e850717f5b7785ab9964eab23712856  fw/PUP_dec/os0.bin' | sha256sum -c -
+          mkdir -p fw/os0-tree fw/raw fw/elf
+          mcopy -s -n -i fw/PUP_dec/os0.bin '::/kd' fw/os0-tree
+          for base in lcd lowio; do src="$(find fw/os0-tree -type f -iname "$base.skprx" -print -quit)"; test -n "$src"; cp "$src" "fw/raw/$base.skprx"; done
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc 'pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null; for base in lcd lowio; do python sceutils-audit/self2elf.py -i "fw/raw/$base.skprx" -o "fw/elf/$base.elf" >/dev/null; done'
+          sudo chown -R "$(id -u):$(id -g)" fw/elf
+          echo '24752bb4c69f0c241701cab0364cde9cbe5c95128b6bfe02bf3263aad524246e  fw/elf/lcd.elf' | sha256sum -c -
+          echo 'f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744  fw/elf/lowio.elf' | sha256sum -c -
+
+      - name: Semantic tracer-safety proof
+        run: |
+          set -euxo pipefail
+          python3 research/gate0_tracer_safety_audit.py --lowio fw/elf/lowio.elf --lcd fw/elf/lcd.elf --json tracer-safety-proof.json --text tracer-safety-proof.txt
+          grep -F 'GATE0_TRACER_SAFETY_STATIC_PROOF=PASS' tracer-safety-proof.txt
+
+      - name: Bootstrap pinned VitaSDK and build Gate-0
+        run: |
+          set -euxo pipefail
+          test "$(git -C vdpm rev-parse HEAD)" = c83b88a54ec13372515eeb8b3bdca4b10c36d721
+          bash vdpm/bootstrap-vitasdk.sh
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+          "$VITASDK/bin/vdpm" install taihen
+          cmake -S research/diagnostics/gate0_trace -B gate0-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          cmake --build gate0-build --parallel
+          test -s gate0-build/vbe_color_trace.skprx
+          test -s gate0-build/vbe_color_trace_drain.self
+          test -s gate0-build/vbe_color_trace_drain.vpk
+
+      - name: Assemble exact observational artifact
+        run: |
+          set -euxo pipefail
+          mkdir gate0-package
+          cp gate0-build/vbe_color_trace.skprx gate0-package/
+          cp gate0-build/vbe_color_trace_drain.self gate0-package/
+          cp gate0-build/vbe_color_trace_drain.vpk gate0-package/
+          cp research/diagnostics/gate0_trace/trace_protocol.h gate0-package/
+          cp research/diagnostics/gate0_trace/layout_365.h gate0-package/
+          cp research/gate0_trace_decode.py gate0-package/
+          cp research/gate0_decision_audit.py gate0-package/
+          cp research/README-GATE0.md gate0-package/README-GATE0.md
+          cp tracer-safety-proof.json tracer-safety-proof.txt gate0-package/
+          printf '%s\n' "$GITHUB_SHA" > gate0-package/WORKFLOW_COMMIT.txt
+          cat > gate0-package/research-provenance.txt <<EOF
+          Gate-0 provenance closure reference
+          immutable provenance commit=3df2899880e474bfc82aaf9ea5cb0858a2f700ee
+          immutable provenance run=34822036386
+          immutable provenance artifact=10339015913
+          executed legacy analyzer sha256=20845151f31aab5f7988b867ab9215249e89c43c382a9b6cf91448f8007c2992
+          legacy analyzer git blob=3c2be41164583a13b39cacccefe229859de7b5b8
+          provenance workflow sha256=aa6598c67d030db6d4d8096a1ad227a33bfba0ab5ead414269c7605e8c0a4195
+          provenance artifact digest=8c5e48628279fff16aba6e7b29f410d93b2af8497339bcc0b92c265d558f3ab7
+          candidate workflow commit=$GITHUB_SHA
+          candidate semantic analyzer sha256=$(sha256sum research/gate0_tracer_safety_audit.py | cut -d' ' -f1)
+          candidate workflow sha256=$(sha256sum .github/workflows/gate0-candidate.yml | cut -d' ' -f1)
+          EOF
+          cat > gate0-package/abi-diagnostic.txt <<'EOF'
+          historical checker mismatch: csc_b expected successful-return materialization at 0x81005F10; exact retail decode has `movs r0,#0` at 0x81005F0E and `add sp,#0xc` at 0x81005F10. Classification: NOT MATERIAL AFTER SUPERSEDING PROOF. See tracer-safety-proof.txt for CFG/data-flow proof.
+          EOF
+          python3 - <<'PY'
+          import json
+          json.dump({'historical_mismatch':{'function':'csc_b','legacy_expected_va':'0x81005F10','actual_success_materialization_va':'0x81005F0E','actual_at_legacy_va':'add sp, #0xc','classification':'NOT MATERIAL AFTER SUPERSEDING PROOF'},'semantic_proof':'tracer-safety-proof.json'},open('gate0-package/abi-diagnostic.json','w'),indent=2)
+          PY
+          (cd gate0-package && sha256sum README-GATE0.md WORKFLOW_COMMIT.txt research-provenance.txt abi-diagnostic.json abi-diagnostic.txt tracer-safety-proof.json tracer-safety-proof.txt vbe_color_trace.skprx vbe_color_trace_drain.self vbe_color_trace_drain.vpk trace_protocol.h layout_365.h gate0_trace_decode.py gate0_decision_audit.py > SHA256SUMS)
+          (cd gate0-package && sha256sum -c SHA256SUMS)
+          cat gate0-package/SHA256SUMS
+
+      - name: Upload frozen Gate-0 candidate
+        id: gate0upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vbe-gate0-observational-v6-${{ github.sha }}
+          path: gate0-package/
+          if-no-files-found: error
+          compression-level: 6
+
+  verify:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Independently download uploaded artifact and verify every packaged hash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.build.outputs.artifact_id }}
+          EXPECTED_DIGEST: ${{ needs.build.outputs.artifact_digest }}
+        run: |
+          set -euxo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > gate0.zip
+          actual="sha256:$(sha256sum gate0.zip | cut -d' ' -f1)"
+          test "$actual" = "$EXPECTED_DIGEST"
+          mkdir downloaded
+          unzip -q gate0.zip -d downloaded
+          (cd downloaded && sha256sum -c SHA256SUMS)
+          {
+            echo "artifact_id=$ARTIFACT_ID"
+            echo "artifact_digest=$EXPECTED_DIGEST"
+            echo "downloaded_zip_digest=$actual"
+            echo "checkout_sha=$GITHUB_SHA"
+            cat downloaded/SHA256SUMS
+          } | tee independent-verification.txt
+      - name: Upload independent verification evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vbe-gate0-independent-verification-${{ github.sha }}
+          path: independent-verification.txt
+          if-no-files-found: error

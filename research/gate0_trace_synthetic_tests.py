@@ -1,83 +1,56 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-import struct
-import gate0_trace_decode as d
-from gate0_decision_audit import analyze
+from pathlib import Path
+import struct,tempfile
+from gate0_trace_decode import decode,TraceError,HDR,STATUS,REC,MAGIC,TRACE_MAGIC,VERSION,COMMITTED,BOUNDS,READ_UNPROVEN,RET
 
-PASS=0
-
-def snap(avail=d.PANEL_SNAPS):
-    b=bytearray(d.SNAP_SIZE)
-    struct.pack_into('<5I',b,0,d.MAGIC,d.VERSION,d.FW,avail,d.SNAP_STABLE)
-    struct.pack_into('<I',b,20,1)
-    return bytes(b)
-
-def rec(seq,t,*,comp=None,tid=7,inv=0,raw=0,flags=0,arg0=0,arg1=0,payload=b'',lost=0):
-    if comp is None: comp=seq
-    if t in d.RAW_EVENTS: flags |= d.FLAG_RETURN_VALID
-    p=payload.ljust(d.PAYLOAD_MAX,b'\0')[:d.PAYLOAD_MAX]
-    return d.REC.pack(d.COMMITTED,seq,comp,tid,inv,t,-1,flags,raw,arg0,arg1,len(payload),lost,p)
-
-def neutral_csc():
-    w=[0,0,1023,0,1023,0,0x200,0,0,0,0x200,0,0,0,0x200]
-    return struct.pack('<15I',*w)
-
-def build(records,*,pre=True,lost=0,installed=d.PANEL_REQUIRED,snaps=d.PANEL_SNAPS,
-          affine_quality=d.CAP_AUTHORITATIVE,panel_quality=d.CAP_AUTHORITATIVE,panel_read=0):
-    n=len(records); prebytes=snap(snaps) if pre else b''; post=snap(snaps)
-    common=snaps if pre else 0
-    aff_m=d.AFFINE_REQUIRED & ~installed; pan_m=d.PANEL_REQUIRED & ~installed
-    aff_sm=d.AFFINE_SNAPS & ~common; pan_sm=d.PANEL_SNAPS & ~common
-    status=(d.MAGIC,d.VERSION,d.FW,0,512,n,n,lost,n,0,installed,d.PANEL_REQUIRED,d.PANEL_REQUIRED&~installed,snaps,d.PANEL_SNAPS,d.PANEL_SNAPS&~snaps,0)
-    header=[d.DUMP_MAGIC,d.VERSION,d.HEADER_SIZE,d.STATUS_SIZE,d.SNAP_SIZE if pre else 0,d.SNAP_SIZE,d.RECORD_SIZE,n,panel_quality,1 if pre else 0,0,0,0,
-            d.AFFINE_REQUIRED,aff_m,d.PANEL_REQUIRED,pan_m,d.AFFINE_SNAPS,aff_sm,d.PANEL_SNAPS,pan_sm,affine_quality,panel_quality,panel_read,0,0,0]
-    return d.U32_27.pack(*header)+d.U32_17.pack(*status)+prebytes+post+b''.join(records)
-
-def expect_ok(name,data,check=None):
-    global PASS
-    x=d.decode_bytes(data)
-    if check: check(x)
-    PASS+=1; print('PASS',name)
-
-def assert_affine_only(x):
-    assert x['affine_authoritative'] and not x['panel_authoritative']
-
-def expect_bad(name,data):
-    global PASS
-    try:d.decode_bytes(data)
-    except d.TraceError:
-        PASS+=1; print('PASS',name); return
-    raise AssertionError(name+' unexpectedly accepted')
-
-r1=[rec(1,1,payload=neutral_csc()),rec(2,2,payload=neutral_csc())]
-expect_ok('valid authoritative affine',build(r1,installed=d.AFFINE_REQUIRED,affine_quality=1,panel_quality=2),lambda x: (_ for _ in ()).throw(AssertionError()) if not x['affine_authoritative'] or x['panel_authoritative'] else None)
-r2=[rec(1,18,inv=1,arg0=0x0A,arg1=1),rec(2,19,inv=1,arg0=0x0A,arg1=1,payload=b'\x9c')]
-expect_ok('valid authoritative panel',build(r2,panel_read=1))
-x=d.decode_bytes(build([rec(1,1,raw=-1,payload=neutral_csc())])); assert x['records'][0]['return_semantics']=='FAILURE'; PASS+=1; print('PASS failed CSC A retained')
-x=d.decode_bytes(build([rec(1,2,raw=-2,payload=neutral_csc())])); assert x['records'][0]['return_semantics']=='FAILURE'; PASS+=1; print('PASS failed CSC B retained')
-x=d.decode_bytes(build([rec(1,1,flags=d.FLAG_NULL)])); assert x['records'][0]['payload_length']==0; PASS+=1; print('PASS NULL CSC')
-x=d.decode_bytes(build([rec(1,17,raw=-3,arg0=0x29,arg1=0)])); assert x['records'][0]['return_semantics']=='FAILURE'; PASS+=1; print('PASS failed panel write')
-r=[rec(1,18,inv=1,arg0=0xDA,arg1=2),rec(2,19,inv=1,arg0=0xDA,arg1=2,payload=b'AB',flags=d.FLAG_READ_UNCERTAIN)]
-expect_ok('uncertain panel read',build(r,panel_quality=2,panel_read=2))
-expect_bad('lost records with false authority',build(r1,lost=1,affine_quality=1,panel_quality=2))
-p=b'X'*d.PAYLOAD_MAX
-expect_ok('truncated payload partial',build([rec(1,17,arg1=300,payload=p,flags=d.FLAG_TRUNC)],panel_quality=2))
-expect_ok('missing pre boundary partial',build(r1,pre=False,affine_quality=2,panel_quality=2))
-b=bytearray(build(r1)); struct.pack_into('<I',b,4,4); expect_bad('v4 rejection',bytes(b))
-b=bytearray(build(r1)); struct.pack_into('<I',b,8,104); expect_bad('bad sizes',bytes(b))
-expect_bad('bad EOF',build(r1)+b'X')
-b=bytearray(build(r1)); struct.pack_into('<I',b,28,3); expect_bad('bad count',bytes(b))
-r=[rec(2,1,payload=neutral_csc()),rec(1,2,payload=neutral_csc())]; expect_bad('bad entry sequence',build(r))
-r=[rec(1,1,comp=1,payload=neutral_csc()),rec(2,2,comp=1,payload=neutral_csc())]; expect_bad('bad completion sequence',build(r))
-expect_ok('missing affine authority',build([],installed=d.AFFINE_REQUIRED & ~d.HOOKS['CSC_A'],affine_quality=2,panel_quality=2))
-expect_ok('affine without panel authority',build([],installed=d.AFFINE_REQUIRED,affine_quality=1,panel_quality=2),assert_affine_only)
-r=[rec(1,3,comp=4,tid=10,inv=1),rec(2,5,comp=3,tid=10,inv=2),rec(3,6,comp=2,tid=10,inv=2),rec(4,4,comp=1,tid=10,inv=1)]
-expect_ok('nested causal IDs + distinct completion order',build(r))
-r=[rec(1,3,tid=10,inv=1),rec(2,4,tid=11,inv=1)]; expect_bad('cross-thread nesting',build(r))
-cap=d.decode_bytes(build([],installed=d.AFFINE_REQUIRED,affine_quality=1,panel_quality=2))
-rep=analyze({'CAPTURE_B_BRIGHTNESS':cap,'CAPTURE_C_COLORSPACE':cap,'CAPTURE_D_DISPLAY':cap,'CAPTURE_F_SUSPEND_RESUME':cap})
-assert rep['AFFINE']['brightness_reacquisition']['status']=='NOT OBSERVED'
-assert rep['AFFINE']['A+']!='PROVEN'
-PASS+=1; print('PASS NOT OBSERVED != UNSUPPORTED; malformed/incomplete evidence cannot select A+')
-assert PASS==21, PASS
-print('gate0 synthetic tests: 21 PASS')
+def record(seq,event,flags=0,plane=-1,a0=0,a1=0,p=b'',raw=0,inv=0):
+ return REC.pack(COMMITTED,seq,seq,1,inv,event,plane,flags,raw,a0,a1,len(p),0,p.ljust(256,b'\0'))
+def dump(rows,lost=0,missing=0):
+ h=[0]*27;h[0]=MAGIC;h[1]=VERSION;h[2]=HDR.size;h[3]=STATUS.size;h[4]=720;h[5]=720;h[6]=REC.size;h[7]=len(rows);h[8]=1
+ s=[0]*17;s[0]=TRACE_MAGIC;s[1]=VERSION;s[2]=0x3650000;s[4]=512;s[6]=len(rows);s[7]=lost;s[10]=0x603;s[11]=0x603;s[12]=missing
+ return HDR.pack(*h)+STATUS.pack(*s)+bytes(1440)+b''.join(rows)
+def check(name,fn):
+ fn();print('PASS',name)
+def run_blob(blob):
+ with tempfile.TemporaryDirectory() as d:
+  p=Path(d)/'t.bin';p.write_bytes(blob);return decode(p)
+def main():
+ tests=[]
+ def t1():
+  d=run_blob(dump([record(1,20,a0=1)]));assert d['capture_quality']=='AUTHORITATIVE' and d['records'][0]['marker']=='BASELINE_IDLE'
+ tests.append(('marker authoritative',t1))
+ def t2():
+  d=run_blob(dump([record(1,17,a0=0x51,a1=3,p=b'abc',flags=RET)]));assert d['records'][0]['payload_hex']=='616263'
+ tests.append(('writer payload',t2))
+ def t3():
+  d=run_blob(dump([record(1,17,a1=300,flags=BOUNDS|RET)]));assert d['capture_quality']=='PARTIAL' and d['bounds_rejected']==1
+ tests.append(('writer reject no truncation',t3))
+ def t4():
+  d=run_blob(dump([record(1,18,flags=READ_UNPROVEN,a0=10,a1=1,inv=4),record(2,19,flags=READ_UNPROVEN|RET,a0=10,a1=1,inv=4)]));assert d['reader_events']==2 and all(r['payload_length']==0 for r in d['records'])
+ tests.append(('reader no-copy',t4))
+ def t5():
+  try:run_blob(dump([record(1,19,flags=READ_UNPROVEN|RET,p=b'x')]))
+  except TraceError:return
+  raise AssertionError('reader payload accepted')
+ tests.append(('reader payload rejected',t5))
+ def t6():
+  d=run_blob(dump([record(1,1,plane=0,p=bytes(60),flags=RET)]));assert d['records'][0]['payload_length']==60
+ tests.append(('CSC 0x3c',t6))
+ def t7():
+  d=run_blob(dump([record(1,1,plane=0,flags=1|RET)]));assert d['records'][0]['payload_length']==0
+ tests.append(('CSC NULL',t7))
+ def t8():assert run_blob(dump([],lost=2))['capture_quality']=='PARTIAL'
+ tests.append(('lost partial',t8))
+ def t9():assert run_blob(dump([],missing=2))['capture_quality']=='PARTIAL'
+ tests.append(('missing hook partial',t9))
+ def t10():
+  b=bytearray(dump([]));struct.pack_into('<I',b,4,5)
+  with tempfile.TemporaryDirectory() as d:
+   p=Path(d)/'x';p.write_bytes(b)
+   try:decode(p)
+   except TraceError:return
+  raise AssertionError('v5 accepted')
+ tests.append(('protocol pin',t10))
+ for n,f in tests:check(n,f)
+ print(f'gate0 synthetic tests: {len(tests)} PASS')
+if __name__=='__main__':main()

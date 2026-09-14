@@ -41,22 +41,22 @@
 #define VBE_TRACE_HOOK_PANEL_WRITE        (1u << 9)
 #define VBE_TRACE_HOOK_PANEL_READ         (1u << 10)
 
-#define VBE_TRACE_REQUIRED_AFFINE_HOOKS ( \
-    VBE_TRACE_HOOK_CSC_A | VBE_TRACE_HOOK_CSC_B | \
-    VBE_TRACE_HOOK_DISPLAY_BRIGHT | VBE_TRACE_HOOK_DISPLAY_COLOR | \
-    VBE_TRACE_HOOK_LCD_BRIGHT | VBE_TRACE_HOOK_LCD_COLOR | \
-    VBE_TRACE_HOOK_DISPLAY_ON | VBE_TRACE_HOOK_DISPLAY_OFF | \
-    VBE_TRACE_HOOK_IFTU_ENABLE)
+/* Gate-0 deliberately installs only the four observation points whose ABI
+ * contract is statically established. Phase markers replace setter/power
+ * wrapper hooks and keep the interposition surface minimal. */
+#define VBE_TRACE_REQUIRED_AFFINE_HOOKS \
+    (VBE_TRACE_HOOK_CSC_A | VBE_TRACE_HOOK_CSC_B)
 #define VBE_TRACE_REQUIRED_PANEL_HOOKS \
     (VBE_TRACE_REQUIRED_AFFINE_HOOKS | VBE_TRACE_HOOK_PANEL_WRITE | VBE_TRACE_HOOK_PANEL_READ)
 #define VBE_TRACE_REQUIRED_HOOKS VBE_TRACE_REQUIRED_PANEL_HOOKS
 
 #define VBE_TRACE_SNAPSHOT_LOWIO          (1u << 0)
 #define VBE_TRACE_SNAPSHOT_LCD            (1u << 1)
-#define VBE_TRACE_REQUIRED_AFFINE_SNAPSHOTS VBE_TRACE_SNAPSHOT_LOWIO
-#define VBE_TRACE_REQUIRED_PANEL_SNAPSHOTS \
-    (VBE_TRACE_SNAPSHOT_LOWIO | VBE_TRACE_SNAPSHOT_LCD)
-#define VBE_TRACE_REQUIRED_SNAPSHOTS VBE_TRACE_REQUIRED_PANEL_SNAPSHOTS
+/* Gate-0 v6 does not read Sony-owned state snapshots. Runtime evidence comes
+ * only from function inputs/returns plus tracer-owned phase markers. */
+#define VBE_TRACE_REQUIRED_AFFINE_SNAPSHOTS 0u
+#define VBE_TRACE_REQUIRED_PANEL_SNAPSHOTS  0u
+#define VBE_TRACE_REQUIRED_SNAPSHOTS        0u
 #define VBE_TRACE_SNAPSHOT_STABLE         (1u << 0)
 
 #define VBE_TRACE_FAIL_CSC_A              (1u << 0)
@@ -85,7 +85,7 @@
 #define VBE_TRACE_ERR_BUSY                (-2)
 #define VBE_TRACE_ERR_UNAVAILABLE         (-3)
 #define VBE_TRACE_ERR_MALFORMED           (-4)
-#define VBE_TRACE_ERR_DROPPED              (-5)
+#define VBE_TRACE_ERR_DROPPED             (-5)
 
 typedef enum VbeTraceEventType {
     VBE_TRACE_CSC_A = 1, VBE_TRACE_CSC_B = 2,
