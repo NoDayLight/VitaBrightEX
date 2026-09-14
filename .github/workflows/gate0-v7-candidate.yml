@@ -21,6 +21,7 @@ env:
   VDPM_NONINTERACTIVE: 1
   PUP_URL: https://web.archive.org/web/20180630222648id_/http://dus01.psp2.update.playstation.net/update/psp2/image/2017_0317/rel_0a0f2a9ae58968ac5d1d2127049c3cba/PSP2UPDAT.PUP
   PUP_SHA256: 86859b3071681268b6d0beb5ef691da874b6726e85b6f06a1cdf6a0e183e77c6
+  OS0_SHA256: 35480a01ea783df859326d8698831afd3e850717f5b7785ab9964eab23712856
   SCEUTILS_SHA: 0466d003246ec986ab6189e6719dcb196a40fb02
   PY2_IMAGE: python@sha256:d8fac68ebdc45b8d66d53f1ed6c1532da81109a8f5532a6ca0c951ed31107d70
   VDPM_SHA: c83b88a54ec13372515eeb8b3bdca4b10c36d721
@@ -39,11 +40,14 @@ jobs:
       artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
       - name: Exact checkout and host safety contracts
         run: |
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=no)"
+          test "$(git hash-object research/diagnostics/gate0_observer/main.c)" = 5a6278c39494eecdedef2affa6ac3ee3a656d38a
+          test "$(git hash-object research/diagnostics/gate0_observer/CMakeLists.txt)" = febf96ccd3e1738f01a57047d429a967fdacc444
           test "$(git hash-object research/diagnostics/gate0_observer/gate0_protocol_v7.h)" = b83c3ea5cf59759657abad574aaf0355701569e9
           test "$(git hash-object research/diagnostics/gate0_observer/observer_lifecycle_core.h)" = 1837155f94a037db9e53d8c52919bc93f6079035
           test "$(git hash-object research/diagnostics/gate0_observer/trace_ring_core.h)" = 43cb06954714249f54143e1347cc8cd52b7fea99
@@ -54,7 +58,16 @@ jobs:
           test "$(git hash-object research/DISPLAY-FEATURE-SCOPE.json)" = 07f859987d3a094b05a9559b85a7430a329fa1a5
           python3 research/display_feature_scope_audit.py --manifest research/DISPLAY-FEATURE-SCOPE.json --json display-feature-scope-contract.json
           python3 research/gate0_v7_source_audit.py | tee observer-safety-report.txt
-          python3 -m py_compile research/gate0_trace_decode.py research/gate0_observational_analysis.py research/gate0_v7_retail_audit.py research/gate0_v7_taihen_audit.py research/gate0_v7_synthetic_tests.py research/gate0_v7_import_manifest.py research/gate0_v7_import_regression.py
+          python3 -m py_compile \
+            research/gate0_trace_decode.py \
+            research/gate0_observational_analysis.py \
+            research/gate0_v7_retail_audit.py \
+            research/gate0_v7_modulemgr_retail_audit.py \
+            research/gate0_v7_retail_import_closure.py \
+            research/gate0_v7_taihen_audit.py \
+            research/gate0_v7_synthetic_tests.py \
+            research/gate0_v7_import_manifest.py \
+            research/gate0_v7_import_regression.py
           cc -std=c99 -Wall -Wextra -Werror -pthread -Iresearch research/gate0_v7_lifecycle_host.c -o gate0-v7-lifecycle-host
           ./gate0-v7-lifecycle-host | tee lifecycle-host-report.txt
           cat >/tmp/protocol_abi.c <<'C'
@@ -62,15 +75,28 @@ jobs:
           #include <stddef.h>
           int main(void){return !(VBE_TRACE_VERSION==7u&&VBE_TRACE_RECORD_CAPACITY==512u&&sizeof(VbeTraceRecord)==128u&&sizeof(VbeTraceStatus)==72u&&sizeof(VbeTraceDumpHeader)==64u&&offsetof(VbeTraceRecord,payload)==64u);}
           C
-          cc -std=c99 -Wall -Wextra -Werror -I. /tmp/protocol_abi.c -o /tmp/protocol_abi && /tmp/protocol_abi
+          cc -std=c99 -Wall -Wextra -Werror -I. /tmp/protocol_abi.c -o /tmp/protocol_abi
+          /tmp/protocol_abi
           (cd research && python3 gate0_v7_synthetic_tests.py)
+
       - name: Fetch pinned SDK, vita-headers and taiHEN evidence
         run: |
           set -euxo pipefail
-          git init -q vdpm && git -C vdpm remote add origin https://github.com/vitasdk/vdpm.git && git -C vdpm fetch -q --depth 1 origin "$VDPM_SHA" && git -C vdpm checkout -q --detach FETCH_HEAD
-          git init -q taihen-audit && git -C taihen-audit remote add origin https://github.com/yifanlu/taiHEN.git && git -C taihen-audit fetch -q --depth 1 origin "$TAIHEN_SHA" && git -C taihen-audit checkout -q --detach FETCH_HEAD
-          git init -q vita-headers-audit && git -C vita-headers-audit remote add origin https://github.com/vitasdk/vita-headers.git && git -C vita-headers-audit fetch -q --depth 1 origin "$VITA_HEADERS_SHA" && git -C vita-headers-audit checkout -q --detach FETCH_HEAD
-          test "$(git -C vdpm rev-parse HEAD)" = "$VDPM_SHA"; test "$(git -C taihen-audit rev-parse HEAD)" = "$TAIHEN_SHA"; test "$(git -C vita-headers-audit rev-parse HEAD)" = "$VITA_HEADERS_SHA"
+          git init -q vdpm
+          git -C vdpm remote add origin https://github.com/vitasdk/vdpm.git
+          git -C vdpm fetch -q --depth 1 origin "$VDPM_SHA"
+          git -C vdpm checkout -q --detach FETCH_HEAD
+          git init -q taihen-audit
+          git -C taihen-audit remote add origin https://github.com/yifanlu/taiHEN.git
+          git -C taihen-audit fetch -q --depth 1 origin "$TAIHEN_SHA"
+          git -C taihen-audit checkout -q --detach FETCH_HEAD
+          git init -q vita-headers-audit
+          git -C vita-headers-audit remote add origin https://github.com/vitasdk/vita-headers.git
+          git -C vita-headers-audit fetch -q --depth 1 origin "$VITA_HEADERS_SHA"
+          git -C vita-headers-audit checkout -q --detach FETCH_HEAD
+          test "$(git -C vdpm rev-parse HEAD)" = "$VDPM_SHA"
+          test "$(git -C taihen-audit rev-parse HEAD)" = "$TAIHEN_SHA"
+          test "$(git -C vita-headers-audit rev-parse HEAD)" = "$VITA_HEADERS_SHA"
           grep -F 'ksceIftuEnable: 0x0D7C02F7' vita-headers-audit/db/360/SceLowio.yml
           ! grep -F 'ksceIftuEnable' vita-headers-audit/include/psp2kern/lowio/iftu.h
           grep -F 'nid: 0x92C9FFC2' vita-headers-audit/db/363/SceKernelModulemgr.yml
@@ -78,31 +104,53 @@ jobs:
           python3 research/gate0_v7_taihen_audit.py --patches taihen-audit/patches.c --header taihen-audit/include/taihen.h --text taihen-semantics-report.txt
           grep -F 'INSTALL_PUBLICATION_CLASSIFICATION=UPSTREAM_TAIHEN_RESIDUAL_RISK' taihen-semantics-report.txt
           test "$(grep -c 'taiHookReleaseForKernel' research/diagnostics/gate0_observer/main.c || true)" = 0
+
       - name: Recover exact retail 3.65 and prove observer ABI
         run: |
           set -euxo pipefail
           curl -fL --retry 5 --retry-delay 2 "$PUP_URL" -o PSP2UPDAT-365.PUP
           echo "$PUP_SHA256  PSP2UPDAT-365.PUP" | sha256sum -c -
-          sudo apt-get update && sudo apt-get install -y mtools file
+          sudo apt-get update
+          sudo apt-get install -y mtools file
           python3 -m pip install --disable-pip-version-check --user capstone==5.0.3
-          git init -q sceutils-audit && git -C sceutils-audit remote add origin https://github.com/RealYoti/sceutils.git && git -C sceutils-audit fetch -q --depth 1 origin "$SCEUTILS_SHA" && git -C sceutils-audit checkout -q --detach FETCH_HEAD
-          cp sceutils-audit/keys_external.py sceutils-audit/keys.py; mkdir -p sceutils-audit/unarzl; : > sceutils-audit/unarzl/unarzl
+          git init -q sceutils-audit
+          git -C sceutils-audit remote add origin https://github.com/RealYoti/sceutils.git
+          git -C sceutils-audit fetch -q --depth 1 origin "$SCEUTILS_SHA"
+          git -C sceutils-audit checkout -q --detach FETCH_HEAD
+          test "$(git -C sceutils-audit rev-parse HEAD)" = "$SCEUTILS_SHA"
+          cp sceutils-audit/keys_external.py sceutils-audit/keys.py
+          mkdir -p sceutils-audit/unarzl
+          : > sceutils-audit/unarzl/unarzl
           cat > extract_fw.py <<'PY'
           import os,sys
-          sys.path.insert(0,'sceutils-audit');import pup_fiction
-          os.makedirs('fw/PUP');os.makedirs('fw/PUP_dec');pup_fiction.pup_extract_files('PSP2UPDAT-365.PUP','fw/PUP');pup_fiction.pup_decrypt_packages('fw/PUP','fw/PUP_dec')
+          sys.path.insert(0,'sceutils-audit')
+          import pup_fiction
+          os.makedirs('fw/PUP')
+          os.makedirs('fw/PUP_dec')
+          pup_fiction.pup_extract_files('PSP2UPDAT-365.PUP','fw/PUP')
+          pup_fiction.pup_decrypt_packages('fw/PUP','fw/PUP_dec')
           PY
           docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python extract_fw.py"
           sudo chown -R "$(id -u):$(id -g)" fw
-          echo '35480a01ea783df859326d8698831afd3e850717f5b7785ab9964eab23712856  fw/PUP_dec/os0.bin' | sha256sum -c -
-          mkdir -p fw/os0-tree fw/raw fw/elf; mcopy -s -n -i fw/PUP_dec/os0.bin '::/kd' fw/os0-tree
-          for base in lcd lowio; do src="$(find fw/os0-tree -type f -iname "$base.skprx" -print -quit)"; test -n "$src"; cp "$src" "fw/raw/$base.skprx"; done
-          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc 'pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null; for base in lcd lowio; do python sceutils-audit/self2elf.py -i "fw/raw/$base.skprx" -o "fw/elf/$base.elf" >/dev/null; done'
+          echo "$OS0_SHA256  fw/PUP_dec/os0.bin" | sha256sum -c -
+          mkdir -p fw/os0-tree fw/raw fw/elf
+          mcopy -s -n -i fw/PUP_dec/os0.bin '::/kd' fw/os0-tree
+          for base in lcd lowio modulemgr; do
+            src="$(find fw/os0-tree -type f -iname "$base.skprx" -print -quit)"
+            test -n "$src"
+            cp "$src" "fw/raw/$base.skprx"
+          done
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc 'pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null; for base in lcd lowio modulemgr; do python sceutils-audit/self2elf.py -i "fw/raw/$base.skprx" -o "fw/elf/$base.elf" >/dev/null; done'
           sudo chown -R "$(id -u):$(id -g)" fw/elf
           echo '24752bb4c69f0c241701cab0364cde9cbe5c95128b6bfe02bf3263aad524246e  fw/elf/lcd.elf' | sha256sum -c -
           echo 'f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744  fw/elf/lowio.elf' | sha256sum -c -
+          echo '3a8f3d675b032e175ab1dabafa0a4f387afe7ec7a379e6aa43421496c068d29d  fw/elf/modulemgr.elf' | sha256sum -c -
           python3 research/gate0_v7_retail_audit.py --lowio fw/elf/lowio.elf --lcd fw/elf/lcd.elf --json retail-trace-abi-report.json --text retail-trace-abi-report.txt
           grep -F 'GATE0_V7_RETAIL_ABI=PASS' retail-trace-abi-report.txt
+          python3 research/gate0_v7_modulemgr_retail_audit.py --modulemgr fw/elf/modulemgr.elf --json modulemgr-retail-365.json --text modulemgr-retail-365.txt
+          grep -F 'GATE0_V7_MODULEMGR_RETAIL_AUDIT=PASS' modulemgr-retail-365.txt
+          grep -F 'SYSTEM_SW_VERSION_DIRECT_IMPORT=RETAIL_365_PROVEN' modulemgr-retail-365.txt
+
       - name: Bootstrap pinned VitaSDK series and build under Werror
         run: |
           set -euxo pipefail
@@ -114,8 +162,40 @@ jobs:
           cat "$VITASDK/version_info.txt" | tee vitasdk-version.txt
           cmake -S research/diagnostics/gate0_observer -B gate0-v7-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
           cmake --build gate0-v7-build --parallel
-          test -s gate0-v7-build/vbe_color_trace.skprx; test -s gate0-v7-build/vbe_color_trace_drain.self; test -s gate0-v7-build/vbe_color_trace_drain.vpk
+          test -s gate0-v7-build/vbe_color_trace.skprx
+          test -s gate0-v7-build/vbe_color_trace_drain.self
+          test -s gate0-v7-build/vbe_color_trace_drain.vpk
           echo "$FROZEN_DRAIN_SELF_SHA256  gate0-v7-build/vbe_color_trace_drain.self" | sha256sum -c -
+          python3 research/gate0_v7_import_manifest.py gate0-v7-build/vbe_color_trace_kernel.velf --nid-db vita-headers-audit/db/360 --nid-db vita-headers-audit/db/363 --output observer-imports-new.txt
+          cat observer-imports-new.txt
+          ! grep -F 'library=SceModulemgrForKernel' observer-imports-new.txt
+
+      - name: Prove exact retail 3.65 direct-import closure
+        run: |
+          set -euxo pipefail
+          mkdir -p fw/elf-index
+          : > retail-365-conversion-successes.txt
+          : > retail-365-conversion-failures.txt
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc '
+            pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null
+            for src in fw/os0-tree/kd/*.skprx; do
+              base="$(basename "$src" .skprx)"
+              if python sceutils-audit/self2elf.py -i "$src" -o "fw/elf-index/$base.elf" >/dev/null 2>&1; then
+                echo "$base.skprx" >> retail-365-conversion-successes.txt
+              else
+                rm -f "fw/elf-index/$base.elf"
+                echo "$base.skprx" >> retail-365-conversion-failures.txt
+              fi
+            done
+          '
+          sudo chown -R "$(id -u):$(id -g)" fw/elf-index retail-365-conversion-successes.txt retail-365-conversion-failures.txt
+          python3 research/gate0_v7_retail_import_closure.py --manifest observer-imports-new.txt --elf-dir fw/elf-index --conversion-failures retail-365-conversion-failures.txt --pup-sha256 "$PUP_SHA256" --os0-sha256 "$OS0_SHA256" --taihen-source-sha "$TAIHEN_SHA" --index-json retail-365-kernel-export-index.json --closure-json retail-365-import-closure.json --report retail-365-import-closure.txt
+          grep -F 'DIRECT_SONY_IMPORT_CLOSURE=PASS' retail-365-import-closure.txt
+          grep -F 'OLD_MODULEMGR_DIRECT_IMPORT=ABSENT' retail-365-import-closure.txt
+          grep -F 'MODULEMGR_DYNAMIC_TARGET=RETAIL_365_PROVEN library=0x92C9FFC2 function=0xDAA90093' retail-365-import-closure.txt
+          grep -F 'SYSTEM_SW_VERSION_DIRECT_IMPORT=RETAIL_365_PROVEN library=0xD4A60A52 function=0x5182E212' retail-365-import-closure.txt
+          grep -F "TAIHEN_PROVIDER_SOURCE=$TAIHEN_SHA" retail-365-import-closure.txt
+
       - name: Reproduce frozen candidate and prove generated import-table delta
         run: |
           set -euxo pipefail
@@ -134,27 +214,30 @@ jobs:
           echo "$FROZEN_DRAIN_SELF_SHA256  vpk-new-payload/eboot.bin" | sha256sum -c -
           printf 'DRAIN_VPK_PAYLOAD_EQUIVALENCE=PASS\nfrozen_reference_vpk_sha256=%s\nfrozen_rebuild_vpk_sha256=%s\ncandidate9_vpk_sha256=%s\nouter_vpk_hash_policy=NONDETERMINISTIC_ZIP_METADATA\nextracted_payloads=BYTE_IDENTICAL\neboot_sha256=%s\n' "$FROZEN_DRAIN_VPK_SHA256" "$(sha256sum gate0-v7-old-build/vbe_color_trace_drain.vpk|cut -d' ' -f1)" "$(sha256sum gate0-v7-build/vbe_color_trace_drain.vpk|cut -d' ' -f1)" "$FROZEN_DRAIN_SELF_SHA256" | tee drain-vpk-equivalence.txt
           python3 research/gate0_v7_import_manifest.py gate0-v7-old-build/vbe_color_trace_kernel.velf --nid-db vita-headers-audit/db/360 --nid-db vita-headers-audit/db/363 --output observer-imports-old.txt
-          python3 research/gate0_v7_import_manifest.py gate0-v7-build/vbe_color_trace_kernel.velf --nid-db vita-headers-audit/db/360 --nid-db vita-headers-audit/db/363 --output observer-imports-new.txt
           diff -u observer-imports-old.txt observer-imports-new.txt > observer-imports.diff || true
-          python3 research/gate0_v7_import_regression.py --old observer-imports-old.txt --new observer-imports-new.txt --db360 vita-headers-audit/db/360 --db363 vita-headers-audit/db/363 --report modulemgr-resolution-report.txt
+          python3 research/gate0_v7_import_regression.py --old observer-imports-old.txt --new observer-imports-new.txt --db360 vita-headers-audit/db/360 --db363 vita-headers-audit/db/363 --retail-closure-json retail-365-import-closure.json --report modulemgr-resolution-report.txt
           grep -F 'MODULEMGR_RESOLUTION_REPORT=PASS' modulemgr-resolution-report.txt
           grep -F 'library=SceModulemgrForKernel library_nid=0xC445FA63 function_nid=0xD269F915' observer-imports-old.txt
           ! grep -F 'library=SceModulemgrForKernel' observer-imports-new.txt
+          grep -F 'DIRECT_SONY_IMPORT_CLOSURE=PASS' modulemgr-resolution-report.txt
+          grep -F 'MODULEMGR_DYNAMIC_TARGET=RETAIL_365_PROVEN' modulemgr-resolution-report.txt
+          grep -F 'SYSTEM_SW_VERSION_DIRECT_IMPORT=RETAIL_365_PROVEN' modulemgr-resolution-report.txt
           grep -F 'added_direct_firmware_imports=NONE' modulemgr-resolution-report.txt
+
       - name: Assemble exact v7 package
         run: |
           set -euxo pipefail
           mkdir gate0-v7-package
           cp gate0-v7-build/vbe_color_trace.skprx gate0-v7-build/vbe_color_trace_drain.self gate0-v7-build/vbe_color_trace_drain.vpk gate0-v7-package/
           cp research/diagnostics/gate0_observer/gate0_protocol_v7.h research/diagnostics/gate0_observer/retail_365_layout.h research/diagnostics/gate0_observer/observer_lifecycle_core.h gate0-v7-package/
-          cp research/gate0_trace_decode.py research/gate0_observational_analysis.py research/DISPLAY-FEATURE-SCOPE.json research/README-GATE0A.md gate0-v7-package/
-          cp research/GATE0-CANDIDATE8-PHYSICAL-FAILURE.md gate0-v7-package/
-          cp observer-imports-old.txt observer-imports-new.txt observer-imports.diff modulemgr-resolution-report.txt drain-vpk-equivalence.txt gate0-v7-package/
+          cp research/gate0_trace_decode.py research/gate0_observational_analysis.py research/DISPLAY-FEATURE-SCOPE.json research/README-GATE0A.md research/GATE0-CANDIDATE8-PHYSICAL-FAILURE.md gate0-v7-package/
+          cp observer-imports-old.txt observer-imports-new.txt observer-imports.diff modulemgr-resolution-report.txt drain-vpk-equivalence.txt retail-365-kernel-export-index.json retail-365-import-closure.json retail-365-import-closure.txt retail-365-conversion-successes.txt retail-365-conversion-failures.txt modulemgr-retail-365.json modulemgr-retail-365.txt gate0-v7-package/
           cp observer-safety-report.txt lifecycle-host-report.txt retail-trace-abi-report.txt retail-trace-abi-report.json taihen-semantics-report.txt display-feature-scope-contract.json vitasdk-version.txt taihen-package.txt gate0-v7-package/
           printf '%s\n' "$GITHUB_SHA" > gate0-v7-package/WORKFLOW_COMMIT.txt
-          printf 'workflow_commit=%s\nvdpm_commit=%s\ntaihen_source_commit=%s\nvita_headers_commit=%s\npup_sha256=%s\nSceLowio_sha256=f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744\nSceLcd_sha256=24752bb4c69f0c241701cab0364cde9cbe5c95128b6bfe02bf3263aad524246e\nfrozen_candidate8_commit=%s\nfrozen_candidate8_artifact=10363473297\nfrozen_candidate8_core_sha256=310931e94ce4c3e70392ee2f76a30b88ae4a6a91266a632e9b587101eae4a0e9\nbroad_research_run=34828421201\nbroad_research_classification=UNRELATED_TO_GATE0_SAFETY\n' "$GITHUB_SHA" "$VDPM_SHA" "$TAIHEN_SHA" "$VITA_HEADERS_SHA" "$PUP_SHA256" "$FROZEN_C8_SHA" > gate0-v7-package/research-provenance.txt
+          printf 'workflow_commit=%s\nvdpm_commit=%s\ntaihen_source_commit=%s\nvita_headers_commit=%s\npup_sha256=%s\nos0_sha256=%s\nSceLowio_sha256=f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744\nSceLcd_sha256=24752bb4c69f0c241701cab0364cde9cbe5c95128b6bfe02bf3263aad524246e\nSceKernelModulemgr_sha256=3a8f3d675b032e175ab1dabafa0a4f387afe7ec7a379e6aa43421496c068d29d\nfrozen_candidate8_commit=%s\nfrozen_candidate8_artifact=10363473297\nfrozen_candidate8_core_sha256=310931e94ce4c3e70392ee2f76a30b88ae4a6a91266a632e9b587101eae4a0e9\n' "$GITHUB_SHA" "$VDPM_SHA" "$TAIHEN_SHA" "$VITA_HEADERS_SHA" "$PUP_SHA256" "$OS0_SHA256" "$FROZEN_C8_SHA" > gate0-v7-package/research-provenance.txt
           (cd gate0-v7-package && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' | sort -z | xargs -0 sha256sum > SHA256SUMS && sha256sum -c SHA256SUMS)
           test "$(cat gate0-v7-package/WORKFLOW_COMMIT.txt)" = "$GITHUB_SHA"
+
       - name: Upload exact Gate-0 v7 candidate
         id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -163,6 +246,7 @@ jobs:
           path: gate0-v7-package/
           if-no-files-found: error
           compression-level: 6
+
   independent-verify:
     needs: candidate
     runs-on: ubuntu-24.04
@@ -181,13 +265,28 @@ jobs:
           archive_sha="$(sha256sum gate0-v7.zip | cut -d' ' -f1)"
           expected_sha="${EXPECTED_DIGEST#sha256:}"
           test "$archive_sha" = "$expected_sha"
-          mkdir unpacked; unzip -q gate0-v7.zip -d unpacked
-          test "$(cat unpacked/WORKFLOW_COMMIT.txt)" = "$GITHUB_SHA"; (cd unpacked && sha256sum -c SHA256SUMS)
-          grep -F '#define VBE_TRACE_VERSION 7u' unpacked/gate0_protocol_v7.h; grep -F '#define VBE_TRACE_RECORD_SIZE 128u' unpacked/gate0_protocol_v7.h
+          mkdir unpacked
+          unzip -q gate0-v7.zip -d unpacked
+          test "$(cat unpacked/WORKFLOW_COMMIT.txt)" = "$GITHUB_SHA"
+          (cd unpacked && sha256sum -c SHA256SUMS)
+          grep -F '#define VBE_TRACE_VERSION 7u' unpacked/gate0_protocol_v7.h
+          grep -F '#define VBE_TRACE_RECORD_CAPACITY 512u' unpacked/gate0_protocol_v7.h
+          grep -F '#define VBE_TRACE_RECORD_SIZE 128u' unpacked/gate0_protocol_v7.h
+          grep -F '#define VBE_TRACE_STATUS_SIZE 72u' unpacked/gate0_protocol_v7.h
+          grep -F '#define VBE_TRACE_DUMP_HEADER_SIZE 64u' unpacked/gate0_protocol_v7.h
           grep -F 'MODULEMGR_RESOLUTION_REPORT=PASS' unpacked/modulemgr-resolution-report.txt
+          grep -F 'DIRECT_SONY_IMPORT_CLOSURE=PASS' unpacked/retail-365-import-closure.txt
+          grep -F 'OLD_MODULEMGR_DIRECT_IMPORT=ABSENT' unpacked/retail-365-import-closure.txt
+          grep -F 'MODULEMGR_DYNAMIC_TARGET=RETAIL_365_PROVEN' unpacked/retail-365-import-closure.txt
+          grep -F 'SYSTEM_SW_VERSION_DIRECT_IMPORT=RETAIL_365_PROVEN' unpacked/retail-365-import-closure.txt
           ! grep -F 'library=SceModulemgrForKernel' unpacked/observer-imports-new.txt
           grep -F 'DRAIN_VPK_PAYLOAD_EQUIVALENCE=PASS' unpacked/drain-vpk-equivalence.txt
-          printf 'artifact_id=%s\ngithub_digest=sha256:%s\narchive_sha256=%s\nworkflow_commit=%s\nskprx_sha256=%s\ndrain_self_sha256=%s\ndrain_vpk_sha256=%s\nmodulemgr_import_regression=PASS\ndrain_vpk_payload_equivalence=PASS\nSHA256SUMS_verification=PASS\n' "$ARTIFACT_ID" "$expected_sha" "$archive_sha" "$(cat unpacked/WORKFLOW_COMMIT.txt)" "$(sha256sum unpacked/vbe_color_trace.skprx|cut -d' ' -f1)" "$(sha256sum unpacked/vbe_color_trace_drain.self|cut -d' ' -f1)" "$(sha256sum unpacked/vbe_color_trace_drain.vpk|cut -d' ' -f1)" | tee independent-verification.txt
+          echo "$FROZEN_DRAIN_SELF_SHA256  unpacked/vbe_color_trace_drain.self" | sha256sum -c -
+          mkdir drain-vpk-payload
+          unzip -q unpacked/vbe_color_trace_drain.vpk -d drain-vpk-payload
+          echo "$FROZEN_DRAIN_SELF_SHA256  drain-vpk-payload/eboot.bin" | sha256sum -c -
+          printf 'artifact_id=%s\ngithub_digest=sha256:%s\narchive_sha256=%s\nworkflow_commit=%s\nskprx_sha256=%s\ndrain_self_sha256=%s\ndrain_vpk_sha256=%s\nDIRECT_SONY_IMPORT_CLOSURE=PASS\nmodulemgr_import_regression=PASS\ndrain_vpk_payload_equivalence=PASS\nSHA256SUMS_verification=PASS\n' "$ARTIFACT_ID" "$expected_sha" "$archive_sha" "$(cat unpacked/WORKFLOW_COMMIT.txt)" "$(sha256sum unpacked/vbe_color_trace.skprx|cut -d' ' -f1)" "$(sha256sum unpacked/vbe_color_trace_drain.self|cut -d' ' -f1)" "$(sha256sum unpacked/vbe_color_trace_drain.vpk|cut -d' ' -f1)" | tee independent-verification.txt
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: vbe-gate0-v7-independent-${{ github.sha }}
