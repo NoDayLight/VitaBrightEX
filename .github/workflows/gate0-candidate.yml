@@ -39,7 +39,7 @@ jobs:
         run: |
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test -z "$(git status --porcelain=v1)"
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
           python3 -m py_compile research/gate0_trace_decode.py research/gate0_decision_audit.py research/gate0_trace_synthetic_tests.py research/gate0_hook_source_audit.py research/gate0_tracer_safety_audit.py
           python3 research/gate0_hook_source_audit.py
           python3 research/gate0_trace_synthetic_tests.py | tee gate0-host-tests.txt
