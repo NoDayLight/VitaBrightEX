@@ -94,7 +94,7 @@ jobs:
           bash vdpm/bootstrap-vitasdk.sh
           echo "$VITASDK/bin" >> "$GITHUB_PATH"
           "$VITASDK/bin/vdpm" install taihen
-          "$VITASDK/libexec/vdpm/pacman" -Q taihen | tee taihen-package.txt
+          "$VITASDK/bin/vdpm" list taihen | tee taihen-package.txt
           grep -F 'taihen 0.11-1' taihen-package.txt
           cat "$VITASDK/version_info.txt" | tee vitasdk-version.txt
           cmake -S research/diagnostics/gate0_observer -B gate0-v7-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
