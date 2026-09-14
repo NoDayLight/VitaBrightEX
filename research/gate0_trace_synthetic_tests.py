@@ -19,7 +19,7 @@ def rec(seq,t,*,comp=None,tid=7,inv=0,raw=0,flags=0,arg0=0,arg1=0,payload=b'',lo
     return d.REC.pack(d.COMMITTED,seq,comp,tid,inv,t,-1,flags,raw,arg0,arg1,len(payload),lost,p)
 
 def neutral_csc():
-    w=[0,0,1023,0,1023,0,0x200,0,0,0x200,0,0,0,0x200]
+    w=[0,0,1023,0,1023,0,0x200,0,0,0,0x200,0,0,0,0x200]
     return struct.pack('<15I',*w)
 
 def build(records,*,pre=True,lost=0,installed=d.PANEL_REQUIRED,snaps=d.PANEL_SNAPS,
