@@ -9,6 +9,7 @@ on:
       - 'research/gate0_observational_analysis.py'
       - 'research/README-GATE0A.md'
       - 'research/DISPLAY-FEATURE-SCOPE.json'
+      - 'research/GATE0-CANDIDATE8-PHYSICAL-FAILURE.md'
       - '.github/workflows/gate0-v7-candidate.yml'
   workflow_dispatch:
 permissions:
@@ -25,6 +26,10 @@ env:
   VDPM_SHA: c83b88a54ec13372515eeb8b3bdca4b10c36d721
   TAIHEN_SHA: 309b3800bcb8ebbd5e4f5e5e920af3da3590b829
   VITA_HEADERS_SHA: 5e1e7d38d766e4c1634a77f6e5249caab8c8f9cb
+  FROZEN_C8_SHA: 3602ff338f006c65b039450610435056f266ea81
+  FROZEN_C8_SKPRX_SHA256: b797c22b2751225c517ce57b47acb1ce509162f811b829b34859cd6d5ef6248c
+  FROZEN_DRAIN_SELF_SHA256: 73f769832a1e1b65261fbc1fb68f79dd515e02c6842691a39accf7b531a54c3b
+  FROZEN_DRAIN_VPK_SHA256: 01b664fbc009305f245b53880c21b8036c5b4a48fa22a68fe99400d8153e6bfe
 jobs:
   candidate:
     runs-on: ubuntu-24.04
@@ -39,9 +44,17 @@ jobs:
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain=v1 --untracked-files=no)"
+          test "$(git hash-object research/diagnostics/gate0_observer/gate0_protocol_v7.h)" = b83c3ea5cf59759657abad574aaf0355701569e9
+          test "$(git hash-object research/diagnostics/gate0_observer/observer_lifecycle_core.h)" = 1837155f94a037db9e53d8c52919bc93f6079035
+          test "$(git hash-object research/diagnostics/gate0_observer/trace_ring_core.h)" = 43cb06954714249f54143e1347cc8cd52b7fea99
+          test "$(git hash-object research/diagnostics/gate0_observer/drain.c)" = aefeeb018790ca4e59ee1d7f3b1b9f766b45a358
+          test "$(git hash-object research/gate0_trace_decode.py)" = cf400baa8f69438a97ae2bbb2d780ed7196ddde4
+          test "$(git hash-object research/gate0_observational_analysis.py)" = 6dfe3ffabb54f969f5da12918b343de06633010a
+          test "$(git hash-object research/diagnostics/gate0_observer/module.yml)" = 4b3db0bc700932319f59df33236c8d5ea62146e8
+          test "$(git hash-object research/DISPLAY-FEATURE-SCOPE.json)" = 07f859987d3a094b05a9559b85a7430a329fa1a5
           python3 research/display_feature_scope_audit.py --manifest research/DISPLAY-FEATURE-SCOPE.json --json display-feature-scope-contract.json
           python3 research/gate0_v7_source_audit.py | tee observer-safety-report.txt
-          python3 -m py_compile research/gate0_trace_decode.py research/gate0_observational_analysis.py research/gate0_v7_retail_audit.py research/gate0_v7_taihen_audit.py research/gate0_v7_synthetic_tests.py
+          python3 -m py_compile research/gate0_trace_decode.py research/gate0_observational_analysis.py research/gate0_v7_retail_audit.py research/gate0_v7_taihen_audit.py research/gate0_v7_synthetic_tests.py research/gate0_v7_import_manifest.py research/gate0_v7_import_regression.py
           cc -std=c99 -Wall -Wextra -Werror -pthread -Iresearch research/gate0_v7_lifecycle_host.c -o gate0-v7-lifecycle-host
           ./gate0-v7-lifecycle-host | tee lifecycle-host-report.txt
           cat >/tmp/protocol_abi.c <<'C'
@@ -60,6 +73,8 @@ jobs:
           test "$(git -C vdpm rev-parse HEAD)" = "$VDPM_SHA"; test "$(git -C taihen-audit rev-parse HEAD)" = "$TAIHEN_SHA"; test "$(git -C vita-headers-audit rev-parse HEAD)" = "$VITA_HEADERS_SHA"
           grep -F 'ksceIftuEnable: 0x0D7C02F7' vita-headers-audit/db/360/SceLowio.yml
           ! grep -F 'ksceIftuEnable' vita-headers-audit/include/psp2kern/lowio/iftu.h
+          grep -F 'nid: 0x92C9FFC2' vita-headers-audit/db/363/SceKernelModulemgr.yml
+          grep -F 'ksceKernelGetModuleInfo: 0xDAA90093' vita-headers-audit/db/363/SceKernelModulemgr.yml
           python3 research/gate0_v7_taihen_audit.py --patches taihen-audit/patches.c --header taihen-audit/include/taihen.h --text taihen-semantics-report.txt
           grep -F 'INSTALL_PUBLICATION_CLASSIFICATION=UPSTREAM_TAIHEN_RESIDUAL_RISK' taihen-semantics-report.txt
           test "$(grep -c 'taiHookReleaseForKernel' research/diagnostics/gate0_observer/main.c || true)" = 0
@@ -100,6 +115,24 @@ jobs:
           cmake -S research/diagnostics/gate0_observer -B gate0-v7-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
           cmake --build gate0-v7-build --parallel
           test -s gate0-v7-build/vbe_color_trace.skprx; test -s gate0-v7-build/vbe_color_trace_drain.self; test -s gate0-v7-build/vbe_color_trace_drain.vpk
+          echo "$FROZEN_DRAIN_SELF_SHA256  gate0-v7-build/vbe_color_trace_drain.self" | sha256sum -c -
+          echo "$FROZEN_DRAIN_VPK_SHA256  gate0-v7-build/vbe_color_trace_drain.vpk" | sha256sum -c -
+      - name: Reproduce frozen candidate and prove generated import-table delta
+        run: |
+          set -euxo pipefail
+          git fetch --no-tags --depth 1 origin "$FROZEN_C8_SHA"
+          git worktree add --detach candidate8-frozen FETCH_HEAD
+          cmake -S candidate8-frozen/research/diagnostics/gate0_observer -B gate0-v7-old-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          cmake --build gate0-v7-old-build --parallel
+          echo "$FROZEN_C8_SKPRX_SHA256  gate0-v7-old-build/vbe_color_trace.skprx" | sha256sum -c -
+          python3 research/gate0_v7_import_manifest.py gate0-v7-old-build/vbe_color_trace_kernel.velf --nid-db vita-headers-audit/db/360 --nid-db vita-headers-audit/db/363 --output observer-imports-old.txt
+          python3 research/gate0_v7_import_manifest.py gate0-v7-build/vbe_color_trace_kernel.velf --nid-db vita-headers-audit/db/360 --nid-db vita-headers-audit/db/363 --output observer-imports-new.txt
+          diff -u observer-imports-old.txt observer-imports-new.txt > observer-imports.diff || true
+          python3 research/gate0_v7_import_regression.py --old observer-imports-old.txt --new observer-imports-new.txt --db360 vita-headers-audit/db/360 --db363 vita-headers-audit/db/363 --report modulemgr-resolution-report.txt
+          grep -F 'MODULEMGR_RESOLUTION_REPORT=PASS' modulemgr-resolution-report.txt
+          grep -F 'library=SceModulemgrForKernel library_nid=0xC445FA63 function_nid=0xD269F915' observer-imports-old.txt
+          ! grep -F 'library=SceModulemgrForKernel' observer-imports-new.txt
+          grep -F 'added_direct_firmware_imports=NONE' modulemgr-resolution-report.txt
       - name: Assemble exact v7 package
         run: |
           set -euxo pipefail
@@ -107,9 +140,11 @@ jobs:
           cp gate0-v7-build/vbe_color_trace.skprx gate0-v7-build/vbe_color_trace_drain.self gate0-v7-build/vbe_color_trace_drain.vpk gate0-v7-package/
           cp research/diagnostics/gate0_observer/gate0_protocol_v7.h research/diagnostics/gate0_observer/retail_365_layout.h research/diagnostics/gate0_observer/observer_lifecycle_core.h gate0-v7-package/
           cp research/gate0_trace_decode.py research/gate0_observational_analysis.py research/DISPLAY-FEATURE-SCOPE.json research/README-GATE0A.md gate0-v7-package/
+          cp research/GATE0-CANDIDATE8-PHYSICAL-FAILURE.md gate0-v7-package/
+          cp observer-imports-old.txt observer-imports-new.txt observer-imports.diff modulemgr-resolution-report.txt gate0-v7-package/
           cp observer-safety-report.txt lifecycle-host-report.txt retail-trace-abi-report.txt retail-trace-abi-report.json taihen-semantics-report.txt display-feature-scope-contract.json vitasdk-version.txt taihen-package.txt gate0-v7-package/
           printf '%s\n' "$GITHUB_SHA" > gate0-v7-package/WORKFLOW_COMMIT.txt
-          printf 'workflow_commit=%s\nvdpm_commit=%s\ntaihen_source_commit=%s\nvita_headers_commit=%s\npup_sha256=%s\nSceLowio_sha256=f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744\nSceLcd_sha256=24752bb4c69f0c241701cab0364cde9cbe5c95128b6bfe02bf3263aad524246e\nbroad_research_run=34828421201\nbroad_research_classification=UNRELATED_TO_GATE0_SAFETY\n' "$GITHUB_SHA" "$VDPM_SHA" "$TAIHEN_SHA" "$VITA_HEADERS_SHA" "$PUP_SHA256" > gate0-v7-package/research-provenance.txt
+          printf 'workflow_commit=%s\nvdpm_commit=%s\ntaihen_source_commit=%s\nvita_headers_commit=%s\npup_sha256=%s\nSceLowio_sha256=f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744\nSceLcd_sha256=24752bb4c69f0c241701cab0364cde9cbe5c95128b6bfe02bf3263aad524246e\nfrozen_candidate8_commit=%s\nfrozen_candidate8_artifact=10363473297\nfrozen_candidate8_core_sha256=310931e94ce4c3e70392ee2f76a30b88ae4a6a91266a632e9b587101eae4a0e9\nbroad_research_run=34828421201\nbroad_research_classification=UNRELATED_TO_GATE0_SAFETY\n' "$GITHUB_SHA" "$VDPM_SHA" "$TAIHEN_SHA" "$VITA_HEADERS_SHA" "$PUP_SHA256" "$FROZEN_C8_SHA" > gate0-v7-package/research-provenance.txt
           (cd gate0-v7-package && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' | sort -z | xargs -0 sha256sum > SHA256SUMS && sha256sum -c SHA256SUMS)
           test "$(cat gate0-v7-package/WORKFLOW_COMMIT.txt)" = "$GITHUB_SHA"
       - name: Upload exact Gate-0 v7 candidate
@@ -141,7 +176,9 @@ jobs:
           mkdir unpacked; unzip -q gate0-v7.zip -d unpacked
           test "$(cat unpacked/WORKFLOW_COMMIT.txt)" = "$GITHUB_SHA"; (cd unpacked && sha256sum -c SHA256SUMS)
           grep -F '#define VBE_TRACE_VERSION 7u' unpacked/gate0_protocol_v7.h; grep -F '#define VBE_TRACE_RECORD_SIZE 128u' unpacked/gate0_protocol_v7.h
-          printf 'artifact_id=%s\ngithub_digest=sha256:%s\narchive_sha256=%s\nworkflow_commit=%s\nskprx_sha256=%s\ndrain_vpk_sha256=%s\nSHA256SUMS_verification=PASS\n' "$ARTIFACT_ID" "$expected_sha" "$archive_sha" "$(cat unpacked/WORKFLOW_COMMIT.txt)" "$(sha256sum unpacked/vbe_color_trace.skprx|cut -d' ' -f1)" "$(sha256sum unpacked/vbe_color_trace_drain.vpk|cut -d' ' -f1)" | tee independent-verification.txt
+          grep -F 'MODULEMGR_RESOLUTION_REPORT=PASS' unpacked/modulemgr-resolution-report.txt
+          ! grep -F 'library=SceModulemgrForKernel' unpacked/observer-imports-new.txt
+          printf 'artifact_id=%s\ngithub_digest=sha256:%s\narchive_sha256=%s\nworkflow_commit=%s\nskprx_sha256=%s\ndrain_self_sha256=%s\ndrain_vpk_sha256=%s\nmodulemgr_import_regression=PASS\nSHA256SUMS_verification=PASS\n' "$ARTIFACT_ID" "$expected_sha" "$archive_sha" "$(cat unpacked/WORKFLOW_COMMIT.txt)" "$(sha256sum unpacked/vbe_color_trace.skprx|cut -d' ' -f1)" "$(sha256sum unpacked/vbe_color_trace_drain.self|cut -d' ' -f1)" "$(sha256sum unpacked/vbe_color_trace_drain.vpk|cut -d' ' -f1)" | tee independent-verification.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: vbe-gate0-v7-independent-${{ github.sha }}

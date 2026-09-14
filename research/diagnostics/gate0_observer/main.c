@@ -16,8 +16,11 @@
 #define NID_IFTU_CSC_A 0x0FCBF457u
 #define NID_IFTU_CSC_B 0xD64F4C6Bu
 #define NID_IFTU_ENABLE 0x0D7C02F7u
+#define VBE_MODULEMGR_FOR_KERNEL_365_NID 0x92C9FFC2u
+#define VBE_GET_MODULE_INFO_365_NID 0xDAA90093u
 
 typedef struct VbeLcdSegmentRange { uintptr_t base; uint32_t size; } VbeLcdSegmentRange;
+typedef int (*VbeKernelGetModuleInfoFn)(SceUID pid,SceUID modid,SceKernelModuleInfo *info);
 
 static VbeTraceRecord g_records[VBE_TRACE_RECORD_CAPACITY];
 static VbeTraceRingCore g_ring;
@@ -28,7 +31,7 @@ static volatile uint32_t g_hook_fail_mask, g_ring_epoch;
 static uint32_t g_firmware_version;
 static tai_hook_ref_t g_ref_csc_a, g_ref_csc_b, g_ref_iftu_enable, g_ref_panel_write, g_ref_panel_read;
 
-static void zero_bytes(void *dst, uint32_t n){volatile uint8_t *p=(volatile uint8_t*)dst;uint32_t i;for(i=0;i<n;i++)p[i]=0;}
+static void zero_bytes(void *dst,uint32_t n){volatile uint8_t *p=(volatile uint8_t*)dst;uint32_t i;for(i=0;i<n;i++)p[i]=0;}
 static void copy_csc(uint8_t *dst,const volatile uint8_t *src){uint32_t i;for(i=0;i<VBE_TRACE_CSC_PAYLOAD_SIZE;i++)dst[i]=src[i];}
 static int exact_signature(const volatile uint8_t *p,const uint8_t *expected,uint32_t n){uint32_t i;if(!p)return 0;for(i=0;i<n;i++)if(p[i]!=expected[i])return 0;return 1;}
 static uint32_t trace_tid(void){int x=ksceKernelGetThreadId();return x<0?0u:(uint32_t)x;}
@@ -125,13 +128,16 @@ static int install_offset(tai_hook_ref_t *ref,SceUID modid,uint32_t offset,const
 }
 
 static int prepare_lcd(tai_module_info_t *lcd){
-    uintptr_t writer=0u,reader=0u;SceKernelModuleInfo info;uint32_t i;int ret;
+    uintptr_t writer=0u,reader=0u,module_info_addr=0u;VbeKernelGetModuleInfoFn get_module_info;SceKernelModuleInfo info;uint32_t i;int ret;
+    ret=module_get_export_func(KERNEL_PID,"SceKernelModulemgr",VBE_MODULEMGR_FOR_KERNEL_365_NID,VBE_GET_MODULE_INFO_365_NID,&module_info_addr);
+    if(ret<0||module_info_addr==0u){g_hook_fail_mask|=VBE_TRACE_FAIL_LCD_INFO;return -1;}
+    get_module_info=(VbeKernelGetModuleInfoFn)module_info_addr;
     zero_bytes(lcd,sizeof(*lcd));lcd->size=sizeof(*lcd);ret=taiGetModuleInfoForKernel(KERNEL_PID,"SceLcd",lcd);if(ret<0){g_hook_fail_mask|=VBE_TRACE_FAIL_LCD_INFO;return -1;}
     ret=module_get_offset(KERNEL_PID,lcd->modid,VBE_LCD_PANEL_SEGMENT,VBE_LCD_PANEL_WRITER_OFFSET,&writer);
     if(ret<0||!exact_signature((const volatile uint8_t*)writer,vbe_lcd_panel_writer_signature,VBE_LCD_PRIVATE_SIGNATURE_LENGTH)){g_hook_fail_mask|=VBE_TRACE_FAIL_PANEL_WRITE_SIG;return -1;}
     ret=module_get_offset(KERNEL_PID,lcd->modid,VBE_LCD_PANEL_SEGMENT,VBE_LCD_PANEL_READER_OFFSET,&reader);
     if(ret<0||!exact_signature((const volatile uint8_t*)reader,vbe_lcd_panel_reader_signature,VBE_LCD_PRIVATE_SIGNATURE_LENGTH)){g_hook_fail_mask|=VBE_TRACE_FAIL_PANEL_READ_SIG;return -1;}
-    zero_bytes(&info,sizeof(info));info.size=sizeof(info);ret=ksceKernelGetModuleInfo(KERNEL_PID,lcd->modid,&info);if(ret<0){g_hook_fail_mask|=VBE_TRACE_FAIL_LCD_INFO;return -1;}
+    zero_bytes(&info,sizeof(info));info.size=sizeof(info);ret=get_module_info(KERNEL_PID,lcd->modid,&info);if(ret<0){g_hook_fail_mask|=VBE_TRACE_FAIL_LCD_INFO;return -1;}
     for(i=0;i<4u;i++){g_lcd_segments[i].base=(uintptr_t)info.segments[i].vaddr;g_lcd_segments[i].size=info.segments[i].memsz;}
     return 0;
 }
