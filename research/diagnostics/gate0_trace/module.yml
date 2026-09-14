@@ -1,0 +1,18 @@
+VbeColorTrace:
+  attributes: 0
+  version:
+    major: 1
+    minor: 0
+  main:
+    start: module_start
+    stop: module_stop
+  modules:
+    VbeColorTrace:
+      syscall: true
+      functions:
+        - vbeTraceGetStatus
+        - vbeTraceStop
+        - vbeTraceReset
+        - vbeTraceRead
+        - vbeTraceSnapshot
+        - vbeTraceMark
