@@ -1,0 +1,22 @@
+name: Display feature scope contract
+
+on:
+  push:
+    branches:
+      - research-lcd-color-engine
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scope-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Enforce pseudo-v1.4 critical feature scope
+        run: |
+          set -euo pipefail
+          python3 research/display_feature_scope_audit.py --manifest research/DISPLAY-FEATURE-SCOPE.json --json display-feature-scope-contract.json
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          printf 'workflow_commit=%s\n' "$GITHUB_SHA"

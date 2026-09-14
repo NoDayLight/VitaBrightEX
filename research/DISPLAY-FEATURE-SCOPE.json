@@ -1,0 +1,100 @@
+{
+  "schema": 1,
+  "product": "VitaBrightEX pseudo-v1.4",
+  "scope_policy": {
+    "feature_backend_separation": true,
+    "forbidden_silent_scope_states": [
+      "DEFERRED",
+      "OUT_OF_SCOPE",
+      "REMOVED",
+      "UNSUPPORTED_FINAL"
+    ],
+    "current_production_checkpoint": {
+      "branch": "v1.4-display-pipeline",
+      "affine_csc_policy": "UNSUPPORTED_SAFE_GATE",
+      "transfer_policy": "UNSUPPORTED_SAFE_GATE",
+      "meaning": "Current frozen production lacks proven safe ownership; this does not remove pseudo-v1.4 feature targets."
+    }
+  },
+  "features": [
+    {
+      "feature": "persistent_affine_csc",
+      "engine": "AFFINE",
+      "scope": "ACTIVE_TARGET",
+      "backend": "A_PLUS_OWNERSHIP_PENDING_RUNTIME_PROOF"
+    },
+    {
+      "feature": "cct_white_balance",
+      "engine": "AFFINE",
+      "scope": "ACTIVE_TARGET",
+      "backend": "AFFINE_BACKEND_PENDING",
+      "sub_blocker": "OWNERSHIP_PROOF_PENDING"
+    },
+    {
+      "feature": "arbitrary_3x3_calibration",
+      "engine": "AFFINE",
+      "scope": "ACTIVE_TARGET",
+      "backend": "AFFINE_BACKEND_PENDING",
+      "sub_blocker": "OWNERSHIP_PROOF_PENDING"
+    },
+    {
+      "feature": "luma_aware_saturation",
+      "engine": "AFFINE",
+      "scope": "ACTIVE_TARGET",
+      "backend": "AFFINE_BACKEND_PENDING",
+      "sub_blocker": "OWNERSHIP_PROOF_PENDING"
+    },
+    {
+      "feature": "pivoted_contrast",
+      "engine": "AFFINE",
+      "scope": "ACTIVE_TARGET",
+      "backend": "AFFINE_BACKEND_PENDING",
+      "sub_blocker": "ADDITIVE_SEMANTICS_PENDING"
+    },
+    {
+      "feature": "brightness_offset",
+      "engine": "AFFINE",
+      "scope": "ACTIVE_TARGET",
+      "backend": "AFFINE_BACKEND_PENDING",
+      "sub_blocker": "ADDITIVE_SEMANTICS_PENDING"
+    },
+    {
+      "feature": "black_level_offset",
+      "engine": "AFFINE",
+      "scope": "ACTIVE_TARGET",
+      "backend": "AFFINE_BACKEND_PENDING",
+      "sub_blocker": "ADDITIVE_SEMANTICS_PENDING"
+    },
+    {
+      "feature": "arbitrary_gamma",
+      "engine": "NONLINEAR",
+      "scope": "ACTIVE_TARGET",
+      "backend": "UNDER_RESEARCH",
+      "primary_route": "PCH_2000_PANEL_CONTROLLER",
+      "secondary_route": "IFTU_SONY_USED_SURFACE_AUDIT"
+    },
+    {
+      "feature": "tone_shaping",
+      "engine": "NONLINEAR",
+      "scope": "ACTIVE_TARGET",
+      "backend": "UNDER_RESEARCH",
+      "primary_route": "PCH_2000_PANEL_CONTROLLER",
+      "secondary_route": "IFTU_SONY_USED_SURFACE_AUDIT"
+    },
+    {
+      "feature": "panel_linearisation",
+      "engine": "NONLINEAR",
+      "scope": "ACTIVE_TARGET",
+      "backend": "UNDER_RESEARCH",
+      "primary_route": "PCH_2000_PANEL_CONTROLLER",
+      "secondary_route": "IFTU_SONY_USED_SURFACE_AUDIT"
+    }
+  ],
+  "backend_state": {
+    "IFTU_NONLINEAR_BACKEND": "UNDER_RESEARCH",
+    "PANEL_CONTROLLER_NONLINEAR_BACKEND": "PENDING_GATE0_RUNTIME_FINGERPRINT",
+    "MATRIX_SIDE": "OWNERSHIP_PENDING",
+    "POST_ADD_SIDE": "ADDITIVE_SEMANTICS_PENDING"
+  },
+  "scope_decisions": []
+}
