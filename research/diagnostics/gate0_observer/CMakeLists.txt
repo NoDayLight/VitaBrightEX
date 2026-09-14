@@ -21,3 +21,11 @@ set(VITA_ELF_CREATE_FLAGS "")
 set(VITA_MAKE_FSELF_FLAGS "")
 vita_create_self(vbe_color_trace_drain.self vbe_color_trace_drain UNSAFE)
 vita_create_vpk(vbe_color_trace_drain.vpk VBETRACE vbe_color_trace_drain.self VERSION 01.00 NAME "VBE Gate-0A v7 Drain")
+
+# Candidate-9 physical-failure classifier. This application is deliberately
+# read-only with respect to the observer: it calls only vbeTraceGetStatus().
+add_executable(vbe_color_trace_status_probe status_probe.c)
+add_dependencies(vbe_color_trace_status_probe vbe_color_trace_stubs)
+target_link_libraries(vbe_color_trace_status_probe ${CMAKE_CURRENT_BINARY_DIR}/libVbeColorTrace_stub.a SceIofilemgr_stub SceLibKernel_stub)
+vita_create_self(vbe_color_trace_status_probe.self vbe_color_trace_status_probe UNSAFE)
+vita_create_vpk(vbe_color_trace_status_probe.vpk VBESTAT09 vbe_color_trace_status_probe.self VERSION 01.00 NAME "VBE Gate-0 C9 Status")
