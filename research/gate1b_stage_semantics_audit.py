@@ -2,7 +2,7 @@
 from __future__ import annotations
 import argparse,json
 from pathlib import Path
-from capstone.arm import ARM_OP_MEM
+from capstone.arm import ARM_OP_IMM,ARM_OP_MEM,ARM_OP_REG
 from vita_elf_audit import VitaElf,Reachability,FunctionCFG
 from topology_common import all_insns,ins_text,function_parents,absolute_constants
 
@@ -15,6 +15,7 @@ DISPLAY_MODE_ROUTINES=[0x8100724C,0x81007410]
 DISPLAY_KNOWN_CALLERS=[0x81000C2C,0x81002C94,0x81002FF4]
 LOWIO_EXTRA_WRITER=0x81007250
 MODE_GLOBAL_RANGE=(0x8100B200,0x8100B300)
+MODE_FIELDS={0x8100B2A8:'ctx0_color_space_mode',0x8100B2CC:'ctx1_color_space_mode'}
 
 def find_export(e,nid):
     for lib in e.exports():
@@ -52,6 +53,32 @@ def global_ref_functions(elf,r,lo,hi):
         if hits:out.append({'function':cfg.start,'hits':hits,'body':rec(cfg)})
     return sorted(out,key=lambda x:x['function'])
 
+def symbolic_mem_refs(r,lo,hi):
+    out=[]
+    for cfg in r.functions.values():
+        regs={}
+        for i in all_insns(cfg):
+            m=i.mnemonic.lower();ops=getattr(i,'operands',[])
+            for op in ops:
+                if op.type==ARM_OP_MEM and op.mem.base in regs:
+                    addr=(regs[op.mem.base]+int(op.mem.disp))&0xffffffff
+                    if lo<=addr<hi:
+                        acc='read' if m.startswith(('ldr','ldm','vldr')) else 'write' if m.startswith(('str','stm','vstr')) else 'other'
+                        out.append({'function':cfg.start,'va':i.address,'address':addr,'access':acc,'instruction':ins_text(i)})
+            if m=='movw' and len(ops)>=2 and ops[0].type==ARM_OP_REG and ops[1].type==ARM_OP_IMM:
+                regs[ops[0].reg]=(regs.get(ops[0].reg,0)&0xffff0000)|(int(ops[1].imm)&0xffff)
+            elif m=='movt' and len(ops)>=2 and ops[0].type==ARM_OP_REG and ops[1].type==ARM_OP_IMM:
+                regs[ops[0].reg]=(regs.get(ops[0].reg,0)&0xffff)|((int(ops[1].imm)&0xffff)<<16)
+            elif m in ('mov','mov.w') and len(ops)>=2 and ops[0].type==ARM_OP_REG:
+                if ops[1].type==ARM_OP_REG and ops[1].reg in regs:regs[ops[0].reg]=regs[ops[1].reg]
+                elif ops[1].type==ARM_OP_IMM:regs[ops[0].reg]=int(ops[1].imm)&0xffffffff
+                else:regs.pop(ops[0].reg,None)
+            elif m.startswith(('add','sub')) and len(ops)>=3 and ops[0].type==ARM_OP_REG and ops[1].type==ARM_OP_REG and ops[2].type==ARM_OP_IMM and ops[1].reg in regs:
+                delta=int(ops[2].imm);regs[ops[0].reg]=(regs[ops[1].reg]+(delta if m.startswith('add') else -delta))&0xffffffff
+            elif m.startswith(('ldr','vldr')) and ops and ops[0].type==ARM_OP_REG:
+                regs.pop(ops[0].reg,None)
+    return sorted(out,key=lambda x:(x['address'],x['function'],x['va']))
+
 def all_exports_at(e,va):
     out=[]
     for lib in e.exports():
@@ -83,17 +110,14 @@ def main():
         for f in lib['functions']:
             if f['nid']==NID_IFTU_CSC:csc_stub=f['va']
     if csc_stub is None:raise SystemExit('missing Display IFTU CSC stub')
-    parents=function_parents(dr)
-    refs=global_ref_functions(disp,dr,*MODE_GLOBAL_RANGE)
-    result={'schema':3,'firmware':'3.65','lowio_sha':low.sha256,'display_sha':disp.sha256,'lowio_exports':ex,'display_exports':dex,'lowio_extra_writer_exports':all_exports_at(low,LOWIO_EXTRA_WRITER),'lowio_mem_disp_0x100_refs':mem100_refs(lr),'display_focus':focus,'display_iftu_csc_calls':callsites_to(dr,csc_stub),'generator_parents':parents.get(GENERATOR,[]),'display_mode_global_ref_functions':refs}
+    parents=function_parents(dr);refs=global_ref_functions(disp,dr,*MODE_GLOBAL_RANGE);eff=symbolic_mem_refs(dr,*MODE_GLOBAL_RANGE)
+    field_refs={name:[x for x in eff if x['address']==addr] for addr,name in MODE_FIELDS.items()}
+    result={'schema':4,'firmware':'3.65','lowio_sha':low.sha256,'display_sha':disp.sha256,'lowio_exports':ex,'display_exports':dex,'lowio_extra_writer_exports':all_exports_at(low,LOWIO_EXTRA_WRITER),'lowio_extra_writer_calls':callsites_to(lr,LOWIO_EXTRA_WRITER),'lowio_mem_disp_0x100_refs':mem100_refs(lr),'display_focus':focus,'display_iftu_csc_calls':callsites_to(dr,csc_stub),'generator_parents':parents.get(GENERATOR,[]),'display_mode_global_ref_functions':refs,'display_effective_mode_region_refs':eff,'mode_field_refs':field_refs}
     a.json.write_text(json.dumps(result,indent=2)+'\n')
     print('GATE1B_STAGE_SEMANTICS_EVIDENCE')
-    for k,v in ex.items():print(f'LOWIO {k}=0x{v:08X}')
-    for k,v in dex.items():print(f'DISPLAY {k}=0x{v:08X}')
-    print('LOWIO_EXTRA_WRITER_EXPORTS',result['lowio_extra_writer_exports'])
-    for x in result['lowio_mem_disp_0x100_refs']:print(f"MMIO_100 fn=0x{x['function']:08X} va=0x{x['va']:08X} {x['access']} {x['instruction']}")
-    for x in refs:
-        vals=','.join(f"0x{h['value']:08X}@0x{h['va']:08X}" for h in x['hits'])
-        print(f"DISPLAY_MODE_GLOBAL_REF fn=0x{x['function']:08X} {vals}")
+    print('LOWIO_EXTRA_WRITER_EXPORTS',result['lowio_extra_writer_exports']);print('LOWIO_EXTRA_WRITER_CALLS',[(hex(x['caller']),hex(x['call_va'])) for x in result['lowio_extra_writer_calls']])
+    for name,xs in field_refs.items():
+        print('MODE_FIELD',name)
+        for x in xs:print(f"  {x['access']} fn=0x{x['function']:08X} va=0x{x['va']:08X} {x['instruction']}")
 
 if __name__=='__main__':main()
