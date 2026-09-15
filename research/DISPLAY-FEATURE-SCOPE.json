@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "product": "VitaBrightEX pseudo-v1.4",
   "scope_policy": {
     "feature_backend_separation": true,
@@ -11,9 +11,10 @@
     ],
     "current_production_checkpoint": {
       "branch": "v1.4-display-pipeline",
-      "affine_csc_policy": "UNSUPPORTED_SAFE_GATE",
+      "commit": "fc8ffbfcfd43a67e17a5c3b67e83a88bfef00b09",
+      "affine_csc_policy": "GATE1D_PRODUCTION_BACKEND_IN_DEVELOPMENT",
       "transfer_policy": "UNSUPPORTED_SAFE_GATE",
-      "meaning": "Current frozen production lacks proven safe ownership; this does not remove pseudo-v1.4 feature targets."
+      "meaning": "Stage B ownership is physically verified only on PCH-2000 / FW 3.65. Generic production matrix composition is being implemented without broadening that target claim."
     }
   },
   "features": [
@@ -21,49 +22,45 @@
       "feature": "persistent_affine_csc",
       "engine": "AFFINE",
       "scope": "ACTIVE_TARGET",
-      "backend": "A_PLUS_OWNERSHIP_PENDING_RUNTIME_PROOF"
+      "backend": "MATRIX_BACKEND_IMPLEMENTATION_PENDING"
     },
     {
       "feature": "cct_white_balance",
       "engine": "AFFINE",
       "scope": "ACTIVE_TARGET",
-      "backend": "AFFINE_BACKEND_PENDING",
-      "sub_blocker": "OWNERSHIP_PROOF_PENDING"
+      "backend": "MATRIX_BACKEND_PENDING",
+      "sub_blocker": "CHANNEL_ORDER_PENDING"
     },
     {
       "feature": "arbitrary_3x3_calibration",
       "engine": "AFFINE",
       "scope": "ACTIVE_TARGET",
-      "backend": "AFFINE_BACKEND_PENDING",
-      "sub_blocker": "OWNERSHIP_PROOF_PENDING"
+      "backend": "MATRIX_BACKEND_IMPLEMENTATION_PENDING"
     },
     {
       "feature": "luma_aware_saturation",
       "engine": "AFFINE",
       "scope": "ACTIVE_TARGET",
-      "backend": "AFFINE_BACKEND_PENDING",
-      "sub_blocker": "OWNERSHIP_PROOF_PENDING"
+      "backend": "MATRIX_BACKEND_PENDING",
+      "sub_blocker": "CHANNEL_ORDER_PENDING"
     },
     {
       "feature": "pivoted_contrast",
       "engine": "AFFINE",
       "scope": "ACTIVE_TARGET",
-      "backend": "AFFINE_BACKEND_PENDING",
-      "sub_blocker": "ADDITIVE_SEMANTICS_PENDING"
+      "backend": "ADDITIVE_SEMANTICS_PENDING"
     },
     {
       "feature": "brightness_offset",
       "engine": "AFFINE",
       "scope": "ACTIVE_TARGET",
-      "backend": "AFFINE_BACKEND_PENDING",
-      "sub_blocker": "ADDITIVE_SEMANTICS_PENDING"
+      "backend": "ADDITIVE_SEMANTICS_PENDING"
     },
     {
       "feature": "black_level_offset",
       "engine": "AFFINE",
       "scope": "ACTIVE_TARGET",
-      "backend": "AFFINE_BACKEND_PENDING",
-      "sub_blocker": "ADDITIVE_SEMANTICS_PENDING"
+      "backend": "ADDITIVE_SEMANTICS_PENDING"
     },
     {
       "feature": "arbitrary_gamma",
@@ -93,8 +90,19 @@
   "backend_state": {
     "IFTU_NONLINEAR_BACKEND": "UNDER_RESEARCH",
     "PANEL_CONTROLLER_NONLINEAR_BACKEND": "PENDING_GATE0_RUNTIME_FINGERPRINT",
-    "MATRIX_SIDE": "OWNERSHIP_PENDING",
-    "POST_ADD_SIDE": "ADDITIVE_SEMANTICS_PENDING"
+    "MATRIX_SIDE": "B_STAGE_PHYSICALLY_VERIFIED_PCH2000_FW365",
+    "MATRIX_BACKEND": "IMPLEMENTATION_PENDING",
+    "POST_ADD_SIDE": "ADDITIVE_SEMANTICS_PENDING",
+    "CHANNEL_ORDER": "INFERRED_ONLY_PENDING_PROOF"
   },
-  "scope_decisions": []
+  "scope_decisions": [
+    {
+      "decision": "SELECTED_AFFINE_STAGE",
+      "value": "B",
+      "classification": "PHYSICALLY_VERIFIED",
+      "target": "PCH-2000 / FW 3.65",
+      "evidence_commit": "233f723fccfb3194edce9889e668cbe69f643194",
+      "limitations": "No claim is made for other firmware, panels, source formats, or unknown Sony B baselines."
+    }
+  ]
 }
