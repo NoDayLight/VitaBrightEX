@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "source": "Frozen authoritative Gate-0A physical captures on PCH-2000 / firmware 3.65",
+  "objects": {
+    "A": {
+      "sha256": "2f9fd211d1d389611267070cfbc936063b0b790a59245243feb404ee3c00daf6",
+      "words_le_u32": [
+        "0x00000000", "0x00000202", "0x000003FF", "0x00000000", "0x00000000",
+        "0x00000000", "0x00000000", "0x00000000", "0x00000000", "0x00000000",
+        "0x00000000", "0x00000000", "0x00000000", "0x00000000", "0x00000000"
+      ]
+    },
+    "B": {
+      "sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+      "words_le_u32": [
+        "0x00000000", "0x00000000", "0x000003FF", "0x00000000", "0x000003FF",
+        "0x00000000", "0x00000200", "0x00000000", "0x00000000", "0x00000000",
+        "0x00000200", "0x00000000", "0x00000000", "0x00000000", "0x00000200"
+      ]
+    }
+  },
+  "equivalent_state_contract": [
+    "BOOT_A0", "BOOT_B0", "BOOT_A1", "BOOT_B1",
+    "RESUME_A0", "RESUME_B0", "RESUME_A1", "RESUME_B1"
+  ],
+  "resume_focused_order": ["B0", "A0", "B1", "A1", "ENABLE0", "ENABLE1"]
+}
