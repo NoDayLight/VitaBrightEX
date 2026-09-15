@@ -8,7 +8,6 @@
 #include "../../../taihen_extra.h"
 #include "gate1b_snapshot_protocol.h"
 
-#define NID_IFTU_ENABLE 0x0D7C02F7u
 #define CACHE_A_OFFSET 0x10Cu
 #define CACHE_B_OFFSET 0x148u
 #define ENABLE_STATE_OFFSET 0x1E8u
@@ -34,23 +33,20 @@ static uint32_t g_status_flags;
 static uint32_t g_firmware_version;
 static uint32_t g_lowio_modid;
 static uint32_t g_lowio_module_nid;
-static uint32_t g_owned_hook_mask;
+static uint32_t g_observer_mask;
 static uint32_t g_fail_mask;
 static volatile uint32_t g_capture_sequence;
-static volatile uint32_t g_suspend_event_count;
-static volatile uint32_t g_resume_event_count;
-static volatile uint32_t g_resume_pending;
-static volatile uint32_t g_pre_suspend_claimed;
-static volatile uint32_t g_pre_suspend_published;
-static volatile uint32_t g_post_resume_claimed;
-static volatile uint32_t g_post_resume_published;
-static volatile int32_t g_last_enable_return;
-static uint32_t g_pre_suspend_reason;
-static uint32_t g_post_resume_reason;
+static volatile uint32_t g_pre_event_count;
+static volatile uint32_t g_post_event_count;
+static volatile uint32_t g_pre_claimed;
+static volatile uint32_t g_pre_published;
+static volatile uint32_t g_post_claimed;
+static volatile uint32_t g_post_published;
+static uint32_t g_pre_reason;
+static uint32_t g_post_reason;
 static int g_sysevent_registered;
-static tai_hook_ref_t g_ref_enable;
-static VbeG1bSnapshot g_pre_suspend_snapshot;
-static VbeG1bSnapshot g_post_resume_snapshot;
+static VbeG1bSnapshot g_pre_snapshot;
+static VbeG1bSnapshot g_post_snapshot;
 
 static void zero_bytes(void *dst, uint32_t n) {
     volatile uint8_t *p = (volatile uint8_t *)dst;
@@ -112,11 +108,8 @@ static void capture_plane(VbeG1bPlaneSnapshot *p, uint32_t plane, uintptr_t stat
     }
 
     p->enable_state_after = read32(state + ENABLE_STATE_OFFSET);
-    if (p->enable_state_before == p->enable_state_after) {
+    if (p->enable_state_before == p->enable_state_after)
         p->flags |= VBE_G1B_PLANE_ENABLE_STABLE;
-        if (p->enable_state_after == 2u)
-            p->flags |= VBE_G1B_PLANE_ENABLE_ACTIVE;
-    }
 }
 
 static void make_snapshot(VbeG1bSnapshot *s, uint32_t reason) {
@@ -135,62 +128,41 @@ static void make_snapshot(VbeG1bSnapshot *s, uint32_t reason) {
     capture_plane(&s->planes[1], 1u, g_plane_state[1]);
 }
 
-static int snapshot_active(const VbeG1bSnapshot *s) {
-    uint32_t need = VBE_G1B_PLANE_STATE_RESOLVED |
-                    VBE_G1B_PLANE_MMIO_WHITELISTED |
-                    VBE_G1B_PLANE_CONTROL_READ |
-                    VBE_G1B_PLANE_ENABLE_STABLE |
-                    VBE_G1B_PLANE_ENABLE_ACTIVE;
-    return ((s->planes[0].flags & need) == need) &&
-           ((s->planes[1].flags & need) == need);
+static void publish_pre(void) {
+    VbeG1bSnapshot local;
+    if (g_pre_published) return;
+    make_snapshot(&local, VBE_G1B_CAPTURE_PRE_SUSPEND_4000);
+    if (!__sync_bool_compare_and_swap(&g_pre_claimed, 0u, 1u)) return;
+    copy_bytes_volatile(&g_pre_snapshot, &local, sizeof(local));
+    g_pre_reason = local.capture_reason;
+    __sync_synchronize();
+    g_pre_published = 1u;
 }
 
-static void publish_pre_suspend(void) {
+static void publish_post(void) {
     VbeG1bSnapshot local;
-    if (g_pre_suspend_published) return;
-    make_snapshot(&local, VBE_G1B_CAPTURE_PRE_SUSPEND_EVENT);
-    if (!__sync_bool_compare_and_swap(&g_pre_suspend_claimed, 0u, 1u)) return;
-    copy_bytes_volatile(&g_pre_suspend_snapshot, &local, sizeof(local));
-    g_pre_suspend_reason = local.capture_reason;
+    if (g_post_published) return;
+    make_snapshot(&local, VBE_G1B_CAPTURE_POST_RESUME_100000);
+    if (!__sync_bool_compare_and_swap(&g_post_claimed, 0u, 1u)) return;
+    copy_bytes_volatile(&g_post_snapshot, &local, sizeof(local));
+    g_post_reason = local.capture_reason;
     __sync_synchronize();
-    g_pre_suspend_published = 1u;
-}
-
-static void publish_post_resume(uint32_t reason, int require_active) {
-    VbeG1bSnapshot local;
-    if (g_post_resume_published) return;
-    make_snapshot(&local, reason);
-    if (require_active && !snapshot_active(&local)) return;
-    if (!__sync_bool_compare_and_swap(&g_post_resume_claimed, 0u, 1u)) return;
-    copy_bytes_volatile(&g_post_resume_snapshot, &local, sizeof(local));
-    g_post_resume_reason = local.capture_reason;
-    __sync_synchronize();
-    g_post_resume_published = 1u;
-    g_resume_pending = 0u;
+    g_post_published = 1u;
 }
 
 static int sysevent_handler(int resume, int eventid, void *args, void *opt) {
+    uint32_t eid = (uint32_t)eventid;
     (void)args;
     (void)opt;
-    if ((uint32_t)eventid != VBE_G1B_SYS_EVENT_SUSPEND_RESUME) return 0;
-    if (!resume) {
-        __sync_add_and_fetch(&g_suspend_event_count, 1u);
-        publish_pre_suspend();
-    } else {
-        __sync_add_and_fetch(&g_resume_event_count, 1u);
-        g_resume_pending = 1u;
-        __sync_synchronize();
-        publish_post_resume(VBE_G1B_CAPTURE_POST_RESUME_EVENT_ACTIVE, 1);
+
+    if (!resume && eid == VBE_G1B_SYS_EVENT_PRE_SUSPEND) {
+        __sync_add_and_fetch(&g_pre_event_count, 1u);
+        publish_pre();
+    } else if (resume && eid == VBE_G1B_SYS_EVENT_POST_RESUME) {
+        __sync_add_and_fetch(&g_post_event_count, 1u);
+        publish_post();
     }
     return 0;
-}
-
-static int hook_enable(int plane) {
-    int ret = TAI_CONTINUE(int, g_ref_enable, plane);
-    g_last_enable_return = ret;
-    if (ret == 0 && plane == 1 && g_resume_pending && !g_post_resume_published)
-        publish_post_resume(VBE_G1B_CAPTURE_POST_RESUME_ENABLE_P1, 0);
-    return ret;
 }
 
 int vbeG1bGetCaptureBundle(VbeG1bCaptureBundle *out) {
@@ -210,39 +182,26 @@ int vbeG1bGetCaptureBundle(VbeG1bCaptureBundle *out) {
     b.status.version = VBE_G1B_VERSION;
     b.status.firmware_version = g_firmware_version;
     b.status.status_flags = g_status_flags;
-    b.status.owned_hook_mask = g_owned_hook_mask;
-    b.status.required_hook_mask = VBE_G1B_REQUIRED_HOOKS;
-    b.status.missing_hook_mask = VBE_G1B_REQUIRED_HOOKS & ~g_owned_hook_mask;
+    b.status.observer_mask = g_observer_mask;
+    b.status.required_observer_mask = VBE_G1B_REQUIRED_OBSERVERS;
+    b.status.missing_observer_mask = VBE_G1B_REQUIRED_OBSERVERS & ~g_observer_mask;
     b.status.fail_mask = g_fail_mask;
-    b.status.suspend_event_count = g_suspend_event_count;
-    b.status.resume_event_count = g_resume_event_count;
-    b.status.pre_suspend_published = g_pre_suspend_published;
-    b.status.post_resume_published = g_post_resume_published;
-    b.status.resume_pending = g_resume_pending;
-    b.status.last_enable_return = g_last_enable_return;
-    b.status.pre_suspend_reason = g_pre_suspend_reason;
-    b.status.post_resume_reason = g_post_resume_reason;
+    b.status.pre_event_count = g_pre_event_count;
+    b.status.post_event_count = g_post_event_count;
+    b.status.pre_published = g_pre_published;
+    b.status.post_published = g_post_published;
+    b.status.reserved0 = 0u;
+    b.status.reserved1 = 0;
+    b.status.pre_reason = g_pre_reason;
+    b.status.post_reason = g_post_reason;
     __sync_synchronize();
-    copy_bytes_volatile(&b.snapshots[0], &g_pre_suspend_snapshot, sizeof(VbeG1bSnapshot));
-    copy_bytes_volatile(&b.snapshots[1], &g_post_resume_snapshot, sizeof(VbeG1bSnapshot));
+    copy_bytes_volatile(&b.snapshots[0], &g_pre_snapshot, sizeof(VbeG1bSnapshot));
+    copy_bytes_volatile(&b.snapshots[1], &g_post_snapshot, sizeof(VbeG1bSnapshot));
 
     ENTER_SYSCALL(cs);
     ret = ksceKernelMemcpyKernelToUser(out, &b, sizeof(b));
     EXIT_SYSCALL(cs);
     return ret;
-}
-
-static int install_enable_hook(void) {
-    SceUID uid = taiHookFunctionExportForKernel(KERNEL_PID, &g_ref_enable,
-                                                "SceLowio", TAI_ANY_LIBRARY,
-                                                NID_IFTU_ENABLE, hook_enable);
-    if (uid < 0) {
-        g_fail_mask |= VBE_G1B_FAIL_ENABLE_HOOK;
-        return -1;
-    }
-    g_owned_hook_mask |= VBE_G1B_HOOK_ENABLE;
-    g_status_flags |= VBE_G1B_STATUS_ENABLE_HOOK;
-    return 0;
 }
 
 void _start() __attribute__((weak, alias("module_start")));
@@ -255,25 +214,23 @@ int module_start(SceSize argc, const void *args) {
     (void)args;
 
     zero_bytes(g_plane_state, sizeof(g_plane_state));
-    zero_bytes(&g_pre_suspend_snapshot, sizeof(g_pre_suspend_snapshot));
-    zero_bytes(&g_post_resume_snapshot, sizeof(g_post_resume_snapshot));
+    zero_bytes(&g_pre_snapshot, sizeof(g_pre_snapshot));
+    zero_bytes(&g_post_snapshot, sizeof(g_post_snapshot));
     g_status_flags = 0u;
     g_firmware_version = 0u;
     g_lowio_modid = 0u;
     g_lowio_module_nid = 0u;
-    g_owned_hook_mask = 0u;
+    g_observer_mask = 0u;
     g_fail_mask = 0u;
     g_capture_sequence = 0u;
-    g_suspend_event_count = 0u;
-    g_resume_event_count = 0u;
-    g_resume_pending = 0u;
-    g_pre_suspend_claimed = 0u;
-    g_pre_suspend_published = 0u;
-    g_post_resume_claimed = 0u;
-    g_post_resume_published = 0u;
-    g_last_enable_return = 0;
-    g_pre_suspend_reason = VBE_G1B_CAPTURE_NONE;
-    g_post_resume_reason = VBE_G1B_CAPTURE_NONE;
+    g_pre_event_count = 0u;
+    g_post_event_count = 0u;
+    g_pre_claimed = 0u;
+    g_pre_published = 0u;
+    g_post_claimed = 0u;
+    g_post_published = 0u;
+    g_pre_reason = VBE_G1B_CAPTURE_NONE;
+    g_post_reason = VBE_G1B_CAPTURE_NONE;
     g_sysevent_registered = 0;
 
     zero_bytes(&fw, sizeof(fw));
@@ -308,14 +265,13 @@ int module_start(SceSize argc, const void *args) {
         g_status_flags |= VBE_G1B_STATUS_PLANE1_RESOLVED;
     }
 
-    if (install_enable_hook() < 0) return SCE_KERNEL_START_SUCCESS;
-
     ret = ksceKernelRegisterSysEventHandler("vbe_gate1b_snapshot", sysevent_handler, 0);
     if (ret < 0) {
         g_fail_mask |= VBE_G1B_FAIL_SYSEVENT;
         return SCE_KERNEL_START_SUCCESS;
     }
     g_sysevent_registered = 1;
+    g_observer_mask |= VBE_G1B_OBSERVER_SYSEVENT;
     g_status_flags |= VBE_G1B_STATUS_SYSEVENT;
     return SCE_KERNEL_START_SUCCESS;
 }
@@ -323,6 +279,5 @@ int module_start(SceSize argc, const void *args) {
 int module_stop(SceSize argc, const void *args) {
     (void)argc;
     (void)args;
-    return (g_owned_hook_mask != 0u || g_sysevent_registered) ?
-           SCE_KERNEL_STOP_FAIL : SCE_KERNEL_STOP_SUCCESS;
+    return g_sysevent_registered ? SCE_KERNEL_STOP_FAIL : SCE_KERNEL_STOP_SUCCESS;
 }
