@@ -4,41 +4,38 @@
 
 #define VBE_G1B_MAGIC 0x42314756u
 #define VBE_G1B_BUNDLE_MAGIC 0x32424756u
-#define VBE_G1B_VERSION 2u
+#define VBE_G1B_VERSION 3u
 #define VBE_G1B_FW_365 0x03650000u
 #define VBE_G1B_CSC_SIZE 0x3Cu
 #define VBE_G1B_PLANE_COUNT 2u
 #define VBE_G1B_LOWIO_SEGMENT 1u
 #define VBE_G1B_PLANE0_OFFSET 0x37Cu
 #define VBE_G1B_PLANE1_OFFSET 0x590u
-#define VBE_G1B_SYS_EVENT_SUSPEND_RESUME 0x00100000u
+#define VBE_G1B_SYS_EVENT_PRE_SUSPEND 0x00004000u
+#define VBE_G1B_SYS_EVENT_POST_RESUME 0x00100000u
 
 #define VBE_G1B_STATUS_FW_OK             (1u << 0)
 #define VBE_G1B_STATUS_LOWIO_FOUND       (1u << 1)
 #define VBE_G1B_STATUS_PLANE0_RESOLVED   (1u << 2)
 #define VBE_G1B_STATUS_PLANE1_RESOLVED   (1u << 3)
-#define VBE_G1B_STATUS_ENABLE_HOOK       (1u << 4)
-#define VBE_G1B_STATUS_SYSEVENT          (1u << 5)
+#define VBE_G1B_STATUS_SYSEVENT          (1u << 4)
 
 #define VBE_G1B_PLANE_STATE_RESOLVED     (1u << 0)
 #define VBE_G1B_PLANE_CACHE_READ         (1u << 1)
 #define VBE_G1B_PLANE_MMIO_WHITELISTED   (1u << 2)
 #define VBE_G1B_PLANE_CONTROL_READ       (1u << 3)
 #define VBE_G1B_PLANE_ENABLE_STABLE      (1u << 4)
-#define VBE_G1B_PLANE_ENABLE_ACTIVE      (1u << 5)
-#define VBE_G1B_PLANE_CANONICAL_A        (1u << 6)
-#define VBE_G1B_PLANE_CANONICAL_B        (1u << 7)
+#define VBE_G1B_PLANE_CANONICAL_A        (1u << 5)
+#define VBE_G1B_PLANE_CANONICAL_B        (1u << 6)
 
-#define VBE_G1B_HOOK_ENABLE (1u << 0)
-#define VBE_G1B_REQUIRED_HOOKS VBE_G1B_HOOK_ENABLE
-#define VBE_G1B_FAIL_ENABLE_HOOK (1u << 0)
-#define VBE_G1B_FAIL_SYSEVENT (1u << 1)
+#define VBE_G1B_OBSERVER_SYSEVENT (1u << 0)
+#define VBE_G1B_REQUIRED_OBSERVERS VBE_G1B_OBSERVER_SYSEVENT
+#define VBE_G1B_FAIL_SYSEVENT (1u << 0)
 #define VBE_G1B_FAIL_FW (1u << 31)
 
 #define VBE_G1B_CAPTURE_NONE 0u
-#define VBE_G1B_CAPTURE_PRE_SUSPEND_EVENT 1u
-#define VBE_G1B_CAPTURE_POST_RESUME_EVENT_ACTIVE 2u
-#define VBE_G1B_CAPTURE_POST_RESUME_ENABLE_P1 3u
+#define VBE_G1B_CAPTURE_PRE_SUSPEND_4000 1u
+#define VBE_G1B_CAPTURE_POST_RESUME_100000 2u
 
 #define VBE_G1B_ERR_INVALID (-1)
 
@@ -77,18 +74,18 @@ typedef struct VbeG1bCaptureStatus {
     uint32_t version;
     uint32_t firmware_version;
     uint32_t status_flags;
-    uint32_t owned_hook_mask;
-    uint32_t required_hook_mask;
-    uint32_t missing_hook_mask;
+    uint32_t observer_mask;
+    uint32_t required_observer_mask;
+    uint32_t missing_observer_mask;
     uint32_t fail_mask;
-    uint32_t suspend_event_count;
-    uint32_t resume_event_count;
-    uint32_t pre_suspend_published;
-    uint32_t post_resume_published;
-    uint32_t resume_pending;
-    int32_t last_enable_return;
-    uint32_t pre_suspend_reason;
-    uint32_t post_resume_reason;
+    uint32_t pre_event_count;
+    uint32_t post_event_count;
+    uint32_t pre_published;
+    uint32_t post_published;
+    uint32_t reserved0;
+    int32_t reserved1;
+    uint32_t pre_reason;
+    uint32_t post_reason;
 } VbeG1bCaptureStatus;
 
 typedef struct VbeG1bCaptureBundle {
