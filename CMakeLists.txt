@@ -58,6 +58,12 @@ add_executable(vitabright
     filter_policy.h
     screen_filter.c
     screen_filter.h
+    matrix_backend_core.c
+    matrix_backend_core.h
+    matrix_policy_core.c
+    matrix_policy_core.h
+    matrix_backend.c
+    matrix_backend.h
     taihen_extra.h
     lut_parser_core.h
     oled/lut_parser.c
