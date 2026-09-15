@@ -14,6 +14,7 @@ add_executable(vbe_gate1b_snapshot_kernel main.c)
 target_link_libraries(vbe_gate1b_snapshot_kernel
   taihenForKernel_stub
   taihenModuleUtils_stub
+  SceKernelSuspendForDriver_stub
   SceModulemgrForDriver_stub
   SceSysmemForDriver_stub
   gcc)
@@ -35,4 +36,4 @@ set(VITA_ELF_CREATE_FLAGS "")
 set(VITA_MAKE_FSELF_FLAGS "")
 vita_create_self(vbe_gate1b_snapshot.self vbe_gate1b_snapshot_app UNSAFE)
 vita_create_vpk(vbe_gate1b_snapshot.vpk VBEG1BSN vbe_gate1b_snapshot.self
-  VERSION 01.00 NAME "VBE Gate-1B Read-only Snapshot")
+  VERSION 01.00 NAME "VBE Gate-1B Lifecycle Snapshot")
