@@ -8,6 +8,7 @@
 #include "lcd/hooks.h"
 #include "log.h"
 #include "main.h"
+#include "matrix_backend.h"
 #include "module_lifecycle_core.h"
 #include "oled/hooks.h"
 #include "screen_filter.h"
@@ -46,6 +47,12 @@ int module_start(SceSize argc, const void *args) {
     /* Successful synchronization creation is the runtime-init commit point.
      * Everything below may acquire session/backend ownership. */
     g_module_lifecycle = VBE_MODULE_RUNTIME;
+
+    /* Gate-1D owns only the physically proven B setter and starts neutral.
+     * It is installed before later display configuration can trigger a replay. */
+    int matrix_ret = matrix_backend_init(is_lcd, sw_version);
+    if (matrix_ret < 0)
+        LOG("[CORE] matrix backend unavailable: 0x%08X\n", matrix_ret);
 
     int config_ret = config_load();
     if (config_ret < 0)
@@ -113,6 +120,12 @@ int module_stop(SceSize argc, const void *args) {
     if (stop_mode == VBE_MODULE_STOP_INERT)
         return SCE_KERNEL_STOP_SUCCESS;
     if (stop_mode != VBE_MODULE_STOP_RUNTIME)
+        return SCE_KERNEL_STOP_FAIL;
+
+    /* The production B hook is deliberately reboot-owned. Pinned taiHEN does
+     * not provide a proven release path that also establishes in-flight hook
+     * quiescence, so unloading this module while the hook exists is forbidden. */
+    if (!matrix_backend_can_unload())
         return SCE_KERNEL_STOP_FAIL;
 
     if (state_lock_begin_shutdown() < 0)
