@@ -1,0 +1,81 @@
+{
+  "schema": 1,
+  "gate": "Gate-1B v4 read-only lifecycle snapshot",
+  "date": "2026-09-16",
+  "firmware": "3.65 Enso",
+  "source_branch_head": "ecd89cad262d00c3c3d09c10cbad6fd9ffe78218",
+  "candidate_run": 35027053624,
+  "candidate_artifact_id": 10419564131,
+  "candidate_artifact_sha256": "52ed79ecf0eebadf944f2f1422315c03565e2dffa9eed768ac61e69e6de9b658",
+  "capture_file": "vbe_gate1b_capture_v4.bin",
+  "capture_sha256": "481e3bd3d279ee2e7d25d5e5e20480a2d7d8b0e3e6fe63e8fe60dd238a82ed91",
+  "capture_size": 784,
+  "decoder_result": "AUTHORITATIVE=PASS",
+  "status": {
+    "status_flags": "0x0000001F",
+    "observer_mask": "0x1",
+    "required_observer_mask": "0x1",
+    "missing_observer_mask": "0x0",
+    "fail_mask": "0x00000000",
+    "pre_4000_events": 1,
+    "post_100000_events": 1,
+    "pre_published": 1,
+    "post_published": 1
+  },
+  "planes": [
+    {
+      "plane": 0,
+      "runtime_mmio": "0x280B2000",
+      "runtime_mmio_expected": true,
+      "pre_csc_control": "0x00000001",
+      "post_csc_control": "0x00000001",
+      "pre_enable": 0,
+      "post_enable": 2,
+      "private_control": "0x000000FF",
+      "canonical_a_sha256": "2f9fd211d1d389611267070cfbc936063b0b790a59245243feb404ee3c00daf6",
+      "canonical_b_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+      "a_equal_across_resume": true,
+      "b_equal_across_resume": true,
+      "csc_control_equal_across_resume": true,
+      "private_control_equal_across_resume": true,
+      "runtime_mmio_equal_across_resume": true
+    },
+    {
+      "plane": 1,
+      "runtime_mmio": "0x280B4000",
+      "runtime_mmio_expected": true,
+      "pre_csc_control": "0x00000001",
+      "post_csc_control": "0x00000001",
+      "pre_enable": 0,
+      "post_enable": 1,
+      "private_control": "0x00000100",
+      "canonical_a_sha256": "2f9fd211d1d389611267070cfbc936063b0b790a59245243feb404ee3c00daf6",
+      "canonical_b_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+      "a_equal_across_resume": true,
+      "b_equal_across_resume": true,
+      "csc_control_equal_across_resume": true,
+      "private_control_equal_across_resume": true,
+      "runtime_mmio_equal_across_resume": true
+    }
+  ],
+  "classifications": {
+    "lifecycle_pre_suspend_0x4000": "PHYSICALLY_VERIFIED",
+    "lifecycle_post_resume_0x100000": "PHYSICALLY_VERIFIED",
+    "runtime_mmio_plane0": "PHYSICALLY_VERIFIED",
+    "runtime_mmio_plane1": "PHYSICALLY_VERIFIED",
+    "live_csc_control_value_1_both_planes": "PHYSICALLY_VERIFIED",
+    "canonical_a_across_resume": "PHYSICALLY_VERIFIED",
+    "canonical_b_across_resume": "PHYSICALLY_VERIFIED",
+    "a_b_cache_stability_across_resume": "PHYSICALLY_VERIFIED",
+    "private_control_stability_across_resume": "PHYSICALLY_VERIFIED",
+    "output_domain_candidate": "B_STRONG_EVIDENCE",
+    "selected_affine_stage": "UNRESOLVED_PENDING_PHYSICAL_PERTURBATION"
+  },
+  "notes": [
+    "VitaSDK exposes csc_control but does not document its bit semantics.",
+    "Retail static mapping proves csc_params1 -> private/cache stage B and csc_params2 -> private/cache stage A.",
+    "Canonical stage A has a zero 3x3 CTM while canonical stage B is exact identity.",
+    "Established IFTU capture code independently uses csc_control=1 with csc_params1 populated and csc_params2 NULL, corroborating B as the control=1 transform path.",
+    "No stage is promoted to SELECTED until a controlled physical perturbation produces the expected visible output-domain change."
+  ]
+}
