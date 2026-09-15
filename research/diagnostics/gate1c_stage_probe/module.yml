@@ -1,0 +1,16 @@
+VbeGate1cStageProbe:
+  attributes: 0
+  version:
+    major: 1
+    minor: 0
+  main:
+    start: module_start
+    stop: module_stop
+  modules:
+    VbeGate1cStageProbe:
+      syscall: true
+      functions:
+        - vbeG1cGetStatus
+        - vbeG1cPause
+        - vbeG1cReset
+        - vbeG1cRead
