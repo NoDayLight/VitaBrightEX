@@ -10,4 +10,4 @@ VbeGate1bSnapshot:
     VbeGate1bSnapshot:
       syscall: true
       functions:
-        - vbeG1bTakeSnapshot
+        - vbeG1bGetCaptureBundle
