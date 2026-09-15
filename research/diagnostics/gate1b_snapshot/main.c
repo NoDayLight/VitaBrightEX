@@ -77,9 +77,17 @@ static int bytes_equal(const uint8_t *a, const uint8_t *b, uint32_t n) {
     return 1;
 }
 
-static int known_iftu_mmio(uint32_t base) {
-    return base == 0xE5020000u || base == 0xE5021000u ||
-           base == 0xE5030000u || base == 0xE5031000u;
+/*
+ * Gate-1B v4 authorization is intentionally plane-qualified and exact.
+ * These are the state[0] register bases physically observed on retail 3.65
+ * in v3 capture SHA-256 4770047b0ba25a2e1d25f023828fc634039eeb19ae79e0c1b2c90b91c32eb1a1.
+ * Retail A/B setters load this same state[0] value and dereference it directly
+ * for their +0x104..+0x168 register writes. Any other value remains unread.
+ */
+static int authorized_runtime_mmio(uint32_t plane, uint32_t base) {
+    if (plane == 0u) return base == VBE_G1B_PLANE0_RUNTIME_MMIO;
+    if (plane == 1u) return base == VBE_G1B_PLANE1_RUNTIME_MMIO;
+    return 0;
 }
 
 static void capture_plane(VbeG1bPlaneSnapshot *p, uint32_t plane, uintptr_t state) {
@@ -101,7 +109,7 @@ static void capture_plane(VbeG1bPlaneSnapshot *p, uint32_t plane, uintptr_t stat
 
     mmio = read32(state);
     p->mmio_base = mmio;
-    if (known_iftu_mmio(mmio)) {
+    if (authorized_runtime_mmio(plane, mmio)) {
         p->flags |= VBE_G1B_PLANE_MMIO_WHITELISTED;
         p->live_csc_control = read32((uintptr_t)mmio + LIVE_CSC_CONTROL_OFFSET);
         p->flags |= VBE_G1B_PLANE_CONTROL_READ;
