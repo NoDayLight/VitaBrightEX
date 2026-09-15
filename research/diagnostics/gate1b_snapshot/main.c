@@ -58,6 +58,13 @@ static void zero_bytes(void *dst, uint32_t n) {
     for (i = 0; i < n; ++i) p[i] = 0u;
 }
 
+static void copy_bytes_volatile(void *dst, const void *src, uint32_t n) {
+    volatile uint8_t *d = (volatile uint8_t *)dst;
+    const volatile uint8_t *s = (const volatile uint8_t *)src;
+    uint32_t i;
+    for (i = 0; i < n; ++i) d[i] = s[i];
+}
+
 static uint32_t read32(uintptr_t addr) {
     return *(const volatile uint32_t *)addr;
 }
@@ -143,7 +150,7 @@ static void publish_pre_suspend(void) {
     if (g_pre_suspend_published) return;
     make_snapshot(&local, VBE_G1B_CAPTURE_PRE_SUSPEND_EVENT);
     if (!__sync_bool_compare_and_swap(&g_pre_suspend_claimed, 0u, 1u)) return;
-    g_pre_suspend_snapshot = local;
+    copy_bytes_volatile(&g_pre_suspend_snapshot, &local, sizeof(local));
     g_pre_suspend_reason = local.capture_reason;
     __sync_synchronize();
     g_pre_suspend_published = 1u;
@@ -155,7 +162,7 @@ static void publish_post_resume(uint32_t reason, int require_active) {
     make_snapshot(&local, reason);
     if (require_active && !snapshot_active(&local)) return;
     if (!__sync_bool_compare_and_swap(&g_post_resume_claimed, 0u, 1u)) return;
-    g_post_resume_snapshot = local;
+    copy_bytes_volatile(&g_post_resume_snapshot, &local, sizeof(local));
     g_post_resume_reason = local.capture_reason;
     __sync_synchronize();
     g_post_resume_published = 1u;
@@ -216,8 +223,8 @@ int vbeG1bGetCaptureBundle(VbeG1bCaptureBundle *out) {
     b.status.pre_suspend_reason = g_pre_suspend_reason;
     b.status.post_resume_reason = g_post_resume_reason;
     __sync_synchronize();
-    b.snapshots[0] = g_pre_suspend_snapshot;
-    b.snapshots[1] = g_post_resume_snapshot;
+    copy_bytes_volatile(&b.snapshots[0], &g_pre_suspend_snapshot, sizeof(VbeG1bSnapshot));
+    copy_bytes_volatile(&b.snapshots[1], &g_post_resume_snapshot, sizeof(VbeG1bSnapshot));
 
     ENTER_SYSCALL(cs);
     ret = ksceKernelMemcpyKernelToUser(out, &b, sizeof(b));
