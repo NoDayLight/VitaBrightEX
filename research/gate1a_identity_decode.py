@@ -83,14 +83,23 @@ def validate_pairing(records):
     for inv,g in groups.items():
         require(len(g)==2,f'enable invocation {inv}: record count');g=sorted(g,key=lambda x:x['sequence']);require(g[0]['event_type']==ENABLE_ENTER and g[1]['event_type']==ENABLE_EXIT,f'enable invocation {inv}: malformed ENTER/EXIT');require(g[0]['plane']==g[1]['plane'],f'enable invocation {inv}: plane mismatch');require(g[0]['thread_id']==g[1]['thread_id'],f'enable invocation {inv}: thread mismatch')
 
+def require_canonical(records,phase,expected_count):
+    c=[r for r in records if r['event_type'] in (CSC_A,CSC_B)]
+    require(len(c)==expected_count,f'{phase} CSC count')
+    for r in c:
+        stage='A' if r['event_type']==CSC_A else 'B'
+        require(r['source_sha256']==CANON[stage],f'{phase} {stage}{r["plane"]} canonical hash drift')
+
 def validate_phase(records,phase):
     toks=focused_tokens(records)
-    if phase=='screen-power':require(toks==[],'screen-power unexpectedly hit Gate-1 boundary')
-    elif phase in ('boot','resume'):
-        require(toks==['B0','A0','B1','A1','ENABLE0','ENABLE1'],f'{phase} focused order {toks}')
-        c=[r for r in records if r['event_type'] in (CSC_A,CSC_B)];require(len(c)==4,f'{phase} CSC count')
-        for r in c:
-            stage='A' if r['event_type']==CSC_A else 'B';require(r['source_sha256']==CANON[stage],f'{phase} {stage}{r["plane"]} canonical hash drift')
+    if phase=='screen-power':
+        require(toks==[],'screen-power unexpectedly hit Gate-1 boundary')
+    elif phase=='boot':
+        require(toks==['B0','A0','B1','A1','B2','A2','B3','A3'],f'boot focused order {toks}')
+        require_canonical(records,'boot',8)
+    elif phase=='resume':
+        require(toks==['B0','A0','B1','A1','ENABLE0','ENABLE1'],f'resume focused order {toks}')
+        require_canonical(records,'resume',4)
 
 def decode_dump(raw:bytes,phase='generic'):
     require(len(raw)>=HEADER_SIZE+STATUS_SIZE,'truncated dump')
