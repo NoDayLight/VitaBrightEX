@@ -23,6 +23,6 @@ target_link_libraries(vbe_gate1a_status ${CMAKE_CURRENT_BINARY_DIR}/libVbeGate1I
 set(VITA_ELF_CREATE_FLAGS "")
 set(VITA_MAKE_FSELF_FLAGS "")
 vita_create_self(vbe_gate1a_drain.self vbe_gate1a_drain UNSAFE)
-vita_create_vpk(vbe_gate1a_drain.vpk VBEG1DRN vbe_gate1a_drain.self VERSION 01.00 NAME "VBE Gate-1A Identity Drain")
+vita_create_vpk(vbe_gate1a_drain.vpk VBEG1DRN0 vbe_gate1a_drain.self VERSION 01.00 NAME "VBE Gate-1A Identity Drain")
 vita_create_self(vbe_gate1a_status.self vbe_gate1a_status UNSAFE)
-vita_create_vpk(vbe_gate1a_status.vpk VBEG1STS vbe_gate1a_status.self VERSION 01.00 NAME "VBE Gate-1A Identity Status")
+vita_create_vpk(vbe_gate1a_status.vpk VBEG1STS0 vbe_gate1a_status.self VERSION 01.00 NAME "VBE Gate-1A Identity Status")
