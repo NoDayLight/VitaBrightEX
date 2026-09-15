@@ -1,0 +1,256 @@
+name: Gate-1D production Stage-B matrix candidate
+
+on:
+  push:
+    branches: [research-gate1d-production-matrix]
+    paths:
+      - 'matrix_backend*'
+      - 'matrix_policy_core.*'
+      - 'CMakeLists.txt'
+      - 'main.c'
+      - 'module.yml'
+      - 'tests/matrix_*'
+      - 'research/gate1d_*'
+      - 'research/DISPLAY-FEATURE-SCOPE.json'
+      - 'research/diagnostics/gate1d_matrix_control/**'
+      - '.github/workflows/gate1d-production-matrix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+  VDPM_SHA: c83b88a54ec13372515eeb8b3bdca4b10c36d721
+  TAIHEN_SHA: 309b3800bcb8ebbd5e4f5e5e920af3da3590b829
+  VITA_HEADERS_SHA: 5e1e7d38d766e4c1634a77f6e5249caab8c8f9cb
+  PRODUCTION_BASE: fc8ffbfcfd43a67e17a5c3b67e83a88bfef00b09
+  GATE1C_CLOSURE: 233f723fccfb3194edce9889e668cbe69f643194
+  GATE1C_CAPTURE_SHA: d1a75c76c48baf52f7cfa05b5d6ee6f2035f3c9aad1bfa4edcb618faf12ec723
+  IDENTITY_B_SHA: 5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5
+  RANGE_B_SHA: fff18ae2defe21c92e9a4e1e4795c85bfe6ba7f5548a1b90a2e1b46c707ee07e
+  MILD_IDENTITY_SHA: 090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50
+  MILD_RANGE_SHA: 8abe961127d94bcdd9e259cf65ae95e379ef13e67bc58c3afbeafe6c2e8f3eed
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      skprx_sha: ${{ steps.hashes.outputs.skprx_sha }}
+      mild_vpk_sha: ${{ steps.hashes.outputs.mild_vpk_sha }}
+      reset_vpk_sha: ${{ steps.hashes.outputs.reset_vpk_sha }}
+      status_vpk_sha: ${{ steps.hashes.outputs.status_vpk_sha }}
+      decoder_sha: ${{ steps.hashes.outputs.decoder_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Exact head, evidence and production-diff boundary
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+          git cat-file -e "$PRODUCTION_BASE^{commit}"
+          git cat-file -e "$GATE1C_CLOSURE^{commit}"
+          git merge-base --is-ancestor "$PRODUCTION_BASE" "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GATE1C_CLOSURE" "$GITHUB_SHA"
+          python3 - <<'PY' | tee gate1d-evidence-contract.txt
+          import json
+          from pathlib import Path
+          e=json.loads(Path('research/gate1d_evidence_manifest.json').read_text())
+          s=json.loads(Path('research/DISPLAY-FEATURE-SCOPE.json').read_text())
+          assert e['production_base']['commit']=='fc8ffbfcfd43a67e17a5c3b67e83a88bfef00b09'
+          assert e['gate1c']['closure_commit']=='233f723fccfb3194edce9889e668cbe69f643194'
+          assert e['gate1c']['physical_capture_sha256']=='d1a75c76c48baf52f7cfa05b5d6ee6f2035f3c9aad1bfa4edcb618faf12ec723'
+          assert e['target']['selected_stage'].startswith('B / csc_params1')
+          by={x['class']:x for x in e['supported_b_baselines']}
+          assert by['CANONICAL_IDENTITY']['sha256']=='5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5'
+          assert by['SONY_FULL_TO_LIMITED_RANGE']['sha256']=='fff18ae2defe21c92e9a4e1e4795c85bfe6ba7f5548a1b90a2e1b46c707ee07e'
+          assert s['backend_state']['MATRIX_SIDE']=='B_STAGE_PHYSICALLY_VERIFIED_PCH2000_FW365'
+          assert s['backend_state']['POST_ADD_SIDE']=='ADDITIVE_SEMANTICS_PENDING'
+          assert s['backend_state']['CHANNEL_ORDER']=='INFERRED_ONLY_PENDING_PROOF'
+          assert any(x['feature']=='cct_white_balance' and x['sub_blocker']=='CHANNEL_ORDER_PENDING' for x in s['features'])
+          assert any(x['feature']=='luma_aware_saturation' and x['sub_blocker']=='CHANNEL_ORDER_PENDING' for x in s['features'])
+          print('GATE1D_EVIDENCE_MANIFEST=PASS')
+          print('GATE1D_SCOPE_LEDGER=PASS')
+          PY
+          git diff --name-only "$PRODUCTION_BASE" "$GITHUB_SHA" | tee gate1d-full-diff.txt
+          python3 - <<'PY' | tee gate1d-production-diff-boundary.txt
+          from pathlib import Path
+          changed=Path('gate1d-full-diff.txt').read_text().splitlines()
+          allowed={'CMakeLists.txt','main.c','module.yml','matrix_backend.c','matrix_backend.h','matrix_backend_core.c','matrix_backend_core.h','matrix_policy_core.c','matrix_policy_core.h'}
+          prod=[p for p in changed if not p.startswith('research/') and not p.startswith('.github/') and not p.startswith('tests/')]
+          extra=sorted(set(prod)-allowed)
+          assert not extra, extra
+          print('GATE1D_PRODUCTION_DIFF_BOUNDARY=PASS')
+          print('PRODUCTION_FILES='+' '.join(sorted(prod)))
+          PY
+
+      - name: Host matrix, publication and source contracts
+        run: |
+          set -euxo pipefail
+          python3 research/gate1d_source_contract.py | tee gate1d-source-contract.txt
+          python3 -m py_compile research/gate1d_matrix_status_decode.py
+          cc -std=c99 -Wall -Wextra -Werror -O2 -I. tests/matrix_backend_core_host.c matrix_backend_core.c -o /tmp/matrix-core-host
+          /tmp/matrix-core-host | tee gate1d-matrix-core-host.txt
+          cc -std=c99 -Wall -Wextra -Werror -O2 -pthread -I. tests/matrix_policy_host.c matrix_policy_core.c matrix_backend_core.c -o /tmp/matrix-policy-host
+          /tmp/matrix-policy-host | tee gate1d-matrix-policy-host.txt
+          python3 - <<'PY' | tee gate1d-exact-object-hashes.txt
+          import hashlib,struct
+          identity=[0,0,1023,0,1023,0,512,0,0,0,512,0,0,0,512]
+          limited=[64,64,940,64,940,64,439,0,0,0,439,0,0,0,439]
+          mild=identity.copy();mild[6]=461
+          limited_mild=limited.copy();limited_mild[6]=395
+          def h(x):return hashlib.sha256(struct.pack('<15I',*x)).hexdigest()
+          assert h(identity)==__import__('os').environ['IDENTITY_B_SHA']
+          assert h(limited)==__import__('os').environ['RANGE_B_SHA']
+          assert h(mild)==__import__('os').environ['MILD_IDENTITY_SHA']
+          assert h(limited_mild)==__import__('os').environ['MILD_RANGE_SHA']
+          assert limited_mild[:6]==limited[:6]
+          print('IDENTITY_B_SHA256='+h(identity));print('RANGE_B_SHA256='+h(limited))
+          print('MILD_IDENTITY_SHA256='+h(mild));print('MILD_RANGE_SHA256='+h(limited_mild))
+          print('GATE1D_EXACT_OBJECT_HASHES=PASS')
+          PY
+
+      - name: Audit pinned taiHEN reapply mechanics
+        run: |
+          set -euxo pipefail
+          git init -q taihen-audit
+          git -C taihen-audit remote add origin https://github.com/yifanlu/taiHEN.git
+          git -C taihen-audit fetch -q --depth 1 origin "$TAIHEN_SHA"
+          git -C taihen-audit checkout -q --detach FETCH_HEAD
+          test "$(git -C taihen-audit rev-parse HEAD)" = "$TAIHEN_SHA"
+          python3 research/gate1d_taihen_reapply_audit.py --taihen taihen-audit --json gate1d-taihen-reapply.json | tee gate1d-taihen-reapply.txt
+          grep -F 'IMMEDIATE_REAPPLY=BLOCKED' gate1d-taihen-reapply.txt
+
+      - name: Fetch pinned SDK sources
+        run: |
+          set -euxo pipefail
+          git init -q vdpm
+          git -C vdpm remote add origin https://github.com/vitasdk/vdpm.git
+          git -C vdpm fetch -q --depth 1 origin "$VDPM_SHA"
+          git -C vdpm checkout -q --detach FETCH_HEAD
+          git init -q vita-headers-audit
+          git -C vita-headers-audit remote add origin https://github.com/vitasdk/vita-headers.git
+          git -C vita-headers-audit fetch -q --depth 1 origin "$VITA_HEADERS_SHA"
+          git -C vita-headers-audit checkout -q --detach FETCH_HEAD
+          test "$(git -C vdpm rev-parse HEAD)" = "$VDPM_SHA"
+          test "$(git -C vita-headers-audit rev-parse HEAD)" = "$VITA_HEADERS_SHA"
+
+      - name: Build production SKPRX and research-only control clients
+        run: |
+          set -euxo pipefail
+          bash vdpm/bootstrap-vitasdk.sh
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+          "$VITASDK/bin/vdpm" install taihen
+          "$VITASDK/bin/vdpm" list taihen | tee taihen-package.txt
+          cmake -S . -B gate1d-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          cmake --build gate1d-build --parallel
+          test -s gate1d-build/vitabright.skprx
+          stub="$(find gate1d-build -type f -name 'libvitabright_stub.a' -print -quit)"
+          test -n "$stub"
+          echo "PRODUCTION_STUB=$stub" | tee gate1d-production-stub.txt
+          cmake -S research/diagnostics/gate1d_matrix_control -B gate1d-control-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" -DVBE_PRODUCTION_STUB="$GITHUB_WORKSPACE/$stub"
+          cmake --build gate1d-control-build --parallel
+          test -s gate1d-control-build/vbe_gate1d_mild.vpk
+          test -s gate1d-control-build/vbe_gate1d_reset.vpk
+          test -s gate1d-control-build/vbe_gate1d_status.vpk
+          unzip -p gate1d-control-build/vbe_gate1d_mild.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1DM90
+          unzip -p gate1d-control-build/vbe_gate1d_reset.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1DRS0
+          unzip -p gate1d-control-build/vbe_gate1d_status.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1DST0
+          echo 'GATE1D_CONTROL_VPK_TITLE_IDS=PASS' | tee gate1d-control-title-ids.txt
+          python3 research/gate0_v7_import_manifest.py gate1d-build/vitabright.velf --nid-db vita-headers-audit/db/360 --nid-db vita-headers-audit/db/363 --output gate1d-production-imports.txt
+          cat gate1d-production-imports.txt
+          ! grep -F 'library=SceLowio' gate1d-production-imports.txt
+          ! grep -F 'SceIftuForDriver' gate1d-production-imports.txt
+          echo 'GATE1D_NO_DIRECT_LOWIO_IMPORT=PASS' | tee gate1d-import-contract.txt
+
+      - name: Package exact Gate-1D candidate
+        id: hashes
+        run: |
+          set -euxo pipefail
+          rm -rf gate1d-package
+          mkdir -p gate1d-package/include gate1d-package/evidence
+          cp gate1d-build/vitabright.skprx gate1d-package/
+          cp gate1d-control-build/vbe_gate1d_mild.vpk gate1d-package/
+          cp gate1d-control-build/vbe_gate1d_reset.vpk gate1d-package/
+          cp gate1d-control-build/vbe_gate1d_status.vpk gate1d-package/
+          cp matrix_backend.h matrix_backend_core.h matrix_policy_core.h gate1d-package/include/
+          cp research/gate1d_matrix_status_decode.py gate1d-package/
+          cp research/gate1d_evidence_manifest.json research/DISPLAY-FEATURE-SCOPE.json gate1d-package/evidence/
+          cp gate1d-evidence-contract.txt gate1d-production-diff-boundary.txt gate1d-source-contract.txt gate1d-matrix-core-host.txt gate1d-matrix-policy-host.txt gate1d-exact-object-hashes.txt gate1d-taihen-reapply.txt gate1d-taihen-reapply.json gate1d-production-imports.txt gate1d-import-contract.txt gate1d-control-title-ids.txt gate1d-production-stub.txt gate1d-package/evidence/
+          printf '%s\n' "$GITHUB_SHA" > gate1d-package/WORKFLOW_COMMIT.txt
+          printf '%s\n' "workflow=Gate-1D production Stage-B matrix candidate" "commit=$GITHUB_SHA" "production_base=$PRODUCTION_BASE" "gate1c_closure=$GATE1C_CLOSURE" "gate1c_capture_sha=$GATE1C_CAPTURE_SHA" "target=PCH-2000/FW3.65" "stage=B/csc_params1/private_D64F4C6B" "matrix_semantics=result_CTM=Sony_CTM_x_user_CTM; Sony_non_CTM_words_preserved" "immediate_reapply=BLOCKED_PINNED_TAIHEN_CHAIN_ORDER" "set_reset_semantics=ACCEPTED_PENDING_REPLAY" "mild_component0=461/512" "mild_identity_sha=$MILD_IDENTITY_SHA" "mild_range_sha=$MILD_RANGE_SHA" > gate1d-package/BUILD-METADATA.txt
+          (cd gate1d-package && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          skprx_sha="$(sha256sum gate1d-package/vitabright.skprx | awk '{print $1}')"
+          mild_vpk_sha="$(sha256sum gate1d-package/vbe_gate1d_mild.vpk | awk '{print $1}')"
+          reset_vpk_sha="$(sha256sum gate1d-package/vbe_gate1d_reset.vpk | awk '{print $1}')"
+          status_vpk_sha="$(sha256sum gate1d-package/vbe_gate1d_status.vpk | awk '{print $1}')"
+          decoder_sha="$(sha256sum gate1d-package/gate1d_matrix_status_decode.py | awk '{print $1}')"
+          echo "skprx_sha=$skprx_sha" >> "$GITHUB_OUTPUT"
+          echo "mild_vpk_sha=$mild_vpk_sha" >> "$GITHUB_OUTPUT"
+          echo "reset_vpk_sha=$reset_vpk_sha" >> "$GITHUB_OUTPUT"
+          echo "status_vpk_sha=$status_vpk_sha" >> "$GITHUB_OUTPUT"
+          echo "decoder_sha=$decoder_sha" >> "$GITHUB_OUTPUT"
+          echo "SKPRX_SHA256=$skprx_sha"; echo "MILD_VPK_SHA256=$mild_vpk_sha"; echo "RESET_VPK_SHA256=$reset_vpk_sha"; echo "STATUS_VPK_SHA256=$status_vpk_sha"; echo "DECODER_SHA256=$decoder_sha"
+          cat gate1d-package/SHA256SUMS
+
+      - name: Upload exact Gate-1D artifact
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vbe-gate1d-production-matrix-${{ github.sha }}
+          path: gate1d-package/
+          if-no-files-found: error
+          compression-level: 6
+
+  independent-verify:
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    env:
+      ARTIFACT_ID: ${{ needs.candidate.outputs.artifact_id }}
+      ARTIFACT_DIGEST: ${{ needs.candidate.outputs.artifact_digest }}
+      EXPECTED_SKPRX: ${{ needs.candidate.outputs.skprx_sha }}
+      EXPECTED_MILD: ${{ needs.candidate.outputs.mild_vpk_sha }}
+      EXPECTED_RESET: ${{ needs.candidate.outputs.reset_vpk_sha }}
+      EXPECTED_STATUS: ${{ needs.candidate.outputs.status_vpk_sha }}
+      EXPECTED_DECODER: ${{ needs.candidate.outputs.decoder_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download exact artifact and independently verify
+        run: |
+          set -euxo pipefail
+          curl -fL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" -o gate1d-artifact.zip
+          digest="${ARTIFACT_DIGEST#sha256:}"
+          echo "$digest  gate1d-artifact.zip" | sha256sum -c -
+          unzip -q gate1d-artifact.zip -d verify
+          commit_file="$(find verify -name WORKFLOW_COMMIT.txt -print -quit)"; test -n "$commit_file"
+          pkg="$(dirname "$commit_file")"
+          test "$(cat "$commit_file")" = "$GITHUB_SHA"
+          (cd "$pkg" && sha256sum -c SHA256SUMS)
+          test "$(sha256sum "$pkg/vitabright.skprx" | awk '{print $1}')" = "$EXPECTED_SKPRX"
+          test "$(sha256sum "$pkg/vbe_gate1d_mild.vpk" | awk '{print $1}')" = "$EXPECTED_MILD"
+          test "$(sha256sum "$pkg/vbe_gate1d_reset.vpk" | awk '{print $1}')" = "$EXPECTED_RESET"
+          test "$(sha256sum "$pkg/vbe_gate1d_status.vpk" | awk '{print $1}')" = "$EXPECTED_STATUS"
+          test "$(sha256sum "$pkg/gate1d_matrix_status_decode.py" | awk '{print $1}')" = "$EXPECTED_DECODER"
+          unzip -p "$pkg/vbe_gate1d_mild.vpk" sce_sys/param.sfo | strings | grep -Fx VBEG1DM90
+          unzip -p "$pkg/vbe_gate1d_reset.vpk" sce_sys/param.sfo | strings | grep -Fx VBEG1DRS0
+          unzip -p "$pkg/vbe_gate1d_status.vpk" sce_sys/param.sfo | strings | grep -Fx VBEG1DST0
+          grep -F 'MATRIX_BACKEND_CORE_HOST=PASS' "$pkg/evidence/gate1d-matrix-core-host.txt"
+          grep -F 'MATRIX_POLICY_HOST=PASS' "$pkg/evidence/gate1d-matrix-policy-host.txt"
+          grep -F 'GATE1D_SOURCE_CONTRACT=PASS' "$pkg/evidence/gate1d-source-contract.txt"
+          grep -F 'IMMEDIATE_REAPPLY=BLOCKED' "$pkg/evidence/gate1d-taihen-reapply.txt"
+          grep -F 'GATE1D_NO_DIRECT_LOWIO_IMPORT=PASS' "$pkg/evidence/gate1d-import-contract.txt"
+          python3 -m py_compile "$pkg/gate1d_matrix_status_decode.py"
+          echo 'GATE1D_INDEPENDENT_VERIFY=PASS'
+          echo "ARTIFACT_ID=$ARTIFACT_ID"; echo "ARTIFACT_DIGEST=$ARTIFACT_DIGEST"; echo "SKPRX_SHA256=$EXPECTED_SKPRX"; echo "MILD_VPK_SHA256=$EXPECTED_MILD"; echo "RESET_VPK_SHA256=$EXPECTED_RESET"; echo "STATUS_VPK_SHA256=$EXPECTED_STATUS"; echo "DECODER_SHA256=$EXPECTED_DECODER"
