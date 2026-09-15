@@ -6,6 +6,7 @@ from collections import defaultdict
 from vita_elf_audit import VitaElf,Reachability
 from topology_common import all_insns
 
+# Gate-1A: intentionally scoped to the physically observed SceDisplay A/B/enable boundary.
 DISPLAY_SHA='83ef39adf741a4bbbc1cec67d00e2594de1d17be0f5ea6cc77c935eae46065e5'
 NIDS={'A':0x0FCBF457,'B':0xD64F4C6B,'ENABLE':0x0D7C02F7}
 A_WORDS=[0,0x202,0x3ff,0,0,0,0,0,0,0,0,0,0,0,0]
