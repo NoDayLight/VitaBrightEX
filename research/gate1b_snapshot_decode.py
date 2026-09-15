@@ -5,7 +5,7 @@ from pathlib import Path
 
 MAGIC = 0x42314756
 BUNDLE_MAGIC = 0x32424756
-VERSION = 3
+VERSION = 4
 FW_365 = 0x03650000
 PLANE_SIZE = 152
 SNAPSHOT_SIZE = 344
@@ -17,6 +17,7 @@ SNAP_HEAD = struct.Struct('<10I')
 PLANE_HEAD = struct.Struct('<8I')
 A_CANONICAL_SHA256 = '2f9fd211d1d389611267070cfbc936063b0b790a59245243feb404ee3c00daf6'
 B_CANONICAL_SHA256 = '5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5'
+EXPECTED_MMIO = {0: 0x280B2000, 1: 0x280B4000}
 REASON = {
     0: 'NONE',
     1: 'PRE_SUSPEND_4000',
@@ -64,6 +65,7 @@ def parse_snapshot(raw: bytes, off: int) -> dict:
         row['cache_b_words'] = csc_words(b)
         row['control_read'] = bool(row['flags'] & PLANE_CONTROL_READ)
         row['enable_stable'] = bool(row['flags'] & PLANE_ENABLE_STABLE)
+        row['mmio_expected'] = row['mmio_base'] == EXPECTED_MMIO.get(row['plane'])
         out['planes'].append(row)
     return out
 
@@ -79,6 +81,11 @@ def validate_snapshot(x: dict, *, published: bool) -> list[str]:
     if [p['plane'] for p in x['planes']] != [0, 1]:
         errors.append(f'unexpected plane order {[p["plane"] for p in x["planes"]]}')
     for p in x['planes']:
+        expected = EXPECTED_MMIO.get(p['plane'])
+        if expected is None:
+            errors.append(f'plane {p["plane"]}: no authorized runtime MMIO mapping')
+        elif p['mmio_base'] != expected:
+            errors.append(f'plane {p["plane"]}: runtime MMIO drift (0x{p["mmio_base"]:08X} != 0x{expected:08X})')
         if not p['control_read']: errors.append(f'plane {p["plane"]}: csc_control unread')
         if not p['enable_stable']:
             errors.append(f'plane {p["plane"]}: enable scalar unstable ({p["enable_state_before"]}->{p["enable_state_after"]})')
@@ -95,6 +102,9 @@ def compare(a: dict, b: dict) -> dict:
             'control_pre': pa['live_csc_control'],
             'control_post': pb['live_csc_control'],
             'control_equal': pa['live_csc_control'] == pb['live_csc_control'],
+            'mmio_pre': pa['mmio_base'],
+            'mmio_post': pb['mmio_base'],
+            'mmio_equal': pa['mmio_base'] == pb['mmio_base'],
             'cache_a_equal': pa['cache_a_sha256'] == pb['cache_a_sha256'],
             'cache_b_equal': pa['cache_b_sha256'] == pb['cache_b_sha256'],
             'private_control_pre': pa['private_control'],
@@ -162,6 +172,8 @@ def parse_bundle_bytes(raw: bytes, authoritative: bool = False) -> dict:
         if pre['capture_sequence'] >= post['capture_sequence']:
             errors.append(f'capture sequence not increasing ({pre["capture_sequence"]}->{post["capture_sequence"]})')
         for row in out['comparison']['planes']:
+            if not row['mmio_equal']:
+                errors.append(f'plane {row["plane"]}: runtime MMIO changed across resume (0x{row["mmio_pre"]:08X}->0x{row["mmio_post"]:08X})')
             if not row['control_equal']:
                 errors.append(f'plane {row["plane"]}: csc_control changed across resume (0x{row["control_pre"]:08X}->0x{row["control_post"]:08X})')
             if not row['cache_a_equal']: errors.append(f'plane {row["plane"]}: A cache changed across resume')
@@ -199,7 +211,7 @@ def fmt_bundle(x: dict) -> str:
         for p in snap['planes']:
             lines.extend([
                 f"{label}_P{p['plane']}_FLAGS=0x{p['flags']:08X}",
-                f"{label}_P{p['plane']}_MMIO=0x{p['mmio_base']:08X}",
+                f"{label}_P{p['plane']}_MMIO=0x{p['mmio_base']:08X} expected={str(p['mmio_expected']).upper()}",
                 f"{label}_P{p['plane']}_CSC_CONTROL=0x{p['live_csc_control']:08X}",
                 f"{label}_P{p['plane']}_ENABLE={p['enable_state_before']}->{p['enable_state_after']} stable={str(p['enable_stable']).upper()}",
                 f"{label}_P{p['plane']}_PRIVATE_CONTROL=0x{p['private_control']:08X}",
@@ -231,18 +243,19 @@ def self_test() -> None:
         for i in range(2):
             poff = off + SNAP_HEAD.size + i * PLANE_SIZE
             PLANE_HEAD.pack_into(raw, poff, i, full_flags, 0x90000000 + i * 0x214,
-                                 0xE5020000 + i * 0x1000, 1, 2, 2, 0x100)
+                                 EXPECTED_MMIO[i], 1, 2, 2, 0x100)
             raw[poff + 32:poff + 92] = a
             raw[poff + 92:poff + 152] = b
     x = parse_bundle_bytes(bytes(raw), authoritative=True)
     assert x['authoritative_pass']
     assert all(p['cache_a_canonical'] and p['cache_b_canonical'] for snap in x['snapshots'] for p in snap['planes'])
+    assert all(p['mmio_expected'] for snap in x['snapshots'] for p in snap['planes'])
     assert all(p['live_csc_control'] == 1 for snap in x['snapshots'] for p in snap['planes'])
     print('GATE1B_SNAPSHOT_DECODER_SELFTEST=PASS')
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description='Decode Gate-1B v3 system-event CSC-control bundle')
+    ap = argparse.ArgumentParser(description='Decode Gate-1B v4 runtime-mapped CSC-control bundle')
     ap.add_argument('file', nargs='?', type=Path)
     ap.add_argument('--json', action='store_true')
     ap.add_argument('--authoritative', action='store_true')
