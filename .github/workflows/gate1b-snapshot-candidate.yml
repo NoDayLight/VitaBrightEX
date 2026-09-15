@@ -1,4 +1,4 @@
-name: Gate-1B v3 read-only lifecycle snapshot candidate
+name: Gate-1B v4 runtime-mapped CSC-control snapshot candidate
 
 on:
   push:
@@ -23,6 +23,7 @@ env:
   STATIC_SEMANTICS_RUN: '35014928004'
   STATIC_SEMANTICS_ARTIFACT: '10415401868'
   STATIC_SEMANTICS_DIGEST: fb6faaf351d6e12a91916b47ffebf4360e6c84f3d01def3ac6aaa5c9f61d8e3f
+  V3_PHYSICAL_CAPTURE_SHA: 4770047b0ba25a2e1d25f023828fc634039eeb19ae79e0c1b2c90b91c32eb1a1
 
 jobs:
   candidate:
@@ -37,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Exact head and v3 read-only source contract
+      - name: Exact head and v4 read-only source contract
         run: |
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -62,7 +63,9 @@ jobs:
           bad = [x for x in forbidden if x in s]
           assert not bad, bad
 
-          assert '#define VBE_G1B_VERSION 3u' in h
+          assert '#define VBE_G1B_VERSION 4u' in h
+          assert '#define VBE_G1B_PLANE0_RUNTIME_MMIO 0x280B2000u' in h
+          assert '#define VBE_G1B_PLANE1_RUNTIME_MMIO 0x280B4000u' in h
           assert '#define VBE_G1B_SYS_EVENT_PRE_SUSPEND 0x00004000u' in h
           assert '#define VBE_G1B_SYS_EVENT_POST_RESUME 0x00100000u' in h
           assert '#define VBE_G1B_REQUIRED_OBSERVERS VBE_G1B_OBSERVER_SYSEVENT' in h
@@ -75,10 +78,14 @@ jobs:
           assert 'LIVE_CSC_CONTROL_OFFSET 0x100u' in s
           assert 'CACHE_A_OFFSET 0x10Cu' in s and 'CACHE_B_OFFSET 0x148u' in s
           assert 'ENABLE_STATE_OFFSET 0x1E8u' in s and 'PRIVATE_CONTROL_OFFSET 0x1F8u' in s
-          assert 'known_iftu_mmio(mmio)' in s
+          assert 'authorized_runtime_mmio(plane, mmio)' in s
+          assert 'base == VBE_G1B_PLANE0_RUNTIME_MMIO' in s
+          assert 'base == VBE_G1B_PLANE1_RUNTIME_MMIO' in s
+          assert '0xE5020000u' not in s and '0xE5030000u' not in s
           assert 'read32((uintptr_t)mmio + LIVE_CSC_CONTROL_OFFSET)' in s
           assert 'VBE_G1B_CAPTURE_PRE_SUSPEND_4000' in s
           assert 'VBE_G1B_CAPTURE_POST_RESUME_100000' in s
+          assert '4770047b0ba25a2e1d25f023828fc634039eeb19ae79e0c1b2c90b91c32eb1a1' in s
 
           print('GATE1B_SNAPSHOT_SOURCE_SAFETY=PASS')
           print('NO_HOOKS=PASS')
@@ -86,7 +93,8 @@ jobs:
           print('NO_DISPLAY_OR_IFTU_MUTATION=PASS')
           print('NO_HOOK_TIME_IO=PASS')
           print('NO_RUNTIME_TAIHEN_RELEASE=PASS')
-          print('MMIO_READ_WHITELIST=PASS')
+          print('RUNTIME_MMIO_BINDING=PASS')
+          print('V3_PHYSICAL_BASE_PROVENANCE=PASS')
           print('LOWIO_SEGMENT_OFFSETS=PASS')
           PY
 
@@ -94,7 +102,7 @@ jobs:
           #include "research/diagnostics/gate1b_snapshot/gate1b_snapshot_protocol.h"
           #include <stddef.h>
           int main(void){return !(
-            VBE_G1B_VERSION==3u &&
+            VBE_G1B_VERSION==4u &&
             sizeof(VbeG1bPlaneSnapshot)==152u &&
             sizeof(VbeG1bSnapshot)==344u &&
             sizeof(VbeG1bCaptureStatus)==64u &&
@@ -107,6 +115,8 @@ jobs:
             VBE_G1B_LOWIO_SEGMENT==1u &&
             VBE_G1B_PLANE0_OFFSET==0x37Cu &&
             VBE_G1B_PLANE1_OFFSET==0x590u &&
+            VBE_G1B_PLANE0_RUNTIME_MMIO==0x280B2000u &&
+            VBE_G1B_PLANE1_RUNTIME_MMIO==0x280B4000u &&
             VBE_G1B_SYS_EVENT_PRE_SUSPEND==0x00004000u &&
             VBE_G1B_SYS_EVENT_POST_RESUME==0x00100000u
           );}
@@ -163,7 +173,7 @@ jobs:
           grep -F 'library=taihenForKernel' gate1b-snapshot-imports.txt
           grep -F 'library=taihenModuleUtils' gate1b-snapshot-imports.txt
 
-      - name: Package exact v3 snapshot candidate
+      - name: Package exact v4 snapshot candidate
         id: hashes
         run: |
           set -euxo pipefail
@@ -177,20 +187,23 @@ jobs:
           cp gate1b-snapshot-source-safety.txt gate1b-snapshot-decoder-selftest.txt gate1b-snapshot-protocol-abi.txt gate1b-snapshot-imports.txt gate1b-vpk-title-id.txt gate1b-snapshot-package/
           printf '%s\n' "$GITHUB_SHA" > gate1b-snapshot-package/WORKFLOW_COMMIT.txt
           printf '%s\n' \
-            "workflow=Gate-1B v3 read-only lifecycle snapshot candidate" \
+            "workflow=Gate-1B v4 runtime-mapped CSC-control snapshot candidate" \
             "commit=$GITHUB_SHA" \
             "firmware=3.65" \
-            "protocol=3" \
+            "protocol=4" \
             "title_id=VBEG1BSN0" \
             "static_semantics_head=$STATIC_SEMANTICS_HEAD" \
             "static_semantics_run=$STATIC_SEMANTICS_RUN" \
             "static_semantics_artifact=$STATIC_SEMANTICS_ARTIFACT" \
             "static_semantics_digest=$STATIC_SEMANTICS_DIGEST" \
+            "v3_physical_capture_sha=$V3_PHYSICAL_CAPTURE_SHA" \
             "capture=pre-suspend resume0/event0x4000 + post-resume resume1/event0x100000" \
             "iftu_hooks=none" \
             "lowio_segment=1" \
             "plane0_offset=0x37C" \
             "plane1_offset=0x590" \
+            "runtime_mmio_p0=0x280B2000" \
+            "runtime_mmio_p1=0x280B4000" \
             > gate1b-snapshot-package/BUILD-METADATA.txt
           (cd gate1b-snapshot-package && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
           skprx_sha="$(sha256sum gate1b-snapshot-package/vbe_gate1b_snapshot.skprx | awk '{print $1}')"
@@ -204,11 +217,11 @@ jobs:
           echo "DECODER_SHA256=$decoder_sha"
           cat gate1b-snapshot-package/SHA256SUMS
 
-      - name: Upload exact v3 snapshot artifact
+      - name: Upload exact v4 snapshot artifact
         id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: vbe-gate1b-v3-snapshot-${{ github.sha }}
+          name: vbe-gate1b-v4-snapshot-${{ github.sha }}
           path: gate1b-snapshot-package/
           if-no-files-found: error
           compression-level: 6
@@ -236,10 +249,10 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
-            -o gate1b-v3-artifact.zip
+            -o gate1b-v4-artifact.zip
           digest="${ARTIFACT_DIGEST#sha256:}"
-          echo "$digest  gate1b-v3-artifact.zip" | sha256sum -c -
-          unzip -q gate1b-v3-artifact.zip -d verify
+          echo "$digest  gate1b-v4-artifact.zip" | sha256sum -c -
+          unzip -q gate1b-v4-artifact.zip -d verify
           commit_file="$(find verify -name WORKFLOW_COMMIT.txt -print -quit)"
           test -n "$commit_file"
           pkg="$(dirname "$commit_file")"
@@ -254,11 +267,13 @@ jobs:
           grep -F 'NO_HOOKS=PASS' "$pkg/gate1b-snapshot-source-safety.txt"
           grep -F 'SYSTEM_EVENT_PAIR_4000_100000=PASS' "$pkg/gate1b-snapshot-source-safety.txt"
           grep -F 'NO_DISPLAY_OR_IFTU_MUTATION=PASS' "$pkg/gate1b-snapshot-source-safety.txt"
+          grep -F 'RUNTIME_MMIO_BINDING=PASS' "$pkg/gate1b-snapshot-source-safety.txt"
+          grep -F 'V3_PHYSICAL_BASE_PROVENANCE=PASS' "$pkg/gate1b-snapshot-source-safety.txt"
           grep -F 'GATE1B_SNAPSHOT_PROTOCOL_ABI=PASS' "$pkg/gate1b-snapshot-protocol-abi.txt"
           ! grep -F 'library=SceModulemgrForKernel' "$pkg/gate1b-snapshot-imports.txt"
           ! grep -F 'library=SceLowio' "$pkg/gate1b-snapshot-imports.txt"
           python3 "$pkg/gate1b_snapshot_decode.py" --self-test
-          echo 'GATE1B_V3_SNAPSHOT_INDEPENDENT_VERIFY=PASS'
+          echo 'GATE1B_V4_SNAPSHOT_INDEPENDENT_VERIFY=PASS'
           echo "ARTIFACT_ID=$ARTIFACT_ID"
           echo "ARTIFACT_DIGEST=$ARTIFACT_DIGEST"
           echo "SKPRX_SHA256=$EXPECTED_SKPRX"
