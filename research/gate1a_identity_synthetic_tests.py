@@ -28,6 +28,9 @@ def canonical(stage):
     words={'A':[0,0x202,0x3ff]+[0]*12,'B':[0,0,0x3ff,0,0x3ff,0,0x200,0,0,0,0x200,0,0,0,0x200]}[stage]
     return struct.pack('<15I',*words)
 
+def noncanonical(stage,plane):
+    b=bytearray(canonical(stage));struct.pack_into('<I',b,0,0x1000+(plane<<4)+(1 if stage=='A' else 2));return bytes(b)
+
 def pack_dump(rs):
     n=len(rs);s=status(n,n,n);h=d.HDR.pack(d.DUMP_MAGIC,d.VERSION,d.HEADER_SIZE,d.STATUS_SIZE,d.RECORD_SIZE,n,d.REQUIRED,0,0,1,d.LIFECYCLE_PAUSED,0,0,0,0,0)
     return h+s+b''.join(rs)
@@ -42,7 +45,8 @@ def boot_dump():
     rs=[];seq=1;inv=1
     for pl in range(4):
         for ev,st in ((d.CSC_B,'B'),(d.CSC_A,'A')):
-            rs.append(rec(seq,ev,pl,inv,canonical(st)));seq+=1;inv+=1
+            payload=canonical(st) if pl in (0,1) else noncanonical(st,pl)
+            rs.append(rec(seq,ev,pl,inv,payload));seq+=1;inv+=1
     return pack_dump(rs)
 
 def reject(name,raw,needle=None,phase='resume'):
