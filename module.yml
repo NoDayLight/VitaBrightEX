@@ -30,3 +30,7 @@ vitabright:
         - vitabrightFilterGetParams
         - vitabrightFilterSetParams
         - vitabrightFilterReset
+        - vitabrightMatrixGetCapabilities
+        - vitabrightMatrixSetRequest
+        - vitabrightMatrixReset
+        - vitabrightMatrixGetStatus
