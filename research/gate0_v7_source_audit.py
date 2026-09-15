@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import re
+import subprocess
+import tempfile
+
 ROOT=Path(__file__).resolve().parent
 MAIN=ROOT/'diagnostics/gate0_observer/main.c'
 CORE=ROOT/'diagnostics/gate0_observer/observer_lifecycle_core.h'
 PROTO=ROOT/'diagnostics/gate0_observer/gate0_protocol_v7.h'
 CMAKE=ROOT/'diagnostics/gate0_observer/CMakeLists.txt'
-s=MAIN.read_text();core=CORE.read_text();proto=PROTO.read_text();cmake=CMAKE.read_text()
+RELOC=ROOT/'diagnostics/gate0_observer/panel_relocation_signature_core.h'
+RELOC_HOST=ROOT/'gate0_v7_relocation_signature_host.c'
+s=MAIN.read_text();core=CORE.read_text();proto=PROTO.read_text();cmake=CMAKE.read_text();reloc=RELOC.read_text()
 def fail(x):raise SystemExit(x)
 for token in ('taiHookReleaseForKernel','taiInject','ksceIo','sceIo','printf','snprintf','malloc','calloc','realloc','ksceKernelAlloc','CreateThread','CreateTimer','DelayThread','Wait','SetBrightness','SetDisplayColorSpace'):
  if token in s:fail('forbidden observer token: '+token)
@@ -31,6 +36,31 @@ for token in ('"SceKernelModulemgr"','0x92C9FFC2u','0xDAA90093u','module_get_exp
 resolver=s.index('module_get_export_func(KERNEL_PID,"SceKernelModulemgr"')
 first_hook=s.index('install_export(&g_ref_csc_a')
 if resolver>first_hook:fail('Modulemgr resolution is not ordered before hook installation')
+if 'exact_signature(' in s:fail('Candidate-9 relocation-unsafe raw panel signature remains in observer')
+for token in ('panel_relocation_signature_core.h','vbe_segment_target32','vbe_relocation_normalized_signature'):
+ if token not in s:fail('Candidate-10 relocation-normalized source evidence missing: '+token)
+prepare=s[s.index('static int prepare_lcd'):s.index('\nint vbeTraceGetStatus')]
+module_info=prepare.index('ret=get_module_info(KERNEL_PID,lcd->modid,&info)')
+segment_copy=prepare.index('g_lcd_segments[i].base')
+segment_check=prepare.index('vbe_segment_target32')
+writer_lookup=prepare.index('VBE_LCD_PANEL_WRITER_OFFSET')
+writer_validate=prepare.index('vbe_relocation_normalized_signature((const volatile uint8_t*)writer')
+reader_lookup=prepare.index('VBE_LCD_PANEL_READER_OFFSET')
+reader_validate=prepare.index('vbe_relocation_normalized_signature((const volatile uint8_t*)reader')
+if not (module_info < segment_copy < segment_check < writer_lookup < writer_validate < reader_lookup < reader_validate):
+ fail('Candidate-10 prepare_lcd validation ordering regression')
+if '7u,segment1_target' not in prepare:fail('writer relocation signature must require r7 and segment1 target')
+if '6u,segment1_target' not in prepare:fail('reader relocation signature must require r6 and segment1 target')
+for token in ('0xF240u','0xF2C0u','expected_rd','decoded_target != runtime_segment1_base'):
+ if token not in reloc:fail('bounded Thumb-2 relocation decoder invariant missing: '+token)
+with tempfile.TemporaryDirectory() as td:
+ exe=Path(td)/'reloc-host'
+ subprocess.run(['cc','-std=c99','-Wall','-Wextra','-Werror','-I'+str(ROOT),str(RELOC_HOST),'-o',str(exe)],check=True)
+ out=subprocess.check_output([str(exe)],text=True)
+ if 'GATE0_V7_RELOCATION_SIGNATURE_HOST=PASS' not in out or 'negative_tests=PASS' not in out:
+  fail('relocation semantic host suite did not pass')
+ print(out,end='')
 print('GATE0_V7_SOURCE_SAFETY=PASS')
 print('GATE0_V7_MODULEMGR_SOURCE_REGRESSION=PASS')
+print('GATE0_V7_RELOCATION_SOURCE_REGRESSION=PASS')
 print('sony_hooks=5 marker_producer=1 dynamic_release_calls=0 panel_payload_copy_paths=0')

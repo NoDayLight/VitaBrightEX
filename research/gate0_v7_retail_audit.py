@@ -2,9 +2,15 @@
 from __future__ import annotations
 import argparse,json
 from pathlib import Path
+from capstone import Cs,CS_ARCH_ARM,CS_MODE_THUMB,CS_MODE_LITTLE_ENDIAN
+from capstone.arm import ARM_OP_REG,ARM_OP_IMM
 from vita_elf_audit import VitaElf,Reachability,FunctionCFG
 from topology_common import all_insns,ins_text
 LOWIO_SHA='f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744';LCD_SHA='24752bb4c69f0c241701cab0364cde9cbe5c95128b6bfe02bf3263aad524246e';CSC_A_NID=0x0FCBF457;CSC_B_NID=0xD64F4C6B;ENABLE_NID=0x0D7C02F7;CSC_A_VA=0x81005D48;CSC_B_VA=0x81005E24;WRITER=0x81000A54;READER=0x810005B4
+STATIC_WRITER=bytes.fromhex('2D E9 F8 43 42 F2 00 07 C8 F2 00 17 05 46 89 46')
+PHYSICAL_WRITER=bytes.fromhex('2D E9 F8 43 47 F2 00 07 C0 F2 9B 07 05 46 89 46')
+STATIC_READER=bytes.fromhex('2D E9 F8 4F 42 F2 00 06 C8 F2 00 16 81 46 0F 46')
+PHYSICAL_READER=bytes.fromhex('2D E9 F8 4F 47 F2 00 06 C0 F2 9B 06 81 46 0F 46')
 def die(x):raise SystemExit(x)
 def exports_for(e,n):return[(l,f)for l in e.exports()for f in l['functions']if f['nid']==n]
 def cfg_at(e,v):
@@ -46,6 +52,27 @@ def incoming_arg_unused(c,names):
     defined|=(wn&allr)
    if defined!=out[k]:out[k]=defined;changed=True
  return True,None
+def capstone_pair_target(code,expected_reg):
+ md=Cs(CS_ARCH_ARM,CS_MODE_THUMB|CS_MODE_LITTLE_ENDIAN);md.detail=True
+ ins=list(md.disasm(code[4:12],0x1004))
+ if len(ins)!=2 or [x.mnemonic for x in ins]!=['movw','movt']:die('Capstone MOVW/MOVT classification mismatch')
+ vals=[]
+ for x in ins:
+  if len(x.operands)!=2 or x.operands[0].type!=ARM_OP_REG or x.operands[1].type!=ARM_OP_IMM:die('Capstone MOVW/MOVT operand shape mismatch')
+  if x.reg_name(x.operands[0].reg)!=expected_reg:die(f'Capstone destination mismatch: {x.mnemonic} {x.op_str}')
+  vals.append(x.operands[1].imm&0xFFFF)
+ return (vals[1]<<16)|vals[0]
+def relocation_proof():
+ vectors=[('writer_static',STATIC_WRITER,'r7',0x81002000),('writer_physical',PHYSICAL_WRITER,'r7',0x009B7000),('reader_static',STATIC_READER,'r6',0x81002000),('reader_physical',PHYSICAL_READER,'r6',0x009B7000)]
+ out={}
+ for name,code,reg,want in vectors:
+  got=capstone_pair_target(code,reg)
+  if got!=want:die(f'{name}: Capstone target 0x{got:08X} != 0x{want:08X}')
+  out[name]={'register':reg,'decoded_target':f'0x{got:08X}'}
+ if PHYSICAL_WRITER[:4]!=STATIC_WRITER[:4] or PHYSICAL_WRITER[12:]!=STATIC_WRITER[12:]:die('writer invariant prefix/suffix mismatch in physical evidence')
+ if PHYSICAL_READER[:4]!=STATIC_READER[:4] or PHYSICAL_READER[12:]!=STATIC_READER[12:]:die('reader invariant prefix/suffix mismatch in physical evidence')
+ if out['writer_physical']['decoded_target']!='0x009B7000' or out['reader_physical']['decoded_target']!='0x009B7000':die('physical relocation targets disagree')
+ return out
 def main():
  ap=argparse.ArgumentParser();ap.add_argument('--lowio',type=Path,required=True);ap.add_argument('--lcd',type=Path,required=True);ap.add_argument('--json',type=Path,required=True);ap.add_argument('--text',type=Path,required=True);a=ap.parse_args();lo,lc=VitaElf(a.lowio),VitaElf(a.lcd)
  if lo.sha256!=LOWIO_SHA:die('SceLowio hash drift')
@@ -65,6 +92,7 @@ def main():
   if'r0'in{ins.reg_name(x)for x in writes}:break
  if not r0:die('IFTU enable does not prove incoming r0 use')
  wb=byva(cfg_at(lc,WRITER));rb=byva(cfg_at(lc,READER));exact(wb,0x81000A60,'mov r5, r0');exact(wb,0x81000A62,'mov sb, r1');exact(wb,0x81000A64,'mov r8, r2');exact(rb,0x810005C0,'mov sb, r0');exact(rb,0x810005C2,'mov r7, r1');exact(rb,0x810005C4,'mov r8, r2')
- doc={'schema':1,'firmware':'3.65','hashes':{'SceLowio':lo.sha256,'SceLcd':lc.sha256},'csc_a':ca,'csc_b':cb,'iftu_enable':{'nid':'0x0D7C02F7','name':'ksceIftuEnable','evidence_class':'RETAIL_365_DISASSEMBLY_DERIVED','va':f'0x{eva:08X}','logical_range':[f'0x{ec.start:08X}',f'0x{ec.logical_end:08X}'],'abi':'int (int plane)','incoming_r0':'read before overwrite','incoming_r1_r3':'not read before definite overwrite on any reachable path','return':'raw r0 / AAPCS int-compatible'},'panel_writer':{'va':'0x81000A54','abi':'int (unsigned command, const void *ptr, unsigned len)','payload_policy':'GATE0A_METADATA_ONLY'},'panel_reader':{'va':'0x810005B4','abi':'int (unsigned command, void *ptr, unsigned len)','payload_policy':'GATE0A_METADATA_ONLY'}}
- a.json.write_text(json.dumps(doc,indent=2)+'\n');lines=['GATE0_V7_RETAIL_ABI=PASS',f'IFTU_ENABLE_EXPORT_VA=0x{eva:08X}','IFTU_ENABLE_ABI=RETAIL_365_DISASSEMBLY_DERIVED int(int plane)','CSC_COPY_SAFETY=PASS exact 0x3C for valid non-NULL only','PANEL_ABI=PASS writer 0x81000A54 reader 0x810005B4 metadata-only'];a.text.write_text('\n'.join(lines)+'\n');print('\n'.join(lines))
+ reloc=relocation_proof()
+ doc={'schema':2,'firmware':'3.65','hashes':{'SceLowio':lo.sha256,'SceLcd':lc.sha256},'csc_a':ca,'csc_b':cb,'iftu_enable':{'nid':'0x0D7C02F7','name':'ksceIftuEnable','evidence_class':'RETAIL_365_DISASSEMBLY_DERIVED','va':f'0x{eva:08X}','logical_range':[f'0x{ec.start:08X}',f'0x{ec.logical_end:08X}'],'abi':'int (int plane)','incoming_r0':'read before overwrite','incoming_r1_r3':'not read before definite overwrite on any reachable path','return':'raw r0 / AAPCS int-compatible'},'panel_writer':{'va':'0x81000A54','abi':'int (unsigned command, const void *ptr, unsigned len)','payload_policy':'GATE0A_METADATA_ONLY'},'panel_reader':{'va':'0x810005B4','abi':'int (unsigned command, void *ptr, unsigned len)','payload_policy':'GATE0A_METADATA_ONLY'},'relocation_semantic_signature':{'status':'PASS','physical_segment0':'0x009BE000','physical_segment1':'0x009B7000','vectors':reloc,'status_probe_sha256':'62d36f658e7c278c43ad6184da85c4bc38a42461d3cccf379ab1ec434b654d5b'}}
+ a.json.write_text(json.dumps(doc,indent=2)+'\n');lines=['GATE0_V7_RETAIL_ABI=PASS',f'IFTU_ENABLE_EXPORT_VA=0x{eva:08X}','IFTU_ENABLE_ABI=RETAIL_365_DISASSEMBLY_DERIVED int(int plane)','CSC_COPY_SAFETY=PASS exact 0x3C for valid non-NULL only','PANEL_ABI=PASS writer 0x81000A54 reader 0x810005B4 metadata-only','RELOCATION_SEMANTIC_SIGNATURE=PASS','WRITER_STATIC_TARGET=0x81002000','WRITER_PHYSICAL_TARGET=0x009B7000','READER_STATIC_TARGET=0x81002000','READER_PHYSICAL_TARGET=0x009B7000','PHYSICAL_SEGMENT1_TARGET=0x009B7000','CANDIDATE9_STATUS_SHA256=62d36f658e7c278c43ad6184da85c4bc38a42461d3cccf379ab1ec434b654d5b'];a.text.write_text('\n'.join(lines)+'\n');print('\n'.join(lines))
 if __name__=='__main__':main()

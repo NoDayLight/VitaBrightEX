@@ -15,6 +15,7 @@ OLD_MODULEMGR = ('SceModulemgrForKernel', 0xC445FA63, 0xD269F915)
 SYSTEM_SW_VERSION = ('SceModulemgrForDriver', 0xD4A60A52, 0x5182E212)
 NEW_RUNTIME_LIBRARY = 0x92C9FFC2
 NEW_RUNTIME_FUNCTION = 0xDAA90093
+CANDIDATE9_MANIFEST = Path(__file__).resolve().parent / 'observer-imports-candidate9-authorized.txt'
 
 
 def read_manifest(path: Path):
@@ -43,6 +44,14 @@ def main():
 
     old = read_manifest(args.old)
     new = read_manifest(args.new)
+    candidate9 = read_manifest(CANDIDATE9_MANIFEST)
+    if new != candidate9:
+        raise SystemExit(
+            'Candidate-10 generated import manifest differs from the exact '
+            'authorized Candidate-9 manifest:\n'
+            f'candidate9={candidate9!r}\n'
+            f'candidate10={new!r}'
+        )
     old_keys = {key(r) for r in old}
     new_keys = {key(r) for r in new}
 
@@ -91,8 +100,6 @@ def main():
     if SYSTEM_SW_VERSION not in new_keys:
         raise SystemExit('expected SystemSwVersion direct import is absent from repaired observer')
 
-    # Historical DBs remain name/transition diagnostics only. A discrepancy is
-    # emitted as a warning and never overrides exact retail-3.65 evidence.
     n360 = load_names([args.db360])
     n363 = load_names([args.db363])
     db_diagnostics = []
@@ -112,6 +119,8 @@ def main():
 
     lines = [
         'MODULEMGR_RESOLUTION_REPORT=PASS',
+        'CANDIDATE9_CANDIDATE10_IMPORTS=PASS',
+        'candidate9_manifest_source=authorized_run_34907094632_artifact_10373365353',
         'physical_failure_observed=SceModulemgrForKernel unresolved',
         'old_direct_import_library=SceModulemgrForKernel',
         'old_direct_import_library_nid=0xC445FA63',
