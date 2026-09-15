@@ -4,6 +4,7 @@ import argparse,json
 from pathlib import Path
 from capstone.arm import ARM_OP_IMM,ARM_OP_MEM,ARM_OP_REG
 from vita_elf_audit import VitaElf,Reachability,FunctionCFG
+from vita_elf_legacy import PT_LOAD
 from topology_common import all_insns,ins_text,function_parents,absolute_constants
 
 LOWIO_SHA='f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744'
@@ -16,6 +17,10 @@ DISPLAY_KNOWN_CALLERS=[0x81000C2C,0x81002C94,0x81002FF4]
 LOWIO_EXTRA_WRITER=0x81007250
 MODE_GLOBAL_RANGE=(0x8100B200,0x8100B300)
 MODE_FIELDS={0x8100B2A8:'ctx0_color_space_mode',0x8100B2CC:'ctx1_color_space_mode'}
+LOWIO_RUNTIME_TARGETS={
+    0x8100B37C:'plane0_state',
+    0x8100B590:'plane1_state',
+}
 
 def find_export(e,nid):
     for lib in e.exports():
@@ -86,6 +91,15 @@ def all_exports_at(e,va):
             if f['va']==va:out.append({'library':lib['library_name'],'nid':f['nid']})
     return out
 
+def segment_contract(elf,targets):
+    ph=[{'index':p.index,'type':p.p_type,'offset':p.p_offset,'vaddr':p.p_vaddr,'filesz':p.p_filesz,'memsz':p.p_memsz,'flags':p.p_flags,'align':p.p_align} for p in elf.phdrs]
+    loc={}
+    for va,name in targets.items():
+        matches=[p for p in elf.phdrs if p.p_type==PT_LOAD and p.p_vaddr<=va<p.p_vaddr+p.p_memsz]
+        if len(matches)!=1:raise SystemExit(f'{name}: expected one PT_LOAD for 0x{va:08X}, got {len(matches)}')
+        p=matches[0];loc[name]={'static_va':va,'segment_index':p.index,'segment_static_vaddr':p.p_vaddr,'offset':va-p.p_vaddr,'segment_memsz':p.p_memsz,'file_backed':va<p.p_vaddr+p.p_filesz}
+    return {'program_headers':ph,'targets':loc}
+
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--lowio',type=Path,required=True);ap.add_argument('--display',type=Path,required=True);ap.add_argument('--json',type=Path,required=True);a=ap.parse_args()
     low=VitaElf(a.lowio);disp=VitaElf(a.display)
@@ -112,12 +126,14 @@ def main():
     if csc_stub is None:raise SystemExit('missing Display IFTU CSC stub')
     parents=function_parents(dr);refs=global_ref_functions(disp,dr,*MODE_GLOBAL_RANGE);eff=symbolic_mem_refs(dr,*MODE_GLOBAL_RANGE)
     field_refs={name:[x for x in eff if x['address']==addr] for addr,name in MODE_FIELDS.items()}
-    result={'schema':4,'firmware':'3.65','lowio_sha':low.sha256,'display_sha':disp.sha256,'lowio_exports':ex,'display_exports':dex,'lowio_extra_writer_exports':all_exports_at(low,LOWIO_EXTRA_WRITER),'lowio_extra_writer_calls':callsites_to(lr,LOWIO_EXTRA_WRITER),'lowio_mem_disp_0x100_refs':mem100_refs(lr),'display_focus':focus,'display_iftu_csc_calls':callsites_to(dr,csc_stub),'generator_parents':parents.get(GENERATOR,[]),'display_mode_global_ref_functions':refs,'display_effective_mode_region_refs':eff,'mode_field_refs':field_refs}
+    seg=segment_contract(low,LOWIO_RUNTIME_TARGETS)
+    result={'schema':5,'firmware':'3.65','lowio_sha':low.sha256,'display_sha':disp.sha256,'lowio_exports':ex,'display_exports':dex,'lowio_extra_writer_exports':all_exports_at(low,LOWIO_EXTRA_WRITER),'lowio_extra_writer_calls':callsites_to(lr,LOWIO_EXTRA_WRITER),'lowio_mem_disp_0x100_refs':mem100_refs(lr),'display_focus':focus,'display_iftu_csc_calls':callsites_to(dr,csc_stub),'generator_parents':parents.get(GENERATOR,[]),'display_mode_global_ref_functions':refs,'display_effective_mode_region_refs':eff,'mode_field_refs':field_refs,'lowio_runtime_segment_contract':seg}
     a.json.write_text(json.dumps(result,indent=2)+'\n')
     print('GATE1B_STAGE_SEMANTICS_EVIDENCE')
     print('LOWIO_EXTRA_WRITER_EXPORTS',result['lowio_extra_writer_exports']);print('LOWIO_EXTRA_WRITER_CALLS',[(hex(x['caller']),hex(x['call_va'])) for x in result['lowio_extra_writer_calls']])
     for name,xs in field_refs.items():
         print('MODE_FIELD',name)
         for x in xs:print(f"  {x['access']} fn=0x{x['function']:08X} va=0x{x['va']:08X} {x['instruction']}")
+    for name,x in seg['targets'].items():print(f"RUNTIME_TARGET {name} seg={x['segment_index']} static=0x{x['static_va']:08X} segva=0x{x['segment_static_vaddr']:08X} off=0x{x['offset']:X} memsz=0x{x['segment_memsz']:X} file_backed={x['file_backed']}")
 
 if __name__=='__main__':main()
