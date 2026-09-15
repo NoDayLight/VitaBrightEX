@@ -35,5 +35,5 @@ target_link_libraries(vbe_gate1b_snapshot_app
 set(VITA_ELF_CREATE_FLAGS "")
 set(VITA_MAKE_FSELF_FLAGS "")
 vita_create_self(vbe_gate1b_snapshot.self vbe_gate1b_snapshot_app UNSAFE)
-vita_create_vpk(vbe_gate1b_snapshot.vpk VBEG1BSN vbe_gate1b_snapshot.self
+vita_create_vpk(vbe_gate1b_snapshot.vpk VBEG1BSN0 vbe_gate1b_snapshot.self
   VERSION 01.00 NAME "VBE Gate-1B Lifecycle Snapshot")
