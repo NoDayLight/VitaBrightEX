@@ -1,0 +1,274 @@
+name: Gate-1A identity candidate
+
+on:
+  push:
+    branches: [research-gate1-affine-ownership]
+    paths:
+      - 'research/diagnostics/gate1a_identity/**'
+      - 'research/gate1a_*'
+      - '.github/workflows/gate1a-identity-candidate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+  PUP_URL: https://web.archive.org/web/20180630222648id_/http://dus01.psp2.update.playstation.net/update/psp2/image/2017_0317/rel_0a0f2a9ae58968ac5d1d2127049c3cba/PSP2UPDAT.PUP
+  PUP_SHA256: 86859b3071681268b6d0beb5ef691da874b6726e85b6f06a1cdf6a0e183e77c6
+  OS0_SHA256: 35480a01ea783df859326d8698831afd3e850717f5b7785ab9964eab23712856
+  SCEUTILS_SHA: 0466d003246ec986ab6189e6719dcb196a40fb02
+  PY2_IMAGE: python@sha256:d8fac68ebdc45b8d66d53f1ed6c1532da81109a8f5532a6ca0c951ed31107d70
+  VDPM_SHA: c83b88a54ec13372515eeb8b3bdca4b10c36d721
+  TAIHEN_SHA: 309b3800bcb8ebbd5e4f5e5e920af3da3590b829
+  VITA_HEADERS_SHA: 5e1e7d38d766e4c1634a77f6e5249caab8c8f9cb
+  DISPLAY_365_SHA256: 83ef39adf741a4bbbc1cec67d00e2594de1d17be0f5ea6cc77c935eae46065e5
+  LOWIO_365_SHA256: f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      skprx_sha: ${{ steps.hashes.outputs.skprx_sha }}
+      decoder_sha: ${{ steps.hashes.outputs.decoder_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Exact head and production-shared safety contracts
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+          python3 -m py_compile \
+            research/gate1a_source_audit.py \
+            research/gate1a_identity_decode.py \
+            research/gate1a_identity_synthetic_tests.py \
+            research/gate1a_baseline_contract.py \
+            research/gate1a_resume_producer_audit.py \
+            research/gate1a_lowio_abi_audit.py \
+            research/gate1a_retail_import_closure.py
+          python3 research/gate1a_source_audit.py | tee gate1a-source-safety.txt
+          python3 research/gate1a_baseline_contract.py --manifest research/gate1a_gate0a_baseline.json | tee gate1a-baseline-contract.txt
+          cc -std=c99 -Wall -Wextra -Werror -Iresearch research/gate1a_identity_host.c -o gate1a-identity-host
+          ./gate1a-identity-host | tee gate1a-identity-host.txt
+          cc -std=c99 -Wall -Wextra -Werror -pthread -Iresearch research/gate0_v7_lifecycle_host.c -o gate1a-lifecycle-host
+          ./gate1a-lifecycle-host | tee gate1a-lifecycle-host.txt
+          python3 research/gate1a_identity_synthetic_tests.py | tee gate1a-decoder-synthetic.txt
+          cat >/tmp/g1abi.c <<'C'
+          #include "research/diagnostics/gate1a_identity/gate1a_protocol.h"
+          #include <stddef.h>
+          int main(void){
+            return !(
+              VBE_G1_VERSION==2u && VBE_G1_CAPACITY==256u &&
+              sizeof(VbeG1Record)==192u && sizeof(VbeG1Status)==72u && sizeof(VbeG1DumpHeader)==64u &&
+              offsetof(VbeG1Record,source_payload)==48u && offsetof(VbeG1Record,copy_payload)==108u &&
+              offsetof(VbeG1Record,ring_epoch)==168u &&
+              (VBE_G1_REQUIRED==(VBE_G1_HOOK_A|VBE_G1_HOOK_B|VBE_G1_HOOK_ENABLE))
+            );
+          }
+          C
+          cc -std=c99 -Wall -Wextra -Werror -I. /tmp/g1abi.c -o /tmp/g1abi
+          /tmp/g1abi
+          printf '%s\n' \
+            'GATE1A_PROTOCOL_ABI=PASS' \
+            'version=2 record=192 status=72 header=64 source_payload=48 copy_payload=108 ring_epoch=168' \
+            > gate1a-protocol-abi.txt
+
+      - name: Fetch pinned SDK and analysis sources
+        run: |
+          set -euxo pipefail
+          git init -q vdpm
+          git -C vdpm remote add origin https://github.com/vitasdk/vdpm.git
+          git -C vdpm fetch -q --depth 1 origin "$VDPM_SHA"
+          git -C vdpm checkout -q --detach FETCH_HEAD
+          git init -q taihen-audit
+          git -C taihen-audit remote add origin https://github.com/yifanlu/taiHEN.git
+          git -C taihen-audit fetch -q --depth 1 origin "$TAIHEN_SHA"
+          git -C taihen-audit checkout -q --detach FETCH_HEAD
+          git init -q vita-headers-audit
+          git -C vita-headers-audit remote add origin https://github.com/vitasdk/vita-headers.git
+          git -C vita-headers-audit fetch -q --depth 1 origin "$VITA_HEADERS_SHA"
+          git -C vita-headers-audit checkout -q --detach FETCH_HEAD
+          test "$(git -C vdpm rev-parse HEAD)" = "$VDPM_SHA"
+          test "$(git -C taihen-audit rev-parse HEAD)" = "$TAIHEN_SHA"
+          test "$(git -C vita-headers-audit rev-parse HEAD)" = "$VITA_HEADERS_SHA"
+          test "$(grep -c 'taiHookReleaseForKernel' research/diagnostics/gate1a_identity/main.c || true)" = 0
+          ! grep -R -n 'SceLcd\|relocation_normalized_signature' research/diagnostics/gate1a_identity
+
+      - name: Recover exact retail 3.65 and close producer/ABI
+        run: |
+          set -euxo pipefail
+          python3 -m pip install --disable-pip-version-check --user capstone==5.0.3
+          curl -fL --retry 5 --retry-delay 2 "$PUP_URL" -o PSP2UPDAT-365.PUP
+          echo "$PUP_SHA256  PSP2UPDAT-365.PUP" | sha256sum -c -
+          sudo apt-get update
+          sudo apt-get install -y mtools file
+          git init -q sceutils-audit
+          git -C sceutils-audit remote add origin https://github.com/RealYoti/sceutils.git
+          git -C sceutils-audit fetch -q --depth 1 origin "$SCEUTILS_SHA"
+          git -C sceutils-audit checkout -q --detach FETCH_HEAD
+          test "$(git -C sceutils-audit rev-parse HEAD)" = "$SCEUTILS_SHA"
+          cp sceutils-audit/keys_external.py sceutils-audit/keys.py
+          mkdir -p sceutils-audit/unarzl
+          : > sceutils-audit/unarzl/unarzl
+          cat > extract_fw.py <<'PY'
+          import os,sys
+          sys.path.insert(0,'sceutils-audit')
+          import pup_fiction
+          os.makedirs('fw/PUP');os.makedirs('fw/PUP_dec')
+          pup_fiction.pup_extract_files('PSP2UPDAT-365.PUP','fw/PUP')
+          pup_fiction.pup_decrypt_packages('fw/PUP','fw/PUP_dec')
+          PY
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python extract_fw.py"
+          sudo chown -R "$(id -u):$(id -g)" fw
+          echo "$OS0_SHA256  fw/PUP_dec/os0.bin" | sha256sum -c -
+          mkdir -p fw/os0-tree fw/raw fw/elf
+          mcopy -s -n -i fw/PUP_dec/os0.bin '::/kd' fw/os0-tree
+          for base in display lowio modulemgr sysmem threadmgr; do
+            src="$(find fw/os0-tree -type f -iname "$base.skprx" -print -quit)"
+            test -n "$src"
+            cp "$src" "fw/raw/$base.skprx"
+          done
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc 'pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null; for base in display lowio modulemgr sysmem threadmgr; do python sceutils-audit/self2elf.py -i "fw/raw/$base.skprx" -o "fw/elf/$base.elf" >/dev/null; done'
+          sudo chown -R "$(id -u):$(id -g)" fw/elf
+          echo "$DISPLAY_365_SHA256  fw/elf/display.elf" | sha256sum -c -
+          echo "$LOWIO_365_SHA256  fw/elf/lowio.elf" | sha256sum -c -
+          python3 research/gate1a_resume_producer_audit.py --display fw/elf/display.elf --json gate1a-producer.json | tee gate1a-producer.txt
+          grep -F 'GATE1A_PRODUCER_CONTRACT=PASS' gate1a-producer.txt
+          grep -F 'STACK_LOCAL_PROVENANCE=MACHINE_ASSERTED' gate1a-producer.txt
+          grep -F 'TWO_PLANE_SLOTS=MACHINE_ASSERTED' gate1a-producer.txt
+          python3 research/gate1a_lowio_abi_audit.py --lowio fw/elf/lowio.elf --json gate1a-lowio-abi.json --text gate1a-lowio-abi.txt
+          grep -F 'GATE1A_RETAIL_365_LOWIO_ABI=PASS' gate1a-lowio-abi.txt
+          grep -F 'CSC_COMPLETE_0X3C_CONSUMPTION=PASS' gate1a-lowio-abi.txt
+
+      - name: Bootstrap pinned VitaSDK and build under Werror
+        run: |
+          set -euxo pipefail
+          bash vdpm/bootstrap-vitasdk.sh
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+          "$VITASDK/bin/vdpm" install taihen
+          "$VITASDK/bin/vdpm" list taihen | tee taihen-package.txt
+          cmake -S research/diagnostics/gate1a_identity -B gate1a-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          cmake --build gate1a-build --parallel
+          test -s gate1a-build/vbe_gate1a_identity.skprx
+          test -s gate1a-build/vbe_gate1a_drain.self
+          test -s gate1a-build/vbe_gate1a_drain.vpk
+          test -s gate1a-build/vbe_gate1a_status.self
+          test -s gate1a-build/vbe_gate1a_status.vpk
+          python3 research/gate0_v7_import_manifest.py gate1a-build/vbe_gate1a_identity_kernel.velf \
+            --nid-db vita-headers-audit/db/360 --nid-db vita-headers-audit/db/363 \
+            --output gate1a-imports.txt
+          cat gate1a-imports.txt
+          ! grep -F 'library=SceModulemgrForKernel' gate1a-imports.txt
+          ! grep -F 'SceLcd' gate1a-imports.txt
+          python3 research/gate1a_retail_import_closure.py \
+            --manifest gate1a-imports.txt --elf-dir fw/elf --taihen-source-sha "$TAIHEN_SHA" \
+            --json gate1a-import-closure.json --text gate1a-import-closure.txt
+          grep -F 'GATE1A_DIRECT_SONY_IMPORT_CLOSURE=PASS' gate1a-import-closure.txt
+          grep -F 'OLD_MODULEMGR_DIRECT_IMPORT=ABSENT' gate1a-import-closure.txt
+
+      - name: Package exact hardware candidate
+        id: hashes
+        run: |
+          set -euxo pipefail
+          rm -rf gate1a-package
+          mkdir -p gate1a-package/include/gate1a_identity gate1a-package/include/gate0_observer
+          cp gate1a-build/vbe_gate1a_identity.skprx gate1a-package/
+          cp gate1a-build/vbe_gate1a_drain.self gate1a-package/
+          cp gate1a-build/vbe_gate1a_drain.vpk gate1a-package/
+          cp gate1a-build/vbe_gate1a_status.self gate1a-package/
+          cp gate1a-build/vbe_gate1a_status.vpk gate1a-package/
+          cp research/gate1a_identity_decode.py gate1a-package/
+          cp research/gate1a_gate0a_baseline.json gate1a-package/
+          cp research/diagnostics/gate1a_identity/gate1a_protocol.h gate1a-package/include/gate1a_identity/
+          cp research/diagnostics/gate1a_identity/identity_copy_core.h gate1a-package/include/gate1a_identity/
+          cp research/diagnostics/gate0_observer/observer_lifecycle_core.h gate1a-package/include/gate0_observer/
+          cp gate1a-source-safety.txt gate1a-identity-host.txt gate1a-lifecycle-host.txt gate1a-decoder-synthetic.txt gate1a-protocol-abi.txt gate1a-baseline-contract.txt gate1a-package/
+          cp gate1a-producer.json gate1a-producer.txt gate1a-lowio-abi.json gate1a-lowio-abi.txt gate1a-imports.txt gate1a-import-closure.json gate1a-import-closure.txt gate1a-package/
+          printf '%s\n' "$GITHUB_SHA" > gate1a-package/WORKFLOW_COMMIT.txt
+          printf '%s\n' \
+            "workflow=Gate-1A identity candidate" \
+            "commit=$GITHUB_SHA" \
+            "candidate10_base=f5a74d804d69187c4bf7e965be33d2bfca33ec51" \
+            "firmware=3.65" \
+            > gate1a-package/BUILD-METADATA.txt
+          (cd gate1a-package && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          skprx_sha="$(sha256sum gate1a-package/vbe_gate1a_identity.skprx | awk '{print $1}')"
+          decoder_sha="$(sha256sum gate1a-package/gate1a_identity_decode.py | awk '{print $1}')"
+          echo "skprx_sha=$skprx_sha" >> "$GITHUB_OUTPUT"
+          echo "decoder_sha=$decoder_sha" >> "$GITHUB_OUTPUT"
+          echo "SKPRX_SHA256=$skprx_sha"
+          echo "DECODER_SHA256=$decoder_sha"
+          cat gate1a-package/SHA256SUMS
+
+      - name: Upload exact candidate artifact
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vbe-gate1a-identity-${{ github.sha }}
+          path: gate1a-package/
+          if-no-files-found: error
+          compression-level: 6
+
+  independent-verify:
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    env:
+      ARTIFACT_ID: ${{ needs.candidate.outputs.artifact_id }}
+      ARTIFACT_DIGEST: ${{ needs.candidate.outputs.artifact_digest }}
+      EXPECTED_SKPRX: ${{ needs.candidate.outputs.skprx_sha }}
+      EXPECTED_DECODER: ${{ needs.candidate.outputs.decoder_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download exact artifact archive and verify digest
+        run: |
+          set -euxo pipefail
+          test -n "$ARTIFACT_ID"
+          test -n "$ARTIFACT_DIGEST"
+          curl -fL \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" \
+            -o gate1a-artifact.zip
+          digest="${ARTIFACT_DIGEST#sha256:}"
+          echo "$digest  gate1a-artifact.zip" | sha256sum -c -
+          unzip -q gate1a-artifact.zip -d verify
+          commit_file="$(find verify -name WORKFLOW_COMMIT.txt -print -quit)"
+          test -n "$commit_file"
+          pkg="$(dirname "$commit_file")"
+          test "$(cat "$commit_file")" = "$GITHUB_SHA"
+          (cd "$pkg" && sha256sum -c SHA256SUMS)
+          test "$(sha256sum "$pkg/vbe_gate1a_identity.skprx" | awk '{print $1}')" = "$EXPECTED_SKPRX"
+          test "$(sha256sum "$pkg/gate1a_identity_decode.py" | awk '{print $1}')" = "$EXPECTED_DECODER"
+          grep -F 'GATE1A_DIRECT_SONY_IMPORT_CLOSURE=PASS' "$pkg/gate1a-import-closure.txt"
+          grep -F 'OLD_MODULEMGR_DIRECT_IMPORT=ABSENT' "$pkg/gate1a-import-closure.txt"
+          ! grep -F 'library=SceModulemgrForKernel' "$pkg/gate1a-imports.txt"
+          ! grep -F 'SceLcd' "$pkg/gate1a-imports.txt"
+          grep -F 'GATE1A_SOURCE_SAFETY=PASS' "$pkg/gate1a-source-safety.txt"
+          grep -F 'INVALID_PLANE_NO_DEREFERENCE=PASS' "$pkg/gate1a-source-safety.txt"
+          grep -F 'MISMATCH_FAIL_OPEN=PASS' "$pkg/gate1a-source-safety.txt"
+          grep -F 'GATE1A_PRODUCER_CONTRACT=PASS' "$pkg/gate1a-producer.txt"
+          grep -F 'GATE1A_PROTOCOL_ABI=PASS' "$pkg/gate1a-protocol-abi.txt"
+          cat >/tmp/artifact_abi.c <<'C'
+          #include "gate1a_protocol.h"
+          #include <stddef.h>
+          int main(void){return !(VBE_G1_VERSION==2u && sizeof(VbeG1Record)==192u && sizeof(VbeG1Status)==72u && sizeof(VbeG1DumpHeader)==64u && offsetof(VbeG1Record,source_payload)==48u && offsetof(VbeG1Record,copy_payload)==108u && offsetof(VbeG1Record,ring_epoch)==168u);}
+          C
+          cc -std=c99 -Wall -Wextra -Werror -I"$pkg/include/gate1a_identity" /tmp/artifact_abi.c -o /tmp/artifact_abi
+          /tmp/artifact_abi
+          python3 "$pkg/gate1a_identity_decode.py" --help >/dev/null
+          echo "GATE1A_INDEPENDENT_VERIFY=PASS"
+          echo "ARTIFACT_ID=$ARTIFACT_ID"
+          echo "ARTIFACT_DIGEST=$ARTIFACT_DIGEST"
+          echo "SKPRX_SHA256=$EXPECTED_SKPRX"
+          echo "DECODER_SHA256=$EXPECTED_DECODER"
