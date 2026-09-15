@@ -74,7 +74,8 @@ def main():
         for f in lib['functions']:
             if f['nid']==NID_IFTU_CSC:csc_stub=f['va']
     if csc_stub is None:raise SystemExit('missing Display IFTU CSC stub')
-    result={'schema':1,'firmware':'3.65','lowio_sha':low.sha256,'display_sha':disp.sha256,'lowio_exports':ex,'display_exports':dex,'lowio_mem_disp_0x100_refs':mem100_refs(lr),'display_focus':focus,'display_iftu_csc_calls':callsites_to(dr,csc_stub),'generator_parents':function_parents(dr,GENERATOR)}
+    parents=function_parents(dr)
+    result={'schema':1,'firmware':'3.65','lowio_sha':low.sha256,'display_sha':disp.sha256,'lowio_exports':ex,'display_exports':dex,'lowio_mem_disp_0x100_refs':mem100_refs(lr),'display_focus':focus,'display_iftu_csc_calls':callsites_to(dr,csc_stub),'generator_parents':parents.get(GENERATOR,[])}
     a.json.write_text(json.dumps(result,indent=2)+'\n')
     print('GATE1B_STAGE_SEMANTICS_EVIDENCE')
     print('LOWIO_EXPORTS')
