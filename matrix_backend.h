@@ -6,6 +6,10 @@
 #define VBE_MATRIX_REQUEST_VERSION 1u
 #define VBE_MATRIX_FW_365 0x03650000u
 #define VBE_MATRIX_TARGET_PLANE_MASK 0x3u
+#define VBE_MATRIX_REQUEST_V1_SIZE 68u
+#define VBE_MATRIX_CAPABILITIES_SIZE 64u
+#define VBE_MATRIX_PLANE_STATUS_SIZE 160u
+#define VBE_MATRIX_BACKEND_STATUS_SIZE 384u
 
 /* Positive values are truthful control/capability results, not SCE errors. */
 typedef enum {
@@ -82,6 +86,17 @@ typedef struct {
     uint32_t reserved[3];
     VbeMatrixPlaneStatus planes[2];
 } VbeMatrixBackendStatus;
+
+#define VBE_MATRIX_ABI_ASSERT(n, e) typedef char n[(e) ? 1 : -1]
+VBE_MATRIX_ABI_ASSERT(vbe_matrix_request_v1_size,
+                      sizeof(VbeMatrixRequestV1) == VBE_MATRIX_REQUEST_V1_SIZE);
+VBE_MATRIX_ABI_ASSERT(vbe_matrix_capabilities_size,
+                      sizeof(VbeMatrixCapabilities) == VBE_MATRIX_CAPABILITIES_SIZE);
+VBE_MATRIX_ABI_ASSERT(vbe_matrix_plane_status_size,
+                      sizeof(VbeMatrixPlaneStatus) == VBE_MATRIX_PLANE_STATUS_SIZE);
+VBE_MATRIX_ABI_ASSERT(vbe_matrix_backend_status_size,
+                      sizeof(VbeMatrixBackendStatus) == VBE_MATRIX_BACKEND_STATUS_SIZE);
+#undef VBE_MATRIX_ABI_ASSERT
 
 int matrix_backend_init(int is_lcd, uint32_t firmware);
 int matrix_backend_can_unload(void);
