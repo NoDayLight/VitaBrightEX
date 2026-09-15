@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "gate": "Gate-1C B-stage isolation physical closure",
+  "date": "2026-09-16",
+  "firmware": "3.65 Enso",
+  "candidate_head": "95e3e186a4ebbd53bcb6601d3281f82efd7bf071",
+  "candidate_run": 35029965628,
+  "candidate_artifact_id": 10420659044,
+  "candidate_artifact_sha256": "faed2e845f580a2564cd634be69229bf3124f07c66d785f856b934764fc9f0d8",
+  "candidate_skprx_sha256": "7c0d79b7daebcf6a8f7336e644fa5ba5b63d0fdb5b0312e584147441fbeed25a",
+  "probe": {
+    "stage": "B",
+    "public_mapping": "csc_params1",
+    "private_nid": "0xD64F4C6B",
+    "target_planes": [0, 1],
+    "word_index": 6,
+    "field": "ctm00",
+    "source_value": "0x00000200",
+    "forward_value": "0x00000100",
+    "source_value_s3_9": 1.0,
+    "forward_value_s3_9": 0.5,
+    "canonical_b_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+    "probe_b_sha256": "61f4aae357db9e2a513942f1f58a0de03cc490621e6ca9c557baea70c0bc6c17"
+  },
+  "physical_capture": {
+    "file": "00_GATE1C_BOOT.bin",
+    "size": 1672,
+    "sha256": "d1a75c76c48baf52f7cfa05b5d6ee6f2035f3c9aad1bfa4edcb618faf12ec723",
+    "decoder_result": "GATE1C_STAGE_PROBE_DUMP=PASS",
+    "focused_order": ["B0", "A0", "B1", "A1", "B2", "A2", "B3", "A3"],
+    "b_probe_transform_records": 2,
+    "records": [
+      {
+        "sequence": 1,
+        "stage": "B",
+        "plane": 0,
+        "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+        "forward_sha256": "61f4aae357db9e2a513942f1f58a0de03cc490621e6ca9c557baea70c0bc6c17",
+        "transformed": true,
+        "raw_return": 0
+      },
+      {
+        "sequence": 2,
+        "stage": "A",
+        "plane": 0,
+        "source_sha256": "2f9fd211d1d389611267070cfbc936063b0b790a59245243feb404ee3c00daf6",
+        "forward_sha256": "2f9fd211d1d389611267070cfbc936063b0b790a59245243feb404ee3c00daf6",
+        "transformed": false,
+        "raw_return": 0
+      },
+      {
+        "sequence": 3,
+        "stage": "B",
+        "plane": 1,
+        "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+        "forward_sha256": "61f4aae357db9e2a513942f1f58a0de03cc490621e6ca9c557baea70c0bc6c17",
+        "transformed": true,
+        "raw_return": 0
+      },
+      {
+        "sequence": 4,
+        "stage": "A",
+        "plane": 1,
+        "source_sha256": "2f9fd211d1d389611267070cfbc936063b0b790a59245243feb404ee3c00daf6",
+        "forward_sha256": "2f9fd211d1d389611267070cfbc936063b0b790a59245243feb404ee3c00daf6",
+        "transformed": false,
+        "raw_return": 0
+      }
+    ]
+  },
+  "visual_observation": {
+    "display_changed": true,
+    "strength": "obvious_strong",
+    "description": "Whites acquired a strong light-blue/cool tint and warm-color contribution was strongly reduced.",
+    "classification": "PHYSICALLY_OBSERVED",
+    "component_channel_interpretation": "INFERRED_ONLY"
+  },
+  "classifications": {
+    "gate1c_candidate_ci": "CI_EXECUTED_PASS",
+    "gate1c_independent_artifact_verification": "CI_EXECUTED_PASS",
+    "b0_exact_canonical_source": "PHYSICALLY_VERIFIED",
+    "b1_exact_canonical_source": "PHYSICALLY_VERIFIED",
+    "b0_exact_one_word_probe_forwarded": "PHYSICALLY_VERIFIED",
+    "b1_exact_one_word_probe_forwarded": "PHYSICALLY_VERIFIED",
+    "a0_unmodified": "PHYSICALLY_VERIFIED",
+    "a1_unmodified": "PHYSICALLY_VERIFIED",
+    "sony_raw_return_success_observed": "PHYSICALLY_VERIFIED",
+    "b_affine_perturbation_changes_lcd_output": "PHYSICALLY_VERIFIED",
+    "selected_affine_stage": "B_PHYSICALLY_VERIFIED"
+  },
+  "closure": {
+    "gate1b_stage_semantics": "CLOSED",
+    "gate1c_single_reversible_affine_perturbation": "CLOSED_PASS",
+    "selected_affine_stage": "B",
+    "next_mission": "Production affine backend on stage B with baseline reacquisition, composition, rollback and persistence semantics"
+  },
+  "notes": [
+    "No A-stage perturbation is required: the single authorized B-stage perturbation produced a strong visible LCD output change while A remained byte-identical.",
+    "The visual blue/cool result is consistent with suppressing a warm/red-like component, but exact channel ordering is not needed for stage selection and remains a separate semantic question.",
+    "The Gate-1C perturbation plugin is diagnostic-only and should be removed from the active taiHEN config after capture."
+  ]
+}
