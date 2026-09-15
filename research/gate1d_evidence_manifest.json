@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "gate": "Gate-1D Production Stage-B Matrix Backend",
+  "target": {
+    "hardware": "PCH-2000 LCD",
+    "firmware": "3.65 Enso",
+    "selected_stage": "B / csc_params1 / private D64F4C6B",
+    "classification": "PHYSICALLY_VERIFIED"
+  },
+  "production_base": {
+    "commit": "fc8ffbfcfd43a67e17a5c3b67e83a88bfef00b09",
+    "relationship_to_gate1c_closure": "ancestor",
+    "production_root_changed_between_base_and_closure": false,
+    "note": "Intervening Gate-0/1 research lineage adds research and CI evidence; Gate-1D production changes must remain separable from those diagnostics."
+  },
+  "gate1a": {
+    "physically_tested_kernel_commit": "3cb08516b4143c252c6b1368cff6d3f5fa29cb9a",
+    "candidate_run": 35006012891,
+    "artifact_id": 10411378219,
+    "artifact_sha256": "e62d3197c51683fb86edea96784118e5a56a459a1b4f04485e45e56510a69c82",
+    "skprx_sha256": "041a71e1db9268b569f2254db2f3f9c162004b1f1741317ecfffdd76dda76cb3",
+    "screen_power_capture_sha256": "54b4f3e6fd241da53d74c08f0bd3fb5b64f59e56aff55238e1e863ac614a9db1",
+    "resume_capture_sha256": "f2b31967c53cf956d995c0688b94a438b2a828c4b227544f06c37e9a3872d43a",
+    "conclusions": [
+      "setter interposition physically verified",
+      "baseline reacquisition physically verified",
+      "non-compounding source model physically verified"
+    ]
+  },
+  "gate1b_v4": {
+    "head": "ecd89cad262d00c3c3d09c10cbad6fd9ffe78218",
+    "candidate_run": 35027053624,
+    "artifact_id": 10419564131,
+    "artifact_sha256": "52ed79ecf0eebadf944f2f1422315c03565e2dffa9eed768ac61e69e6de9b658",
+    "physical_capture_sha256": "481e3bd3d279ee2e7d25d5e5e20480a2d7d8b0e3e6fe63e8fe60dd238a82ed91",
+    "physical_result": "AUTHORITATIVE=PASS",
+    "csc_control": "0x00000001 on planes 0/1 before and after resume"
+  },
+  "gate1c": {
+    "candidate_commit": "95e3e186a4ebbd53bcb6601d3281f82efd7bf071",
+    "candidate_run": 35029965628,
+    "artifact_id": 10420659044,
+    "artifact_sha256": "faed2e845f580a2564cd634be69229bf3124f07c66d785f856b934764fc9f0d8",
+    "skprx_sha256": "7c0d79b7daebcf6a8f7336e644fa5ba5b63d0fdb5b0312e584147441fbeed25a",
+    "physical_capture_sha256": "d1a75c76c48baf52f7cfa05b5d6ee6f2035f3c9aad1bfa4edcb618faf12ec723",
+    "closure_commit": "233f723fccfb3194edce9889e668cbe69f643194",
+    "result": "Stage B affine perturbation changes LCD output; A remains byte-identical."
+  },
+  "supported_b_baselines": [
+    {
+      "class": "CANONICAL_IDENTITY",
+      "sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+      "words": [0,0,1023,0,1023,0,512,0,0,0,512,0,0,0,512],
+      "physical_scope": "planes 0/1 observed on PCH-2000 FW 3.65"
+    },
+    {
+      "class": "SONY_FULL_TO_LIMITED_RANGE",
+      "sha256": "fff18ae2defe21c92e9a4e1e4795c85bfe6ba7f5548a1b90a2e1b46c707ee07e",
+      "words": [64,64,940,64,940,64,439,0,0,0,439,0,0,0,439],
+      "semantics": "CTM=(439/512)I; post-add=64; clamps=64..940",
+      "evidence": "Exact Sony table/static decode plus physical Gate-0A B plane-3 object."
+    }
+  ],
+  "unsupported_or_pending": {
+    "unknown_b_baselines": "FAIL_OPEN_NO_MUTATION",
+    "channel_order": "INFERRED_ONLY_PENDING_PROOF",
+    "additive_affine": "ADDITIVE_SEMANTICS_PENDING",
+    "gamma_tone_panel_linearisation": "UNCHANGED_NONLINEAR_RESEARCH_STATUS",
+    "target_generalisation": "NO CLAIM BEYOND PCH-2000 FW 3.65"
+  }
+}
