@@ -1,4 +1,4 @@
-name: Gate-1B read-only snapshot candidate
+name: Gate-1B lifecycle snapshot candidate
 
 on:
   push:
@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Exact head and read-only source contract
+      - name: Exact head and lifecycle read-only source contract
         run: |
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -47,37 +47,53 @@ jobs:
           python3 - <<'PY' | tee gate1b-snapshot-source-safety.txt
           from pathlib import Path
           import re
-          p=Path('research/diagnostics/gate1b_snapshot/main.c')
-          s=p.read_text()
-          forbidden=['taiHook','taiInject','TAI_CONTINUE','ksceIftu','ksceLcd','sceIo','ksceIo']
+          s=Path('research/diagnostics/gate1b_snapshot/main.c').read_text()
+          forbidden=['taiInject','ksceIftuCsc','ksceIftuDisable','ksceLcd','sceIo','ksceIo','taiHookRelease','taiInjectRelease']
           bad=[x for x in forbidden if x in s]
           assert not bad, bad
           assert s.count('module_get_offset(')==2
-          assert 'VBE_G1B_PLANE0_OFFSET' in s and 'VBE_G1B_PLANE1_OFFSET' in s
+          assert s.count('taiHookFunctionExportForKernel(')==1
+          assert s.count('TAI_CONTINUE(')==1
+          assert 'NID_IFTU_ENABLE 0x0D7C02F7u' in s
+          assert 'ksceKernelRegisterSysEventHandler("vbe_gate1b_snapshot"' in s
+          assert 'VBE_G1B_SYS_EVENT_SUSPEND_RESUME' in s
           assert 'LIVE_CSC_CONTROL_OFFSET 0x100u' in s
           assert 'CACHE_A_OFFSET 0x10Cu' in s and 'CACHE_B_OFFSET 0x148u' in s
           assert 'ENABLE_STATE_OFFSET 0x1E8u' in s and 'PRIVATE_CONTROL_OFFSET 0x1F8u' in s
           assert 'known_iftu_mmio(mmio)' in s
-          assert not re.search(r'\*\s*\([^;\n]*volatile[^;\n]*\)\s*=',s)
+          assert 'publish_pre_suspend();' in s
+          assert 'VBE_G1B_CAPTURE_POST_RESUME_ENABLE_P1' in s
+          # The only volatile pointer store is zero_bytes() writing plugin-owned memory.
+          writes=re.findall(r'\*\s*\([^;\n]*volatile[^;\n]*\)\s*=',s)
+          assert not writes, writes
           print('GATE1B_SNAPSHOT_SOURCE_SAFETY=PASS')
-          print('NO_HOOKS=PASS')
-          print('NO_DISPLAY_OR_IFTU_WRITES=PASS')
+          print('ONE_ENABLE_HOOK_ONLY=PASS')
+          print('SONY_CALLED_EXACTLY_ONCE=PASS')
+          print('NO_DISPLAY_OR_IFTU_MUTATION=PASS')
+          print('NO_HOOK_TIME_IO=PASS')
+          print('NO_RUNTIME_TAIHEN_RELEASE=PASS')
           print('MMIO_READ_WHITELIST=PASS')
           print('LOWIO_SEGMENT_OFFSETS=PASS')
+          print('SUSPEND_RESUME_TRIGGER=PASS')
           PY
           cat >/tmp/g1babi.c <<'C'
           #include "research/diagnostics/gate1b_snapshot/gate1b_snapshot_protocol.h"
           #include <stddef.h>
           int main(void){return !(
-            VBE_G1B_SNAPSHOT_VERSION==1u &&
+            VBE_G1B_VERSION==2u &&
             sizeof(VbeG1bPlaneSnapshot)==152u &&
             sizeof(VbeG1bSnapshot)==344u &&
+            sizeof(VbeG1bCaptureStatus)==64u &&
+            sizeof(VbeG1bCaptureBundle)==784u &&
             offsetof(VbeG1bPlaneSnapshot,cache_a)==32u &&
             offsetof(VbeG1bPlaneSnapshot,cache_b)==92u &&
             offsetof(VbeG1bSnapshot,planes)==40u &&
+            offsetof(VbeG1bCaptureBundle,status)==32u &&
+            offsetof(VbeG1bCaptureBundle,snapshots)==96u &&
             VBE_G1B_LOWIO_SEGMENT==1u &&
             VBE_G1B_PLANE0_OFFSET==0x37Cu &&
-            VBE_G1B_PLANE1_OFFSET==0x590u
+            VBE_G1B_PLANE1_OFFSET==0x590u &&
+            VBE_G1B_SYS_EVENT_SUSPEND_RESUME==0x00100000u
           );}
           C
           cc -std=c99 -Wall -Wextra -Werror -I. /tmp/g1babi.c -o /tmp/g1babi
@@ -120,12 +136,15 @@ jobs:
             --output gate1b-snapshot-imports.txt
           cat gate1b-snapshot-imports.txt
           ! grep -F 'library=SceModulemgrForKernel' gate1b-snapshot-imports.txt
-          ! grep -F 'SceLowio' gate1b-snapshot-imports.txt
-          ! grep -F 'SceIftu' gate1b-snapshot-imports.txt
+          ! grep -F 'library=SceLowio' gate1b-snapshot-imports.txt
+          ! grep -F 'SceIftuForDriver' gate1b-snapshot-imports.txt
           ! grep -F 'SceLcd' gate1b-snapshot-imports.txt
           grep -F 'library=SceModulemgrForDriver' gate1b-snapshot-imports.txt
+          grep -F 'library=SceKernelSuspendForDriver' gate1b-snapshot-imports.txt
+          grep -F 'library=taihenForKernel' gate1b-snapshot-imports.txt
+          grep -F 'library=taihenModuleUtils' gate1b-snapshot-imports.txt
 
-      - name: Package exact snapshot candidate
+      - name: Package exact lifecycle snapshot candidate
         id: hashes
         run: |
           set -euxo pipefail
@@ -139,13 +158,15 @@ jobs:
           cp gate1b-snapshot-source-safety.txt gate1b-snapshot-decoder-selftest.txt gate1b-snapshot-protocol-abi.txt gate1b-snapshot-imports.txt gate1b-snapshot-package/
           printf '%s\n' "$GITHUB_SHA" > gate1b-snapshot-package/WORKFLOW_COMMIT.txt
           printf '%s\n' \
-            "workflow=Gate-1B read-only snapshot candidate" \
+            "workflow=Gate-1B lifecycle snapshot candidate" \
             "commit=$GITHUB_SHA" \
             "firmware=3.65" \
             "static_semantics_head=$STATIC_SEMANTICS_HEAD" \
             "static_semantics_run=$STATIC_SEMANTICS_RUN" \
             "static_semantics_artifact=$STATIC_SEMANTICS_ARTIFACT" \
             "static_semantics_digest=$STATIC_SEMANTICS_DIGEST" \
+            "capture=pre-suspend system event + post-resume active/event-or-enable-p1" \
+            "sys_event=0x00100000" \
             "lowio_segment=1" \
             "plane0_offset=0x37C" \
             "plane1_offset=0x590" \
@@ -163,7 +184,7 @@ jobs:
         id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: vbe-gate1b-snapshot-${{ github.sha }}
+          name: vbe-gate1b-lifecycle-snapshot-${{ github.sha }}
           path: gate1b-snapshot-package/
           if-no-files-found: error
           compression-level: 6
@@ -202,11 +223,14 @@ jobs:
           test "$(sha256sum "$pkg/vbe_gate1b_snapshot.skprx" | awk '{print $1}')" = "$EXPECTED_SKPRX"
           test "$(sha256sum "$pkg/gate1b_snapshot_decode.py" | awk '{print $1}')" = "$EXPECTED_DECODER"
           grep -F 'GATE1B_SNAPSHOT_SOURCE_SAFETY=PASS' "$pkg/gate1b-snapshot-source-safety.txt"
-          grep -F 'NO_HOOKS=PASS' "$pkg/gate1b-snapshot-source-safety.txt"
-          grep -F 'NO_DISPLAY_OR_IFTU_WRITES=PASS' "$pkg/gate1b-snapshot-source-safety.txt"
+          grep -F 'ONE_ENABLE_HOOK_ONLY=PASS' "$pkg/gate1b-snapshot-source-safety.txt"
+          grep -F 'SONY_CALLED_EXACTLY_ONCE=PASS' "$pkg/gate1b-snapshot-source-safety.txt"
+          grep -F 'NO_DISPLAY_OR_IFTU_MUTATION=PASS' "$pkg/gate1b-snapshot-source-safety.txt"
+          grep -F 'NO_HOOK_TIME_IO=PASS' "$pkg/gate1b-snapshot-source-safety.txt"
+          grep -F 'NO_RUNTIME_TAIHEN_RELEASE=PASS' "$pkg/gate1b-snapshot-source-safety.txt"
           grep -F 'GATE1B_SNAPSHOT_PROTOCOL_ABI=PASS' "$pkg/gate1b-snapshot-protocol-abi.txt"
           ! grep -F 'library=SceModulemgrForKernel' "$pkg/gate1b-snapshot-imports.txt"
-          ! grep -F 'SceLowio' "$pkg/gate1b-snapshot-imports.txt"
+          ! grep -F 'library=SceLowio' "$pkg/gate1b-snapshot-imports.txt"
           python3 "$pkg/gate1b_snapshot_decode.py" --self-test
           echo 'GATE1B_SNAPSHOT_INDEPENDENT_VERIFY=PASS'
           echo "ARTIFACT_ID=$ARTIFACT_ID"
