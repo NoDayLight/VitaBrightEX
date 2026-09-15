@@ -29,7 +29,7 @@ def main():
     need(h,'((type(*)())next->func)(__VA_ARGS__)','TAI_CONTINUE successor call')
     need(i,'struct _tai_hook_user u;','internal user mirror')
     need(i,'struct _tai_hook *next;','internal hook chain next')
-    need(p,'The order in the chain is not defined.','undefined chain order')
+    need(p,'order in the chain is not defined.','undefined chain order')
     need(p,'head->u.next = slab_getmirror(item->patch->slab, item);','successor insertion')
     need(p,'item->u.next = head->u.next;','new node successor')
     result={
