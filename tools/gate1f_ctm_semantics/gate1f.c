@@ -164,16 +164,25 @@ static void draw_chart(const char *prompt, const char *value) {
 
 static uint32_t wait_button(void) {
     SceCtrlData pad;
+    const uint32_t mask = SCE_CTRL_LEFT|SCE_CTRL_RIGHT|SCE_CTRL_CROSS|SCE_CTRL_TRIANGLE;
     uint32_t previous = 0;
+    /* A held confirmation from the previous prompt must never answer the next one. */
     for (;;) {
-        uint32_t pressed;
         sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DEFAULT);
         memset(&pad,0,sizeof(pad));
         sceCtrlPeekBufferPositive(0,&pad,1);
-        pressed = pad.buttons & ~previous;
-        previous = pad.buttons;
-        if (pressed & (SCE_CTRL_LEFT|SCE_CTRL_RIGHT|SCE_CTRL_CROSS|SCE_CTRL_TRIANGLE))
-            return pressed;
+        if ((pad.buttons & mask) == 0u) break;
+        sceKernelDelayThread(16000);
+    }
+    for (;;) {
+        uint32_t current, pressed;
+        sceKernelPowerTick(SCE_KERNEL_POWER_TICK_DEFAULT);
+        memset(&pad,0,sizeof(pad));
+        sceCtrlPeekBufferPositive(0,&pad,1);
+        current = pad.buttons & mask;
+        pressed = current & ~previous;
+        previous = current;
+        if (pressed) return pressed;
         sceKernelDelayThread(16000);
     }
 }
