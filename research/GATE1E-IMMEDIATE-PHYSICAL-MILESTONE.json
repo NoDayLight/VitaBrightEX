@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "mission": "Gate-1E Immediate Application / Replay Primitive Discovery",
+  "target": "PCH-2000 / FW 3.65",
+  "tested_production_candidate": "215d92d2b29643f1456592847ae4d13d91dc81a2",
+  "gate1d_physical_closure": "1a04bc5bcec964053c437987525126c9d17c5e02",
+  "gate1e_candidate": "1ee6fc39813a92e30e118149cd4ed1be018ef10d",
+  "gate1e_ci_run": 35058353771,
+  "gate1e_artifact_id": 10430888862,
+  "gate1e_artifact_sha256": "8770d539b5456a8c03b4504eb057db71c845b298bda50a95da1dd95f90e24a40",
+  "selected_attack_surface": "TAIHEN_CHAIN_REENTRY",
+  "identity_discriminator_capture_sha256": "aaf6f7dc1e8356dd9a3e26f262e8340067691905a3ec802e3b38e3e0efbdb099",
+  "immediate_mild": {
+    "capture_sha256": "758497d8883f04c780daf29e2d08359c8f811e66c6901531bce5c25d0fa1440a",
+    "size": 2748,
+    "authoritative": "PASS",
+    "visual_transition": "IMMEDIATE",
+    "suspend_resume_required": false,
+    "policy_before": {"requested":1,"active":1,"enabled":0,"pending":"0x0"},
+    "policy_published": {"requested":2,"active":2,"enabled":1,"pending":"0x3"},
+    "policy_after": {"requested":2,"active":2,"enabled":1,"pending":"0x0"},
+    "observer": {"owned":"0x3","fail":"0x0","runs":1,"concurrent":0,"overlap":0,"events":8,"return_p0":0,"return_p1":0},
+    "plane0": {"pristine_generation_before":1,"pristine_generation_after":2,"applied_generation_after":2,"source_sha256":"5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5","forward_sha256":"090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50","raw_return":0,"mismatch":0,"overflow":0,"policy_read_fail":0},
+    "plane1": {"pristine_generation_before":1,"pristine_generation_after":2,"applied_generation_after":2,"source_sha256":"5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5","forward_sha256":"090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50","raw_return":0,"mismatch":0,"overflow":0,"policy_read_fail":0}
+  },
+  "immediate_reset": {
+    "capture_sha256": "d4971413d49197b1f043402fd5d8187bac906e78d973bfc71f2e1744bb42f542",
+    "size": 2748,
+    "authoritative": "PASS",
+    "visual_transition": "IMMEDIATE_TO_STOCK",
+    "suspend_resume_required": false,
+    "policy_before": {"requested":2,"active":2,"enabled":1,"pending":"0x0"},
+    "policy_published": {"requested":3,"active":3,"enabled":0,"pending":"0x3"},
+    "policy_after": {"requested":3,"active":3,"enabled":0,"pending":"0x0"},
+    "observer": {"owned":"0x3","fail":"0x0","runs":2,"concurrent":0,"overlap":0,"events":8,"return_p0":0,"return_p1":0},
+    "plane0": {"pristine_generation_before":2,"pristine_generation_after":3,"applied_generation_after":3,"source_sha256":"5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5","forward_sha256":"5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5","raw_return":0,"mismatch":0,"overflow":0,"policy_read_fail":0},
+    "plane1": {"pristine_generation_before":2,"pristine_generation_after":3,"applied_generation_after":3,"source_sha256":"5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5","forward_sha256":"5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5","raw_return":0,"mismatch":0,"overflow":0,"policy_read_fail":0}
+  },
+  "classifications": {
+    "immediate_matrix_application": "PHYSICALLY_VERIFIED",
+    "no_suspend_resume_needed": "PHYSICALLY_VERIFIED",
+    "mild_matrix": "PHYSICALLY_VERIFIED",
+    "exact_immediate_reset": "PHYSICALLY_VERIFIED",
+    "p0_p1_consistency": "PHYSICALLY_VERIFIED_FOR_MILD_AND_RESET",
+    "full_hook_chain_participation": "PHYSICALLY_VERIFIED",
+    "no_recursion": "PHYSICALLY_VERIFIED",
+    "cache_coherent_sony_setter_path": "STATICALLY_PROVEN_AND_PHYSICALLY_EXERCISED",
+    "natural_sony_replay_after_immediate_apply": "PENDING",
+    "repeated_mild_reset_stability": "PENDING",
+    "failure_rollback_semantics": "PENDING"
+  }
+}
