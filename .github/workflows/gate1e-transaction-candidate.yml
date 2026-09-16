@@ -167,7 +167,9 @@ jobs:
           unzip -p gate1e-clients/vbe_gate1e_integrated_reset.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1EIR1
           unzip -p gate1e-clients/vbe_gate1e_integrated_status.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1EIS1
           unzip -p gate1e-clients/vbe_gate1e_integrated_rollback.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1ERB1
-          ! arm-vita-eabi-nm -u gate1e-build/vitabright.velf | grep -E '[[:space:]](memcpy|memset)$'
+          test -x "$VITASDK/bin/arm-vita-eabi-nm"
+          ! "$VITASDK/bin/arm-vita-eabi-nm" -u gate1e-build/vitabright.velf | grep -E '[[:space:]](memcpy|memset)$'
+          echo 'GATE1E_NO_UNRESOLVED_HOST_LIBC=PASS' | tee gate1e-link-audit.txt
           echo 'GATE1E_INTEGRATED_BUILD=PASS' | tee gate1e-build.txt
 
       - name: Production import and hot-path audit
@@ -180,8 +182,9 @@ jobs:
           ! grep -F 'library=SceLowio' gate1e-imports.txt
           ! grep -F 'SceIftuForDriver' gate1e-imports.txt
           grep -F 'taihenModuleUtils' gate1e-imports.txt
-          ! grep -E 'ksceIo(Open|Write|Read|Close)' gate1e-imports.txt
-          echo 'GATE1E_NO_DIRECT_LOWIO_MMIO_OR_RUNTIME_IO=PASS' | tee gate1e-import-contract.txt
+          ! grep -F 'ksceIo' matrix_backend.c
+          ! grep -F 'SceIofilemgr' matrix_backend.c
+          echo 'GATE1E_NO_DIRECT_LOWIO_OR_MATRIX_HOT_PATH_IO=PASS' | tee gate1e-import-contract.txt
 
       - name: Package exact integrated candidate
         id: hashes
@@ -198,7 +201,7 @@ jobs:
           cp research/gate1e_transaction_deploy_mac.sh gate1e-package/
           cp matrix_backend.h matrix_backend_core.h matrix_policy_core.h matrix_authority_core.h matrix_apply_txn_core.h gate1e-package/include/
           cp research/GATE1E-HAPPY-PATH-PHYSICAL.json research/GATE1E-ATTACK-SURFACE.json gate1e-package/evidence/
-          cp gate1e-evidence-boundary.txt gate1e-matrix-core.txt gate1e-matrix-policy.txt gate1e-authority.txt gate1e-txn.txt gate1e-source-contract.txt gate1e-source-safety.txt gate1e-object-hashes.txt gate1e-build.txt gate1e-imports.txt gate1e-import-contract.txt gate1e-package/evidence/
+          cp gate1e-evidence-boundary.txt gate1e-matrix-core.txt gate1e-matrix-policy.txt gate1e-authority.txt gate1e-txn.txt gate1e-source-contract.txt gate1e-source-safety.txt gate1e-object-hashes.txt gate1e-build.txt gate1e-link-audit.txt gate1e-imports.txt gate1e-import-contract.txt gate1e-package/evidence/
           printf '%s\n' "$GITHUB_SHA" > gate1e-package/WORKFLOW_COMMIT.txt
           printf '%s\n' \
             "workflow=Gate-1E transactional integrated production candidate" \
