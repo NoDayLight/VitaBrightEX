@@ -1,0 +1,131 @@
+{
+  "schema": 1,
+  "mission": "VitaBrightEX pseudo-v1.4 Gate-1D Production Stage-B Matrix Backend",
+  "classification": "PHYSICAL_CLOSURE",
+  "target": {
+    "hardware": "PCH-2000",
+    "firmware": "3.65",
+    "selected_stage": "B / csc_params1 / private D64F4C6B"
+  },
+  "production_candidate": {
+    "commit": "215d92d2b29643f1456592847ae4d13d91dc81a2",
+    "ci_run": 35035603952,
+    "artifact_id": 10423221750,
+    "artifact_sha256": "b03612195566fd41a9b2edbd78248565e69fe58a3412c3d7d5e356721d6d215e",
+    "skprx_sha256": "513d3a237933715ccd2e9ff156762c27241dd24ed5ad361e3cb42296ffd2d19d"
+  },
+  "objects": {
+    "canonical_identity_b_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+    "mild_identity_b_sha256": "090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50",
+    "mild_component0_s3_9": 461,
+    "mild_component0_ratio": "461/512"
+  },
+  "physical_sequence": [
+    {
+      "phase": "A_NEUTRAL_COLD_BOOT",
+      "file_sha256": "4711e31309210ac511883d01797605e122138500c61e54139f05dd1ebd423c23",
+      "requested_generation": 1,
+      "active_generation": 1,
+      "enabled": false,
+      "pending_plane_mask": 0,
+      "plane0": {"pristine_generation": 1, "applied_generation": 1, "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "forward_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "raw_return": 0},
+      "plane1": {"pristine_generation": 1, "applied_generation": 1, "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "forward_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "raw_return": 0},
+      "result": "PASS"
+    },
+    {
+      "phase": "B_MILD_REQUEST_PENDING",
+      "file_sha256": "09cbd946b6900b22cf54a02c8e2a27926eb4dabb088a26a107cab52469dbba1a",
+      "action_result": 1,
+      "meaning": "ACCEPTED_PENDING_REPLAY",
+      "requested_generation": 2,
+      "active_generation": 2,
+      "enabled": true,
+      "pending_plane_mask": 3,
+      "result": "PASS"
+    },
+    {
+      "phase": "B_MILD_APPLIED_AFTER_NATURAL_REPLAY",
+      "file_sha256": "0b59e460ccba647b71ce0ce0d7a432bf72d24f9f2978270dc865e124ce2af305",
+      "requested_generation": 2,
+      "active_generation": 2,
+      "enabled": true,
+      "pending_plane_mask": 0,
+      "plane0": {"pristine_generation": 2, "applied_generation": 2, "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "forward_sha256": "090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50", "raw_return": 0},
+      "plane1": {"pristine_generation": 2, "applied_generation": 2, "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "forward_sha256": "090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50", "raw_return": 0},
+      "result": "PASS"
+    },
+    {
+      "phase": "C_RESET_REQUEST_PENDING",
+      "file_sha256": "0ada5a94b9b5d7cb6c62e94c9cbd21a74557fc51e931de5617fb04c2ca61c721",
+      "action_result": 1,
+      "meaning": "ACCEPTED_PENDING_REPLAY",
+      "requested_generation": 3,
+      "active_generation": 3,
+      "enabled": false,
+      "pending_plane_mask": 3,
+      "result": "PASS"
+    },
+    {
+      "phase": "C_RESET_APPLIED",
+      "file_sha256": "d4d29a8b79ca9fba2e5e9008c285cc11b8cb6532441245e1446529860be2a432",
+      "requested_generation": 3,
+      "active_generation": 3,
+      "enabled": false,
+      "pending_plane_mask": 0,
+      "plane0": {"pristine_generation": 3, "applied_generation": 3, "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "forward_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "raw_return": 0},
+      "plane1": {"pristine_generation": 3, "applied_generation": 3, "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "forward_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "raw_return": 0},
+      "result": "PASS"
+    },
+    {
+      "phase": "D_MILD_REAPPLIED_NON_COMPOUNDING",
+      "file_sha256": "7b4e0eeabcd88537c69e2887956532cf003ae99e30cae0d7e1ebcf09980f9cee",
+      "requested_generation": 5,
+      "active_generation": 5,
+      "enabled": true,
+      "pending_plane_mask": 0,
+      "plane0": {"pristine_generation": 5, "applied_generation": 5, "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "forward_sha256": "090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50", "raw_return": 0},
+      "plane1": {"pristine_generation": 5, "applied_generation": 5, "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "forward_sha256": "090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50", "raw_return": 0},
+      "mismatch": 0,
+      "overflow": 0,
+      "policy_read_fail": 0,
+      "result": "PASS"
+    },
+    {
+      "phase": "E_FINAL_RESET_EXACT_RESTORATION",
+      "file_sha256": "d239da509368ae032838830c2725e79f8f74d048236aa7c807f54deec42cfce2",
+      "requested_generation": 6,
+      "active_generation": 6,
+      "enabled": false,
+      "pending_plane_mask": 0,
+      "plane0": {"pristine_generation": 6, "applied_generation": 6, "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "forward_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "raw_return": 0},
+      "plane1": {"pristine_generation": 6, "applied_generation": 6, "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "forward_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5", "raw_return": 0},
+      "mismatch": 0,
+      "overflow": 0,
+      "policy_read_fail": 0,
+      "result": "PASS"
+    }
+  ],
+  "conclusions": {
+    "stage_b_only": "PHYSICALLY_VERIFIED",
+    "neutral_identity_forwarding": "PHYSICALLY_VERIFIED",
+    "mild_matrix_application": "PHYSICALLY_VERIFIED",
+    "natural_sony_replay_application": "PHYSICALLY_VERIFIED",
+    "fresh_pristine_baseline_reacquisition": "PHYSICALLY_VERIFIED",
+    "non_compounding": "PHYSICALLY_VERIFIED",
+    "reset_to_exact_sony_baseline": "PHYSICALLY_VERIFIED",
+    "exact_restoration": "PHYSICALLY_VERIFIED",
+    "sony_raw_return_preservation": "PHYSICALLY_VERIFIED_FOR_TESTED_PATHS",
+    "baseline_mismatch": 0,
+    "coefficient_overflow": 0,
+    "policy_read_fail": 0,
+    "immediate_reapply": "BLOCKED_PINNED_TAIHEN_CHAIN_ORDER",
+    "matrix_backend": "PRODUCTION_CANDIDATE_PCH2000_FW365"
+  },
+  "limits": [
+    "No claim for other firmware, hardware, panels, unknown Sony B baselines, or source formats.",
+    "Immediate synchronous reapply remains unproven and unimplemented; Set/Reset truthfully use ACCEPTED_PENDING_REPLAY until natural Sony replay.",
+    "Channel/component semantic names remain unproven; CCT and saturation remain pending channel-order closure.",
+    "Additive affine semantics and nonlinear gamma/tone/panel-linearisation remain outside Gate-1D closure.",
+    "Known Sony full-to-limited baseline composition is host-proven only; it was not naturally observed during this physical sequence."
+  ]
+}
