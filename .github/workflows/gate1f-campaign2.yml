@@ -32,7 +32,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Exact Campaign-2 boundary and no kernel delta
+      - name: Exact research boundary and frozen production kernel
         run: |
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -47,7 +47,7 @@ jobs:
           echo GATE1F_CAMPAIGN2_NO_KERNEL_DELTA=PASS
           echo GATE1F_CAMPAIGN1_DECODER_FROZEN=PASS
 
-      - name: Host-test production-shared observer state machine
+      - name: Host-test observer state machine regression
         run: |
           set -euxo pipefail
           cc -std=c99 -Wall -Wextra -Werror \
@@ -84,7 +84,7 @@ jobs:
             grep -F 'SCE_DISPLAY_PIXELFORMAT_A8B8G8R8' "$common"
           } | tee gate1f-c2-vitasdk-headers.txt
 
-      - name: Build exact Gate-1E base for ABI-stub provenance
+      - name: Build exact Gate-1E base for ABI provenance
         run: |
           set -euxo pipefail
           git worktree add --detach /tmp/gate1f-base "$GATE1F_BASE"
@@ -120,15 +120,11 @@ jobs:
           for p in d['probes']:
               assert p['formal_witness_in_range'] is True
               assert (p['identity_forward_sha256'],p['full_to_limited_forward_sha256'])==want[p['id']]
-              assert len(p['identity_forward_words'])==15
-              assert len(p['full_to_limited_forward_words'])==15
-
+              assert len(p['identity_forward_words'])==15 and len(p['full_to_limited_forward_words'])==15
           src=Path('tools/gate1f_campaign2/main.c').read_text()
           rx=re.compile(r'static const C2Probe\s+probe_\w+\s*=\s*\{"([^"]+)",(\d+),(\d+),\{([^}]*)\},(\d+)\};')
-          found={}
-          for pid,row,col,matrix,diag in rx.findall(src):
-              found[pid]=(int(row),int(col),[int(x.strip()) for x in matrix.split(',')],int(diag))
-          assert set(found)==set(want), (set(found),set(want))
+          found={pid:(int(row),int(col),[int(x.strip()) for x in matrix.split(',')],int(diag)) for pid,row,col,matrix,diag in rx.findall(src)}
+          assert set(found)==set(want)
           for p in d['probes']:
               row,col,matrix,diag=found[p['id']]
               assert row==p['row'] and col==p['col'] and matrix==p['matrix_s3_9']
@@ -140,7 +136,7 @@ jobs:
           python3 -m py_compile tools/gate1f_campaign2/generate_expected.py tools/gate1f_campaign2/decode.py
           python3 tools/gate1f_campaign2/decode.py --self-test
 
-      - name: Temporal-observer and recovery source contract
+      - name: Observer, recovery and evidence-lifecycle contract
         run: |
           set -euxo pipefail
           src=tools/gate1f_campaign2/main.c
@@ -148,6 +144,7 @@ jobs:
           dec=tools/gate1f_campaign2/decode.py
           ui=tools/gate1f_campaign2/ui.c
           back=tools/gate1f_campaign2/backend.c
+          cmake=tools/gate1f_campaign2/CMakeLists.txt
           grep -F 'TEMPORAL_AB_EXPLICIT_COMMIT' "$src"
           grep -F 'ANSWER2|id=' "$src"
           grep -F 'STEP %02u' "$src"
@@ -157,20 +154,25 @@ jobs:
           grep -F 'TOGGLE_PROBE' "$src"
           grep -F 'TOGGLE_NEUTRAL' "$src"
           grep -F 'C2_MIN_TOGGLES' "$src"
-          ! grep -R -F 'C2_MAX_TOGGLES' tools/gate1f_campaign2/main.c tools/gate1f_campaign2/campaign2.h tools/gate1f_campaign2/decode.py
+          ! grep -R -F 'C2_MAX_TOGGLES' "$src" "$hdr" "$dec"
           grep -F 'max_toggles=UNBOUNDED' "$src"
           grep -F 'NEW QUESTION STARTS UNSELECTED' "$ui"
           grep -F 'X SAVE ANSWER' "$ui"
+          grep -F 'C2_WORK_LOG_PATH' "$hdr"
+          grep -F 'C2_FINAL_LOG_PATH' "$hdr"
+          grep -F 'C2_BACKUP_LOG_PATH' "$hdr"
           grep -F 'c2_log_begin' "$back"
+          grep -F 'c2_log_finalize' "$back"
+          grep -F 'FINALIZE2|result=COMMIT' "$src"
           grep -F 'SCE_O_TRUNC' "$back"
           grep -F 'c2_log_failed' "$back"
           grep -F 'c2_status_matches_probe' "$back"
           grep -F 'known_active_probe' "$src"
           grep -F 'REFUSED_UNKNOWN_ACTIVE' "$src"
           grep -F 'MATRIX2|id=%s' "$src"
-          grep -F 'C2_MIN_TOGGLES = 3' "$dec"
-          grep -F "max_toggles')!='UNBOUNDED'" "$dec"
           grep -F 'validate_answers' "$dec"
+          grep -F "one(rows,'FINALIZE2')" "$dec"
+          grep -F -- '-Os' "$cmake"
           grep -F 'vitabrightMatrixSetRequest' "$back"
           grep -F 'vitabrightMatrixReset' "$back"
           grep -F 'natural_unchanged' "$back"
@@ -181,9 +183,9 @@ jobs:
           ! grep -Ei 'red should|green should|blue should|expected physical' tools/gate1f_campaign2/*.c
           echo GATE1F_CAMPAIGN2_EXPLICIT_COMMIT_CONTRACT=PASS
           echo GATE1F_CAMPAIGN2_RECOVERY_CONTRACT=PASS
-          echo GATE1F_CAMPAIGN2_EVIDENCE_IO_CONTRACT=PASS
+          echo GATE1F_CAMPAIGN2_EVIDENCE_LIFECYCLE_CONTRACT=PASS
 
-      - name: Build user-mode Campaign-2 harness
+      - name: Build user-mode Campaign-2 R3 harness
         run: |
           set -euxo pipefail
           cmake -S tools/gate1f_campaign2 -B gate1f-c2-build \
@@ -192,18 +194,19 @@ jobs:
           cmake --build gate1f-c2-build --parallel
           test -s gate1f-c2-build/vbe_gate1f_campaign2.vpk
           unzip -p gate1f-c2-build/vbe_gate1f_campaign2.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1F002
-          unzip -p gate1f-c2-build/vbe_gate1f_campaign2.vpk sce_sys/param.sfo | strings | grep -Fx 'VBE Gate-1F Campaign 2 R2'
+          unzip -p gate1f-c2-build/vbe_gate1f_campaign2.vpk sce_sys/param.sfo | strings | grep -Fx 'VBE Gate-1F Campaign 2 R3'
           nm="$VITASDK/bin/arm-vita-eabi-nm"
           "$nm" gate1f-c2-build/vbe_gate1f_campaign2 | tee gate1f-c2-symbols.txt
           grep -F 'vitabrightGetBuildId' gate1f-c2-symbols.txt
           grep -F 'vitabrightMatrixSetRequest' gate1f-c2-symbols.txt
           grep -F 'vitabrightMatrixReset' gate1f-c2-symbols.txt
           grep -F 'c2_choice_try_commit' gate1f-c2-symbols.txt
+          grep -F 'c2_log_finalize' gate1f-c2-symbols.txt
           grep -F 'sceDisplaySetFrameBuf' gate1f-c2-symbols.txt
           ! grep -Ei 'sceGxm|vita2d' gate1f-c2-symbols.txt
           echo GATE1F_CAMPAIGN2_USERMODE_BUILD=PASS
 
-      - name: Package Campaign-2 discriminator only
+      - name: Package exact Campaign-2 R3 discriminator
         id: hashes
         run: |
           set -euxo pipefail
@@ -234,6 +237,8 @@ jobs:
             'question_default=UNSELECTED' \
             'startup_active_policy_recovery=KNOWN_CAMPAIGN2_ONLY' \
             'evidence_io=FAIL_CLOSED' \
+            'evidence_staging=PARTIAL_TO_FINAL' \
+            'completed_evidence_relaunch_preserved=YES' \
             'cct_supported=0' \
             'saturation_supported=0' \
             'ctm_transfer_domain=UNKNOWN' > gate1f-c2-package/BOUNDARY.txt
@@ -243,7 +248,7 @@ jobs:
           echo "decoder_sha=$(sha256sum gate1f-c2-package/tools/decode.py | awk '{print $1}')" >> "$GITHUB_OUTPUT"
           echo "expected_sha=$(sha256sum gate1f-c2-package/evidence/gate1f_campaign2_expected.json | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-      - name: Upload Campaign-2 discriminator
+      - name: Upload Campaign-2 R3 discriminator
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
           name: vbe-gate1f-campaign2-${{ github.sha }}
@@ -260,11 +265,12 @@ jobs:
         with:
           name: vbe-gate1f-campaign2-${{ github.sha }}
           path: verified
-      - name: Verify exact Campaign-2 artifact
+      - name: Verify exact Campaign-2 R3 artifact
         run: |
           set -euxo pipefail
           cd verified
           sha256sum -c SHA256SUMS
+          test "$(cat HARNESS_COMMIT.txt)" = "$GITHUB_SHA"
           test "$(cat BASE_COMMIT.txt)" = "a637f54fec4e66a665874944fbea8af016d55f32"
           test "$(cat CAMPAIGN1_HARNESS_COMMIT.txt)" = "0431146ee2cbf2c7683f64091c74ff252301dae6"
           test "$(cat CAMPAIGN1_RAW_SHA256.txt)" = "740c6f7a345a9544dc0b9c79b38040baa663e6f8a8dbb27483d304b9901278bd"
@@ -284,5 +290,7 @@ jobs:
           grep -Fx 'question_default=UNSELECTED' BOUNDARY.txt
           grep -Fx 'startup_active_policy_recovery=KNOWN_CAMPAIGN2_ONLY' BOUNDARY.txt
           grep -Fx 'evidence_io=FAIL_CLOSED' BOUNDARY.txt
+          grep -Fx 'evidence_staging=PARTIAL_TO_FINAL' BOUNDARY.txt
+          grep -Fx 'completed_evidence_relaunch_preserved=YES' BOUNDARY.txt
           python3 tools/decode.py --self-test
           echo GATE1F_CAMPAIGN2_INDEPENDENT_VERIFY=PASS
