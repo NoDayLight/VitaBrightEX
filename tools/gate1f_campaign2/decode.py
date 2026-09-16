@@ -156,8 +156,7 @@ def factorize(table):
     return row_map,col_map,separable,(separable and row_map==col_map)
 
 
-def display_app(v):
-    return v.replace('_',' ')
+def display_app(v): return v.replace('_',' ')
 
 
 def expected_answer_plan(pid,obs):
@@ -166,38 +165,29 @@ def expected_answer_plan(pid,obs):
         if obs['changed']=='YES': plan.append(('MAGENTA50_APPEARANCE',display_app(obs['probe_appearance'])))
         plan.append(('CONFIDENCE',obs['confidence']))
         return plan
-    plan=[
-        ('R50_CHANGED',obs['r_changed']),
-        ('G50_CHANGED',obs['g_changed']),
-        ('B50_CHANGED',obs['b_changed']),
-    ]
+    plan=[('R50_CHANGED',obs['r_changed']),('G50_CHANGED',obs['g_changed']),('B50_CHANGED',obs['b_changed'])]
     for prefix,changed_key,appearance_key in (
         ('R50','r_changed','r_appearance'),('G50','g_changed','g_appearance'),('B50','b_changed','b_appearance')):
         if obs[changed_key]=='YES': plan.append((prefix+'_APPEARANCE',display_app(obs[appearance_key])))
     plan += [
-        ('YELLOW50_CHANGED',obs['yellow_changed']),
-        ('MAGENTA50_CHANGED',obs['magenta_changed']),
-        ('CYAN50_CHANGED',obs['cyan_changed']),
-        ('GRAY50_CHANGED',obs['gray_changed']),
-        ('CONFIDENCE',obs['confidence']),
-    ]
+        ('YELLOW50_CHANGED',obs['yellow_changed']),('MAGENTA50_CHANGED',obs['magenta_changed']),
+        ('CYAN50_CHANGED',obs['cyan_changed']),('GRAY50_CHANGED',obs['gray_changed']),('CONFIDENCE',obs['confidence'])]
     return plan
 
 
 def validate_answers(rows,pid,obs,final_toggle_count,failures):
     ars=[r for r in rows if r['_tag']=='ANSWER2' and r.get('id')==pid]
     plan=expected_answer_plan(pid,obs)
-    try:
-        logged_count=int(obs['answer_count'])
+    try: logged_count=int(obs['answer_count'])
     except (KeyError,ValueError):
-        failures.append(f'{pid}: missing/invalid answer_count')
-        return
+        failures.append(f'{pid}: missing/invalid answer_count'); return
     if logged_count!=len(plan) or len(ars)!=len(plan):
-        failures.append(f'{pid}: answer count mismatch obs={logged_count} rows={len(ars)} expected={len(plan)}')
-        return
+        failures.append(f'{pid}: answer count mismatch obs={logged_count} rows={len(ars)} expected={len(plan)}'); return
     previous_toggle=-1
     for i,(row,(field,value)) in enumerate(zip(ars,plan),1):
-        if int(row.get('step','-1'))!=i: failures.append(f'{pid}: ANSWER2 step {row.get("step")} expected {i}')
+        try: step=int(row.get('step','-1'))
+        except ValueError: step=-1
+        if step!=i: failures.append(f'{pid}: ANSWER2 step {row.get("step")} expected {i}')
         if row.get('field')!=field: failures.append(f'{pid}: ANSWER2 field {row.get("field")} expected {field}')
         if row.get('value')!=value: failures.append(f'{pid}: {field} value {row.get("value")} expected {value}')
         if row.get('state')!='PROBE': failures.append(f'{pid}: {field} committed outside PROBE state')
@@ -206,8 +196,10 @@ def validate_answers(rows,pid,obs,final_toggle_count,failures):
         if tc<C2_MIN_TOGGLES or tc>final_toggle_count: failures.append(f'{pid}: {field} invalid commit toggle_count {tc}')
         if tc<previous_toggle: failures.append(f'{pid}: answer toggle_count regressed at {field}')
         previous_toggle=tc
-    if ars and int(ars[-1]['toggle_count'])!=final_toggle_count:
-        failures.append(f'{pid}: final answer toggle_count does not equal OBS2 toggle_count')
+    if ars:
+        try: last_tc=int(ars[-1]['toggle_count'])
+        except (KeyError,ValueError): last_tc=-1
+        if last_tc!=final_toggle_count: failures.append(f'{pid}: final answer toggle_count does not equal OBS2 toggle_count')
 
 
 def self_test():
@@ -235,8 +227,7 @@ def main():
     ap.add_argument('--json-out')
     ap.add_argument('--self-test',action='store_true')
     a=ap.parse_args()
-    if a.self_test:
-        self_test(); return
+    if a.self_test: self_test(); return
     if not a.campaign1 or not a.campaign2: ap.error('campaign1 and campaign2 evidence files are required')
 
     validate_campaign1(a.campaign1)
@@ -245,27 +236,26 @@ def main():
     failures=[]
     meta=one(rows,'GATE1F_C2'); stimulus=one(rows,'STIMULUS2'); caps=one(rows,'CAPS2'); src=one(rows,'SOURCE_CONFIRM2')
     startup=one(rows,'STARTUP2','-'); pre=one(rows,'PREFLIGHT2','-'); nb=one(rows,'NATURAL_BASELINE2'); complete=one(rows,'COMPLETE2')
+    finalize=one(rows,'FINALIZE2')
     if meta.get('format')!='2': failures.append('Campaign-2 evidence format is not 2')
     if meta.get('expected_runtime')!='a637f54f': failures.append('runtime contract is not a637f54f')
     if meta.get('campaign1_sha')!=C1_SHA: failures.append('Campaign-1 prerequisite SHA mismatch in C2 log')
     if meta.get('observer')!='TEMPORAL_AB_EXPLICIT_COMMIT': failures.append('observer method is not TEMPORAL_AB_EXPLICIT_COMMIT')
-    if int(stimulus.get('min_toggles','-1'))!=C2_MIN_TOGGLES or stimulus.get('max_toggles')!='UNBOUNDED':
-        failures.append('Campaign-2 toggle contract mismatch')
+    if int(stimulus.get('min_toggles','-1'))!=C2_MIN_TOGGLES or stimulus.get('max_toggles')!='UNBOUNDED': failures.append('Campaign-2 toggle contract mismatch')
     for k,want in [('matrix','1'),('immediate','1'),('reapply','3'),('channel_order','0'),('cct','0'),('saturation','0')]:
         if caps.get(k)!=want: failures.append(f'capability {k}={caps.get(k)} expected {want}')
     if src.get('mask')!='7': failures.append('Campaign-2 source confirmation missing')
     if startup.get('result') is None: failures.append('STARTUP2 status missing result')
+    if finalize.get('result')!='COMMIT' or finalize.get('target')!='vbe_gate1f_campaign2.txt': failures.append('final evidence promotion marker invalid')
     recovery=[r for r in rows if r['_tag']=='RECOVERY2']
     if recovery:
         if len(recovery)!=1 or recovery[0].get('result')!='PASS': failures.append('startup recovery did not complete cleanly')
         if len([r for r in rows if r['_tag']=='RECOVERY_RESET2'])!=1: failures.append('startup recovery reset status missing/duplicated')
-    if any(r['_tag'] in ('STOP2','CLEANUP2','CLEANUP_RESET2') for r in rows):
-        failures.append('successful Campaign-2 evidence contains stop/cleanup records')
+    if any(r['_tag'] in ('STOP2','CLEANUP2','CLEANUP_RESET2') for r in rows): failures.append('successful Campaign-2 evidence contains stop/cleanup records')
 
     nat0=int(nb['p0']); nat1=int(nb['p1'])
     failures += ['PREFLIGHT2: '+x for x in status_errors(pre,nat0,nat1,CANON_SHA,0)]
-    if complete.get('controls')!='PASS' or complete.get('targets')!='4' or complete.get('signed_probe')!='N02-C2':
-        failures.append('Campaign-2 completion record invalid')
+    if complete.get('controls')!='PASS' or complete.get('targets')!='4' or complete.get('signed_probe')!='N02-C2': failures.append('Campaign-2 completion record invalid')
     if int(complete['natural_p0'])!=nat0 or int(complete['natural_p1'])!=nat1: failures.append('completion natural generation mismatch')
 
     observations={}
@@ -303,18 +293,12 @@ def main():
     print('GATE1F_CAMPAIGN1_FROZEN=PASS')
     print('GATE1F_CAMPAIGN2_EVIDENCE_INVARIANTS=PASS')
 
-    d0=derive_diagonal(observations['D0-C2'])
-    b02=derive_cross(observations['B02-C2'])
-    controls_ok=(d0 is not None and d0['output']=='R' and d0['input']=='R' and
-                 b02 is not None and b02['output']=='R' and b02['input']=='B')
+    d0=derive_diagonal(observations['D0-C2']); b02=derive_cross(observations['B02-C2'])
+    controls_ok=(d0 is not None and d0['output']=='R' and d0['input']=='R' and b02 is not None and b02['output']=='R' and b02['input']=='B')
     print('CAMPAIGN2_OBSERVER_VALIDATION='+('PASS' if controls_ok else 'FAIL'))
 
-    derived={
-        'E22': derive_diagonal(observations['D2-C2']),
-        'E01': derive_cross(observations['B01-C2']),
-        'E20': derive_cross(observations['B20-C2']),
-        'E21': derive_cross(observations['B21-C2']),
-    }
+    derived={'E22':derive_diagonal(observations['D2-C2']),'E01':derive_cross(observations['B01-C2']),
+             'E20':derive_cross(observations['B20-C2']),'E21':derive_cross(observations['B21-C2'])}
     for key in ('E22','E01','E20','E21'):
         v=derived[key]
         if v: print(f'CAMPAIGN2_{key}={v["output"]}<-{v["input"]} direction={v["direction"]} isolated={v["isolated"]}')
@@ -327,46 +311,26 @@ def main():
         if v:
             r=int(key[1]); c=int(key[2]); table[r][c]={k:v[k] for k in ('output','input','direction','isolated')}
     row_map,col_map,separable,shared=factorize(table)
-
-    positive_ok=all(table[r][c] is not None and table[r][c]['direction']=='INCREASE'
-                    for r,c in ((0,1),(0,2),(1,0),(1,2),(2,0),(2,1)))
-    setup=one(rows,'SIGNED_SETUP2')
-    sobs=observations['N02-C2']
-    signed_ok=False
+    positive_ok=all(table[r][c] is not None and table[r][c]['direction']=='INCREASE' for r,c in ((0,1),(0,2),(1,0),(1,2),(2,0),(2,1)))
+    setup=one(rows,'SIGNED_SETUP2'); sobs=observations['N02-C2']; signed_ok=False
     if b02:
-        witness=SECONDARY.get(frozenset((b02['output'],b02['input'])))
-        expected_app=PRIMARY_APPEARANCE[b02['input']]
+        witness=SECONDARY.get(frozenset((b02['output'],b02['input']))); expected_app=PRIMARY_APPEARANCE[b02['input']]
         signed_ok=(setup.get('positive')=='B02-C2' and setup.get('input')==b02['input'] and setup.get('output')==b02['output'] and
-                   setup.get('witness')==witness and int(setup.get('coefficient','0'))==-512 and
-                   sobs.get('witness')==witness and sobs.get('changed')=='YES' and sobs.get('probe_appearance')==expected_app and sobs.get('confidence')=='CLEAR')
+                   setup.get('witness')==witness and int(setup.get('coefficient','0'))==-512 and sobs.get('witness')==witness and
+                   sobs.get('changed')=='YES' and sobs.get('probe_appearance')==expected_app and sobs.get('confidence')=='CLEAR')
     stage_c=controls_ok and all(derived.values()) and separable and positive_ok and signed_ok
 
-    print('ROW_OUTPUT=['+','.join(row_map)+']')
-    print('COL_INPUT=['+','.join(col_map)+']')
-    print('SEPARABLE_RGB_BASIS='+('YES' if separable else 'NO'))
-    print('SHARED_RGB_BASIS='+('YES' if shared else 'NO'))
-    print('POSITIVE_DIRECTION_CONSISTENT='+('YES' if positive_ok else 'NO'))
-    print('SIGNED_CTM='+('YES' if signed_ok else 'NO'))
+    print('ROW_OUTPUT=['+','.join(row_map)+']'); print('COL_INPUT=['+','.join(col_map)+']')
+    print('SEPARABLE_RGB_BASIS='+('YES' if separable else 'NO')); print('SHARED_RGB_BASIS='+('YES' if shared else 'NO'))
+    print('POSITIVE_DIRECTION_CONSISTENT='+('YES' if positive_ok else 'NO')); print('SIGNED_CTM='+('YES' if signed_ok else 'NO'))
     print('GATE1F_STAGE_C_ALLOWED='+('YES' if stage_c else 'NO'))
 
-    result={
-        'campaign1_evidence_sha256':C1_SHA,
-        'campaign1_backend_integrity':True,
-        'campaign2_evidence_sha256':hashlib.sha256(Path(a.campaign2).read_bytes()).hexdigest(),
-        'campaign2_evidence_format':2,
-        'campaign2_natural_generation':[nat0,nat1],
-        'campaign2_controls_pass':controls_ok,
-        'campaign2_derived':derived,
-        'combined_semantic_table':table,
-        'row_output':row_map,
-        'col_input':col_map,
-        'separable_rgb_basis':separable,
-        'shared_rgb_basis':shared,
-        'positive_direction_consistent':positive_ok,
-        'signed_ctm_verified':signed_ok,
-        'stage_c_allowed':stage_c,
-        'limitations':{'ctm_transfer_domain':'UNKNOWN','cct_supported':False,'saturation_supported':False,'additive_affine_supported':False,'gamma_transfer_supported':False},
-    }
+    result={'campaign1_evidence_sha256':C1_SHA,'campaign1_backend_integrity':True,
+        'campaign2_evidence_sha256':hashlib.sha256(Path(a.campaign2).read_bytes()).hexdigest(),'campaign2_evidence_format':2,
+        'campaign2_natural_generation':[nat0,nat1],'campaign2_controls_pass':controls_ok,'campaign2_derived':derived,
+        'combined_semantic_table':table,'row_output':row_map,'col_input':col_map,'separable_rgb_basis':separable,
+        'shared_rgb_basis':shared,'positive_direction_consistent':positive_ok,'signed_ctm_verified':signed_ok,'stage_c_allowed':stage_c,
+        'limitations':{'ctm_transfer_domain':'UNKNOWN','cct_supported':False,'saturation_supported':False,'additive_affine_supported':False,'gamma_transfer_supported':False}}
     if a.json_out: Path(a.json_out).write_text(json.dumps(result,indent=2,sort_keys=True)+'\n')
 
 if __name__=='__main__': main()
