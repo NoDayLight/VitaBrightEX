@@ -64,11 +64,11 @@
       "level":"L2",
       "name":"patched Stage-B export / taiHEN chain-head reentry",
       "classification":"PROVEN_SAFE_CANDIDATE",
-      "evidence":"Pinned taiHEN patches the original function entry to the chain head; later hooks are linked behind it; TAI_CONTINUE walks successor then saved original. Physical identity capture aaf6f7dc1e8356dd9a3e26f262e8340067691905a3ec802e3b38e3e0efbdb099 proved two observer nodes, Gate-1D participation, one Sony return per plane, no recursion and no concurrency. Physical mild capture 758497d8883f04c780daf29e2d08359c8f811e66c6901531bce5c25d0fa1440a then proved immediate visible 461/512 application with exact Gate-1D forward object on p0/p1 and no suspend/resume. Physical reset capture d4971413d49197b1f043402fd5d8187bac906e78d973bfc71f2e1744bb42f542 proved immediate exact restoration to canonical Sony B on both planes.",
+      "evidence":"Pinned taiHEN patches the original function entry to the chain head; later hooks are linked behind it; TAI_CONTINUE walks successor then saved original. Physical identity capture aaf6f7dc1e8356dd9a3e26f262e8340067691905a3ec802e3b38e3e0efbdb099 proved two observer nodes, Gate-1D participation, one Sony return per plane, no recursion and no concurrency. Physical mild capture 758497d8883f04c780daf29e2d08359c8f811e66c6901531bce5c25d0fa1440a proved immediate visible 461/512 application with exact Gate-1D forward object on p0/p1 and no suspend/resume. Physical reset capture d4971413d49197b1f043402fd5d8187bac906e78d973bfc71f2e1744bb42f542 proved immediate exact restoration to canonical Sony B on both planes. Natural-replay capture 1b25895ecb8f13cf9cb0ed5ee0887c9055b688aca1d9ce813ede0898ec01ae4f proved subsequent Sony suspend/resume reacquired fresh canonical B on both planes and recomposed the active mild policy to the exact same forward object without compounding.",
       "semantic_owner":"TAIHEN_CHAIN_REENTRY",
-      "cache_coherence":"inherits private Sony setter; physical source/forward/pristine generations remained coherent",
+      "cache_coherence":"inherits private Sony setter; immediate and subsequent natural replay both physically preserved pristine-source/cache/live coherence",
       "third_party_hooks":"preserved by chain-head entry; two independent observational nodes were physically traversed once per plane",
-      "physical_test":"IDENTITY + MILD + RESET PASS; natural-replay-after-immediate and rollback/failure closure still pending"
+      "physical_test":"IDENTITY + IMMEDIATE MILD + IMMEDIATE RESET + NATURAL REPLAY AFTER IMMEDIATE PASS; rollback/failure closure still pending"
     },
     {
       "level":"L3",
@@ -78,7 +78,7 @@
       "semantic_owner":"PRIVATE_LOWIO_SETTER",
       "cache_coherence":"native Sony cache+live",
       "third_party_hooks":"direct original/trampoline call would bypass some or all hooks",
-      "selection_note":"Strong fallback, but currently dominated by physically verified L2 chain-head replay."
+      "selection_note":"Strong fallback, but dominated by physically verified L2 chain-head replay."
     },
     {
       "level":"L4",
@@ -101,7 +101,7 @@
       "evidence":"All 15 B register offsets, widths and write order are reconstructed exactly; the retail setter follows them with dmb sy.",
       "semantic_owner":"DIRECT_IFTU_MMIO",
       "cache_coherence":"MMIO-only would leave Sony B cache stale; production use would require explicit cache synchronization or equivalent",
-      "selection_note":"Authorized fallback, but dominated by L2 because L2 is already physically immediate, cache coherent and full-chain compatible."
+      "selection_note":"Authorized fallback, but dominated by L2 because L2 is already physically immediate, cache coherent, full-chain compatible, and stable across later Sony natural replay."
     },
     {
       "level":"L7",
@@ -114,7 +114,7 @@
   "current_selection": {
     "candidate":"L2 patched Stage-B export / taiHEN chain-head reentry",
     "classification":"PROVEN_SAFE_CANDIDATE",
-    "why":"It has physically demonstrated immediate identity replay, immediate visible mild matrix application, exact immediate reset, p0/p1 agreement, full observed hook-chain traversal, Sony success returns, and coherent Gate-1D pristine/forward generations without suspend/resume.",
-    "remaining_gate":"natural Sony replay after immediate apply + repeated mild/reset stability + failure/rollback semantics"
+    "why":"It has physically demonstrated immediate identity replay, immediate visible mild matrix application, exact immediate reset, p0/p1 agreement, full observed hook-chain traversal, Sony success returns, coherent Gate-1D pristine/forward generations without suspend/resume, and fresh non-compounding Sony replay afterward.",
+    "remaining_gate":"transactional failure/rollback semantics and controlled failure injection"
   }
 }
