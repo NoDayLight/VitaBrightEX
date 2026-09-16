@@ -22,6 +22,7 @@
 #define STFAIL_P1_SONY           (1u << 12)
 #define STFAIL_P0_SOURCE         (1u << 13)
 #define STFAIL_P1_SOURCE         (1u << 14)
+#define STFAIL_PLANE_DIAGNOSTICS (1u << 15)
 
 static const uint32_t canonical[15] = {
     0,0,0x3FF,0,0x3FF,0,0x200,0,0,0,0x200,0,0,0,0x200
@@ -100,6 +101,10 @@ static uint32_t common_fail(const VbeMatrixBackendStatus *s) {
     if (s->planes[1].last_sony_return!=0) m|=STFAIL_P1_SONY;
     if (!words_equal(s->planes[0].source_words,canonical)) m|=STFAIL_P0_SOURCE;
     if (!words_equal(s->planes[1].source_words,canonical)) m|=STFAIL_P1_SOURCE;
+    if (s->planes[0].baseline_mismatch_count!=0u || s->planes[1].baseline_mismatch_count!=0u ||
+        s->planes[0].overflow_count!=0u || s->planes[1].overflow_count!=0u ||
+        s->planes[0].policy_read_fail_count!=0u || s->planes[1].policy_read_fail_count!=0u)
+        m|=STFAIL_PLANE_DIAGNOSTICS;
     return m;
 }
 
