@@ -37,7 +37,7 @@ jobs:
           set -euxo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$GATE1F_C1_HEAD" "$GITHUB_SHA"
-          bad="$(git diff --name-only "$GATE1F_C1_HEAD..$GITHUB_SHA" | grep -Ev '^(tools/gate1f_campaign2/|research/GATE1F-CAMPAIGN[12]-.*|\.github/workflows/gate1f-campaign2\.yml$)' || true)"
+          bad="$(git diff --name-only "$GATE1F_C1_HEAD..$GITHUB_SHA" | grep -Ev '^(tools/gate1f_campaign2/|research/GATE1F-CAMPAIGN1-.*|research/GATE1F-CAMPAIGN2(\.json|-.*)|\.github/workflows/gate1f-campaign2\.yml$)' || true)"
           test -z "$bad" || { echo "$bad"; exit 1; }
           for f in matrix_backend.c matrix_backend_core.c matrix_policy_core.c matrix_authority_core.c matrix_apply_txn_core.c module.yml; do
             test "$(git rev-parse "$GATE1F_BASE:$f")" = "$(git rev-parse "HEAD:$f")"
