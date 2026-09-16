@@ -23,13 +23,13 @@ jobs:
           from pathlib import Path
           p=Path('tools/gate1f_ctm_semantics/gate1f.c')
           s=p.read_text()
-          old='''static const uint32_t k_canonical[15] = {\n    0,0,0x3FF,0,0x3FF,0,0x200,0,0,0x200,0,0,0x200\n};'''
-          new='''static const uint32_t k_canonical[15] = {\n    0,0,0x3FF,0,0x3FF,0,0x200,0,0,0x200,0,0,0,0x200\n};\n\nstatic int canonical_constant_ok(void) {\n    static const uint32_t expected[15] = {\n        0,0,0x3FF,0,0x3FF,0,0x200,0,0,0x200,0,0,0,0x200\n    };\n    unsigned i;\n    uint32_t d=0u;\n    for(i=0;i<15;++i) d |= k_canonical[i]^expected[i];\n    return d==0u;\n}'''
+          old='''static const uint32_t k_canonical[15] = {\n    0,0,0x3FF,0,0x3FF,0,0x200,0,0,0x200,0,0,0,0x200\n};'''
+          new='''static const uint32_t k_canonical[15] = {\n    0,0,0x3FF,0,0x3FF,0,0x200,0,0,0,0x200,0,0,0,0x200\n};\n\nstatic int canonical_constant_ok(void) {\n    static const uint32_t expected[15] = {\n        0,0,0x3FF,0,0x3FF,0,0x200,0,0,0,0x200,0,0,0,0x200\n    };\n    unsigned i;\n    uint32_t d=0u;\n    for(i=0;i<15;++i) d |= k_canonical[i]^expected[i];\n    return d==0u;\n}'''
           if s.count(old)!=1:
               raise SystemExit('canonical initializer repair target count != 1')
           s=s.replace(old,new)
           marker='''    sceIoRemove(LOG_PATH);\n    append_log("GATE1F|format=2|base_commit=a637f54fec4e66a665874944fbea8af016d55f32|expected_runtime=%s\\n",G1F_BUILD_ID);'''
-          replacement='''    sceIoRemove(LOG_PATH);\n    append_log("GATE1F|format=3|base_commit=a637f54fec4e66a665874944fbea8af016d55f32|expected_runtime=%s\\n",G1F_BUILD_ID);\n    if(!canonical_constant_ok()) { append_log("STOP|reason=HARNESS_CANONICAL_SELFTEST\\n"); return 30; }\n    append_log("HARNESS_CANONICAL_SELFTEST|pass=1|word13=%08X|word14=%08X\\n",k_canonical[13],k_canonical[14]);'''
+          replacement='''    sceIoRemove(LOG_PATH);\n    append_log("GATE1F|format=3|base_commit=a637f54fec4e66a665874944fbea8af016d55f32|expected_runtime=%s\\n",G1F_BUILD_ID);\n    if(!canonical_constant_ok()) { append_log("STOP|reason=HARNESS_CANONICAL_SELFTEST\\n"); return 30; }\n    append_log("HARNESS_CANONICAL_SELFTEST|pass=1|word9=%08X|word10=%08X|word13=%08X|word14=%08X\\n",k_canonical[9],k_canonical[10],k_canonical[13],k_canonical[14]);'''
           if s.count(marker)!=1:
               raise SystemExit('main self-test insertion target count != 1')
           s=s.replace(marker,replacement)
@@ -43,8 +43,9 @@ jobs:
           m=re.search(r'static const uint32_t k_canonical\[15\] = \{\s*([^}]*)\}',s,re.S)
           assert m
           vals=[int(x.strip(),0) for x in m.group(1).split(',') if x.strip()]
-          expected=[0,0,0x3ff,0,0x3ff,0,0x200,0,0,0x200,0,0,0,0x200]
+          expected=[0,0,0x3ff,0,0x3ff,0,0x200,0,0,0,0x200,0,0,0,0x200]
           assert vals==expected,(vals,expected)
+          assert len(vals)==15
           print('GATE1F_CANONICAL_SOURCE_AUDIT=PASS')
           PY
           git config user.name 'gate1f-ci'
