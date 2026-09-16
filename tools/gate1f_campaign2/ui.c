@@ -84,7 +84,7 @@ void c2_ui_set_state(const char *s) {
 void c2_ui_draw(const char *prompt,const char *value,const char *extra) {
     uint32_t bg=c2_pack_rgb(10,10,10), white=c2_pack_rgb(255,255,255);
     fill_rect(0,0,WIDTH,HEIGHT,bg);
-    draw_text(18,12,"GATE 1F CAMPAIGN 2 R2",white,2);
+    draw_text(18,12,"GATE 1F CAMPAIGN 2 R3",white,2);
     draw_text(18,38,g_title,white,2);
     draw_text(650,38,g_state,white,1);
     draw_patch(20,70,280,58,c2_pack_rgb(128,0,0),"R50");
