@@ -1,0 +1,120 @@
+{
+  "schema": 1,
+  "mission": "Gate-1E Immediate Application / Replay Primitive Discovery",
+  "target": "PCH-2000 / FW 3.65",
+  "gate1d_physical_closure": "1a04bc5bcec964053c437987525126c9d17c5e02",
+  "gate1d_tested_production": "215d92d2b29643f1456592847ae4d13d91dc81a2",
+  "retail_365": {
+    "SceLowio_sha256": "f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744",
+    "SceDisplay_sha256": "83ef39adf741a4bbbc1cec67d00e2594de1d17be0f5ea6cc77c935eae46065e5",
+    "stage_b_nid": "0xD64F4C6B",
+    "stage_b_va": "0x81005E24",
+    "stage_b_display_import_stub": "0x81003A54"
+  },
+  "stage_b_private_setter": {
+    "abi": "int setter(int plane, const SceIftuCscParams *params)",
+    "plane_validation": "plane <= 4; otherwise returns 0x803F0700",
+    "source_semantics": "non-NULL copies exact 0x3C to plane B cache; NULL reuses existing cache",
+    "cache_range": "plane+0x148..0x183",
+    "enable_guard": "live registers are written only when plane+0x1E8 != 0",
+    "lock": {
+      "address": "plane+0x200",
+      "acquire": "ksceKernelSpinlockLowLockCpuSuspendIntr",
+      "acquire_nid": "0xD32ACE9E",
+      "release": "ksceKernelSpinlockLowUnlockCpuResumeIntr",
+      "release_nid": "0x7BB9D5DF"
+    },
+    "barrier": "dmb sy after live B register programming and before unlock",
+    "success_return": 0,
+    "cache_and_live_coherent_in_one_call": true
+  },
+  "stage_b_register_transaction": [
+    {"word":0,"field":"post_add_0","cache_offset":"0x148","mmio_offset":"0x130","width_bits":32,"order":1},
+    {"word":1,"field":"post_add_1_2","cache_offset":"0x14C","mmio_offset":"0x134","width_bits":32,"order":2},
+    {"word":6,"field":"ctm00","cache_offset":"0x160","mmio_offset":"0x138","width_bits":32,"order":3},
+    {"word":7,"field":"ctm01","cache_offset":"0x164","mmio_offset":"0x13C","width_bits":32,"order":4},
+    {"word":8,"field":"ctm02","cache_offset":"0x168","mmio_offset":"0x140","width_bits":32,"order":5},
+    {"word":9,"field":"ctm10","cache_offset":"0x16C","mmio_offset":"0x144","width_bits":32,"order":6},
+    {"word":10,"field":"ctm11","cache_offset":"0x170","mmio_offset":"0x148","width_bits":32,"order":7},
+    {"word":11,"field":"ctm12","cache_offset":"0x174","mmio_offset":"0x14C","width_bits":32,"order":8},
+    {"word":12,"field":"ctm20","cache_offset":"0x178","mmio_offset":"0x150","width_bits":32,"order":9},
+    {"word":13,"field":"ctm21","cache_offset":"0x17C","mmio_offset":"0x154","width_bits":32,"order":10},
+    {"word":14,"field":"ctm22","cache_offset":"0x180","mmio_offset":"0x158","width_bits":32,"order":11},
+    {"word":2,"field":"post_clamp_max_0","cache_offset":"0x150","mmio_offset":"0x15C","width_bits":32,"order":12},
+    {"word":3,"field":"post_clamp_min_0","cache_offset":"0x154","mmio_offset":"0x160","width_bits":32,"order":13},
+    {"word":4,"field":"post_clamp_max_1_2","cache_offset":"0x158","mmio_offset":"0x164","width_bits":32,"order":14},
+    {"word":5,"field":"post_clamp_min_1_2","cache_offset":"0x15C","mmio_offset":"0x168","width_bits":32,"order":15}
+  ],
+  "avenues": [
+    {
+      "level":"L0",
+      "name":"existing public Sony display / public IFTU API",
+      "classification":"REJECTED_WITH_REASON",
+      "evidence":"ksceDisplaySetColorSpaceMode only changes SceDisplay mode state and does not immediately replay B. ksceIftuCsc directly programs B, A, csc_control and a broad IFTU configuration transaction rather than entering the B hook chain.",
+      "reason":"No narrow public B-only immediate replay API was found; public IFTU CSC has materially broader side effects and bypasses Stage-B hook ownership."
+    },
+    {
+      "level":"L1",
+      "name":"internal SceDisplay replay/state producer",
+      "classification":"INSUFFICIENT_EVIDENCE",
+      "evidence":"0x81000A2C constructs fresh 0x3C B and A objects and calls both private setters. 0x81000C2C invokes it while also controlling DSI/pervasive setup and IFTU enable. Direct B-producing routines 0x81002C94 and 0x81002FF4 also construct/program A and mutate SceDisplay globals.",
+      "reason":"Fresh Sony baseline generation is attractive, but the smallest identified producers are not B-only and their internal context/state ABI is broader than necessary. Retained as natural replay evidence, not selected for immediate control."
+    },
+    {
+      "level":"L2",
+      "name":"patched Stage-B export / taiHEN chain-head reentry",
+      "classification":"PROMISING_RESEARCH_CANDIDATE",
+      "evidence":"Pinned taiHEN patches the original function entry to the chain head; later hooks are linked behind it; TAI_CONTINUE walks successor then saved original. Calling the resolved export from outside hook_b therefore enters the current full chain, whereas calling it from inside hook_b would recurse.",
+      "semantic_owner":"TAIHEN_CHAIN_REENTRY",
+      "cache_coherence":"inherits private Sony setter",
+      "third_party_hooks":"preserved by chain-head entry",
+      "physical_test":"required"
+    },
+    {
+      "level":"L3",
+      "name":"original/private Stage-B Lowio setter",
+      "classification":"PROMISING_RESEARCH_CANDIDATE",
+      "evidence":"ABI and complete transaction are statically closed. Setter owns a per-plane low spinlock, updates exact 0x3C cache, conditionally writes all live B registers, executes dmb sy and returns 0 on valid planes.",
+      "semantic_owner":"PRIVATE_LOWIO_SETTER",
+      "cache_coherence":"native Sony cache+live",
+      "third_party_hooks":"direct original/trampoline call would bypass some or all hooks",
+      "selection_note":"Strong fallback, but dominated by L2 if chain-head physical discriminator passes."
+    },
+    {
+      "level":"L4",
+      "name":"related private Lowio replay/programming helpers",
+      "classification":"REJECTED_WITH_REASON",
+      "evidence":"The two helpers inside the B setter are spinlock acquire/release. ksceIftuEnable replays cached CSC but also broader IFTU state.",
+      "reason":"No smaller dedicated B commit helper was found below the setter; the setter is already the coherent minimal Sony transaction."
+    },
+    {
+      "level":"L5",
+      "name":"Sony cache mutation plus legitimate commit",
+      "classification":"REJECTED_WITH_REASON",
+      "evidence":"The private B setter already performs cache mutation and live commit atomically under Sony's lock. No distinct narrower cache-consumer helper was identified.",
+      "reason":"Separating cache mutation from commit would duplicate a weaker form of the already-proven private setter."
+    },
+    {
+      "level":"L6",
+      "name":"exact Stage-B MMIO programming",
+      "classification":"PROMISING_RESEARCH_CANDIDATE",
+      "evidence":"All 15 B register offsets, widths and write order are reconstructed exactly; the retail setter follows them with dmb sy.",
+      "semantic_owner":"DIRECT_IFTU_MMIO",
+      "cache_coherence":"MMIO-only would leave Sony B cache stale; production use would require explicit cache synchronization or equivalent",
+      "selection_note":"Authorized fallback but currently dominated by L2/L3 because those preserve Sony cache and synchronization automatically."
+    },
+    {
+      "level":"L7",
+      "name":"broader IFTU control/latch programming",
+      "classification":"REJECTED_WITH_REASON",
+      "evidence":"The private B setter writes live B while enabled with no csc_control toggle or enable edge, and Gate-1C proved setter-mediated B mutation visibly affects the LCD.",
+      "reason":"No additional latch/control transition is evidenced as necessary for the Sony setter path. Reopen only if a future exact-MMIO experiment proves B register writes alone do not latch."
+    }
+  ],
+  "current_selection": {
+    "candidate":"L2 patched Stage-B export / taiHEN chain-head reentry",
+    "classification":"PROMISING_RESEARCH_CANDIDATE",
+    "why":"It combines the synchronized/cache-coherent Sony private setter transaction with full current taiHEN hook-chain participation and requires no guessed ABI or direct MMIO.",
+    "next_gate":"two-node identity-only physical chain discriminator"
+  }
+}
