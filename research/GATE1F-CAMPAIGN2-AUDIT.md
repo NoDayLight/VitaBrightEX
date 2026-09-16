@@ -26,6 +26,7 @@ That is a UI/state-contract defect, not acceptable observer tooling. It can caus
 14. **Recovery ownership did not require full active-generation coherence.** Exact matrix words alone are insufficient; recovery now also requires a clean active policy with `APPLIED` and both plane-forward generations equal to the active generation.
 15. **Status-log formatting failures did not always latch evidence failure.** Buffer/format failures now poison the evidence stream so the campaign cannot silently continue.
 16. **The audited harness outgrew Vita ELF metadata headroom.** After adding explicit evidence and observer checks, `vita-elf-create` reported a segment overlap while adding SCE metadata. The research VPK is now built with `-Os` rather than `-O2`; no production code or semantics changed.
+17. **The first Campaign-2 decoder still encoded a shared-basis assumption in one cross-term case.** It could infer a positive cross term only when a primary became a different secondary hue. With independent `P_out` and `P_in`, an off-diagonal hardware slot may physically mean `R<-R`, `G<-G`, or `B<-B`; the correct witness is then `SAME_HUE_BRIGHTER`, not a secondary color. Leaving that unresolved would have silently biased the experiment toward `P_out == P_in` despite the mission explicitly forbidding that assumption.
 
 ## Repairs
 
@@ -42,6 +43,7 @@ That is a UI/state-contract defect, not acceptable observer tooling. It can caus
 - Backend transitions still classify the actual Set/Reset/GetStatus result even if evidence logging fails, so cleanup can prioritize physical neutralization rather than treating logging as the hardware result.
 - Signed `N02-C2` emits the required `MATRIX2` record.
 - The decoder cross-checks every `ANSWER2` sequence against the final `OBS2`/`SIGNED_OBS2`, requires contiguous steps, PROBE-state commits, non-regressing toggle counts, and the final `FINALIZE2` promotion marker.
+- Positive cross-term decoding now explicitly accepts `SAME_HUE_BRIGHTER` as an evidence-backed same-component relation, so independent row and column permutations remain representable instead of being implicitly forced to a shared RGB basis.
 - A pure-C observer state core is host-tested in CI, including the exact physical regression: after a committed answer the next question is unselected rather than silently displaying `NO`.
 - CI parses all seven C probe constants and compares them against `generate_expected.py` before the VPK is built.
 - CI freezes the production-kernel boundary, exact Gate-1E SKPRX hash, frozen Campaign-1 decoder, expected-object hashes, R3 package identity, evidence-lifecycle contract and absence of any `.skprx` from the artifact.
@@ -60,6 +62,6 @@ This behavior is now an executable host-tested state-machine contract rather tha
 
 ## Remaining methodological boundary
 
-The Campaign-2 decoder remains deliberately conservative. In particular, `D2-C2` only resolves a diagonal semantic pair when one pure primary changes clearly to dark/near-black. If physical data instead suggests a separable but non-shared input/output basis, this experiment may remain unresolved rather than infer a missing mapping. That is intentional: Stage C remains blocked unless physical evidence independently determines the required row and column mappings.
+The Campaign-2 decoder remains deliberately conservative. In particular, `D2-C2` only resolves a diagonal semantic pair when one pure primary changes clearly to dark/near-black. If physical data instead suggests a more complicated diagonal response, this experiment may remain unresolved rather than infer a missing mapping. For cross terms, however, both secondary-hue transitions and same-hue-brighter transitions are now represented so `P_out` and `P_in` remain independent.
 
-No CCT, saturation, gamma, additive-affine, panel-linearisation, direct-MMIO, Stage-A, Stage-B transaction, chain-reentry, authority, or production-kernel code is changed by this audit.
+Stage C remains blocked unless physical evidence independently determines the required row and column mappings. No CCT, saturation, gamma, additive-affine, panel-linearisation, direct-MMIO, Stage-A, Stage-B transaction, chain-reentry, authority, or production-kernel code is changed by this audit.
