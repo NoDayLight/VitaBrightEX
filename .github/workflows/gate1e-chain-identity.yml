@@ -1,0 +1,223 @@
+name: Gate-1E chain-head identity discriminator
+
+on:
+  push:
+    branches: [research-gate1e-immediate-application]
+    paths:
+      - 'research/diagnostics/gate1e_chain_reentry/**'
+      - 'research/gate1e_chain_identity_decode.py'
+      - 'research/GATE1E-ATTACK-SURFACE.json'
+      - '.github/workflows/gate1e-chain-identity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+  VDPM_SHA: c83b88a54ec13372515eeb8b3bdca4b10c36d721
+  VITA_HEADERS_SHA: 5e1e7d38d766e4c1634a77f6e5249caab8c8f9cb
+  GATE1D_CANDIDATE: 215d92d2b29643f1456592847ae4d13d91dc81a2
+  GATE1D_SKPRX_SHA: 513d3a237933715ccd2e9ff156762c27241dd24ed5ad361e3cb42296ffd2d19d
+  GATE1D_CLOSURE: 1a04bc5bcec964053c437987525126c9d17c5e02
+  STATIC_RUN: '35041280156'
+  STATIC_ARTIFACT: '10425615771'
+  STATIC_DIGEST: b90d4fe683ad8b715703df1ff762ac820b46137addaadda87f0f630196d5f143
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      skprx_sha: ${{ steps.hashes.outputs.skprx_sha }}
+      vpk_sha: ${{ steps.hashes.outputs.vpk_sha }}
+      decoder_sha: ${{ steps.hashes.outputs.decoder_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Exact head and immutable Gate-1D production boundary
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GATE1D_CLOSURE" "$GITHUB_SHA"
+          changed="$(git diff --name-only "$GATE1D_CANDIDATE" "$GITHUB_SHA" -- CMakeLists.txt main.c module.yml matrix_backend.c matrix_backend.h matrix_backend_core.c matrix_backend_core.h matrix_policy_core.c matrix_policy_core.h)"
+          test -z "$changed"
+          python3 - <<'PY' | tee gate1e-chain-source-contract.txt
+          from pathlib import Path
+          s=Path('research/diagnostics/gate1e_chain_reentry/main.c').read_text()
+          assert s.count('taiHookFunctionExportForKernel(')==1
+          assert s.count('install_observer(')==3  # definition + two calls
+          assert s.count('TAI_CONTINUE(')==1
+          assert 'module_get_export_func(KERNEL_PID, "SceLowio", TAI_ANY_LIBRARY' in s
+          assert 'StageBEntry)(uintptr_t)g_export_entry' in s
+          assert s.count('fn(0,')==1 and s.count('fn(1,')==1
+          assert 'NID_STAGE_B 0xD64F4C6Bu' in s
+          for bad in ('taiHookRelease','taiInject','0x280B2000','0x280B4000','[r3, #0x130]'):
+              assert bad not in s, bad
+          assert 'SCE_KERNEL_STOP_CANCEL' in s
+          p=Path('research/GATE1E-ATTACK-SURFACE.json').read_text()
+          assert 'TAIHEN_CHAIN_REENTRY' in p and 'DIRECT_IFTU_MMIO' in p and 'PRIVATE_LOWIO_SETTER' in p
+          print('GATE1E_CHAIN_SOURCE_CONTRACT=PASS')
+          print('TWO_OBSERVER_HOOKS_ONE_COMMON_CONTINUE=PASS')
+          print('NO_DIRECT_MMIO=PASS')
+          print('NO_RUNTIME_HOOK_RELEASE=PASS')
+          print('GATE1D_PRODUCTION_FILES_UNCHANGED=PASS')
+          PY
+          python3 -m py_compile research/gate1e_chain_identity_decode.py
+          cat >/tmp/g1eabi.c <<'C'
+          #include "research/diagnostics/gate1e_chain_reentry/gate1e_chain_protocol.h"
+          int main(void){return !(sizeof(VbeG1eObserverEvent)==92u && sizeof(VbeG1eObserverStatus)==1548u && sizeof(VbeG1eIdentityBundle)==2340u);}
+          C
+          cc -std=c99 -Wall -Wextra -Werror -I. /tmp/g1eabi.c -o /tmp/g1eabi
+          /tmp/g1eabi
+          echo 'GATE1E_CHAIN_PROTOCOL_ABI=PASS' | tee gate1e-chain-abi.txt
+      - name: Decoder authoritative synthetic test
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import struct
+          N=2340; raw=bytearray(N); C=[0,0,1023,0,1023,0,512,0,0,0,512,0,0,0,512]
+          def words(off,x): struct.pack_into('<'+'I'*len(x),raw,off,*[(v&0xffffffff) for v in x])
+          words(0,[0x45314756,1,0,0,0,0])
+          def status(off,pristine):
+            words(off,[384,1,1,1,0,6,6,0,0,2,0,0,0,0,0,0])
+            for plane in range(2):
+              po=off+64+plane*160
+              words(po,[1,pristine,1,6,0,0,0,0,0,0]);words(po+40,C);words(po+100,C)
+          status(24,6)
+          oo=24+384
+          words(oo,[0x45314756,1,7,3,0,0x81005e25,1,123,1,0,0,8,1,0,0,0,0,0,0])
+          seq=[(1,1,0),(2,1,0),(2,2,0),(1,2,0),(1,1,1),(2,1,1),(2,2,1),(1,2,1)]
+          for i,(node,phase,plane) in enumerate(seq):
+            eo=oo+76+i*92
+            words(eo,[i+1,node,phase,plane,123,1,1 if phase==1 else 0,0])
+            if phase==1: words(eo+32,C)
+          status(24+384+1548,7)
+          open('/tmp/g1e-synth.bin','wb').write(raw)
+          PY
+          python3 research/gate1e_chain_identity_decode.py --authoritative /tmp/g1e-synth.bin | tee gate1e-chain-decoder-selftest.txt
+          grep -F 'GATE1E_CHAIN_IDENTITY=PASS' gate1e-chain-decoder-selftest.txt
+          echo 'GATE1E_CHAIN_DECODER_SELFTEST=PASS'
+      - name: Fetch pinned VitaSDK audit inputs
+        run: |
+          set -euxo pipefail
+          git init -q vdpm
+          git -C vdpm remote add origin https://github.com/vitasdk/vdpm.git
+          git -C vdpm fetch -q --depth 1 origin "$VDPM_SHA"
+          git -C vdpm checkout -q --detach FETCH_HEAD
+          git init -q vita-headers-audit
+          git -C vita-headers-audit remote add origin https://github.com/vitasdk/vita-headers.git
+          git -C vita-headers-audit fetch -q --depth 1 origin "$VITA_HEADERS_SHA"
+          git -C vita-headers-audit checkout -q --detach FETCH_HEAD
+      - name: Build Gate-1D ABI stub and Gate-1E discriminator
+        run: |
+          set -euxo pipefail
+          bash vdpm/bootstrap-vitasdk.sh
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+          "$VITASDK/bin/vdpm" install taihen
+          cmake -S . -B gate1d-abi-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          cmake --build gate1d-abi-build --parallel
+          stub="$(find gate1d-abi-build -type f -name 'libvitabright_stub.a' -print -quit)"
+          test -n "$stub"
+          cmake -S research/diagnostics/gate1e_chain_reentry -B gate1e-chain-build \
+            -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+            -DVBE_PRODUCTION_STUB="$GITHUB_WORKSPACE/$stub"
+          cmake --build gate1e-chain-build --parallel
+          test -s gate1e-chain-build/vbe_gate1e_chain.skprx
+          test -s gate1e-chain-build/vbe_gate1e_chain_identity.vpk
+          unzip -p gate1e-chain-build/vbe_gate1e_chain_identity.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1ECH0
+          python3 research/gate0_v7_import_manifest.py gate1e-chain-build/vbe_gate1e_chain_kernel.velf \
+            --nid-db vita-headers-audit/db/360 --nid-db vita-headers-audit/db/363 \
+            --output gate1e-chain-imports.txt
+          cat gate1e-chain-imports.txt
+          grep -F 'library=taihenForKernel' gate1e-chain-imports.txt
+          grep -F 'library=taihenModuleUtils' gate1e-chain-imports.txt
+          grep -F 'library=SceSysmemForDriver' gate1e-chain-imports.txt
+          grep -F 'library=SceThreadmgrForDriver' gate1e-chain-imports.txt
+          ! grep -F 'library=SceLowio' gate1e-chain-imports.txt
+          ! grep -F 'SceIftuForDriver' gate1e-chain-imports.txt
+          echo 'GATE1E_CHAIN_IMPORT_CONTRACT=PASS' | tee gate1e-chain-import-contract.txt
+      - name: Package immutable identity discriminator
+        id: hashes
+        run: |
+          set -euxo pipefail
+          rm -rf gate1e-chain-package
+          mkdir -p gate1e-chain-package/evidence
+          cp gate1e-chain-build/vbe_gate1e_chain.skprx gate1e-chain-package/
+          cp gate1e-chain-build/vbe_gate1e_chain_identity.vpk gate1e-chain-package/
+          cp research/gate1e_chain_identity_decode.py gate1e-chain-package/
+          cp research/diagnostics/gate1e_chain_reentry/gate1e_chain_protocol.h gate1e-chain-package/
+          cp research/GATE1E-ATTACK-SURFACE.json gate1e-chain-package/evidence/
+          cp gate1e-chain-source-contract.txt gate1e-chain-abi.txt gate1e-chain-decoder-selftest.txt gate1e-chain-imports.txt gate1e-chain-import-contract.txt gate1e-chain-package/evidence/
+          printf '%s\n' "$GITHUB_SHA" > gate1e-chain-package/WORKFLOW_COMMIT.txt
+          printf '%s\n' \
+            "workflow=Gate-1E chain-head identity discriminator" \
+            "commit=$GITHUB_SHA" \
+            "gate1d_candidate=$GATE1D_CANDIDATE" \
+            "gate1d_skprx_sha=$GATE1D_SKPRX_SHA" \
+            "gate1d_closure=$GATE1D_CLOSURE" \
+            "gate1e_static_run=$STATIC_RUN" \
+            "gate1e_static_artifact=$STATIC_ARTIFACT" \
+            "gate1e_static_digest=$STATIC_DIGEST" \
+            "candidate_layer=TAIHEN_CHAIN_REENTRY" \
+            "physical_action=IDENTITY_ONLY" \
+            > gate1e-chain-package/BUILD-METADATA.txt
+          (cd gate1e-chain-package && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          skprx_sha="$(sha256sum gate1e-chain-package/vbe_gate1e_chain.skprx | awk '{print $1}')"
+          vpk_sha="$(sha256sum gate1e-chain-package/vbe_gate1e_chain_identity.vpk | awk '{print $1}')"
+          decoder_sha="$(sha256sum gate1e-chain-package/gate1e_chain_identity_decode.py | awk '{print $1}')"
+          echo "skprx_sha=$skprx_sha" >> "$GITHUB_OUTPUT"
+          echo "vpk_sha=$vpk_sha" >> "$GITHUB_OUTPUT"
+          echo "decoder_sha=$decoder_sha" >> "$GITHUB_OUTPUT"
+          echo "SKPRX_SHA256=$skprx_sha"; echo "VPK_SHA256=$vpk_sha"; echo "DECODER_SHA256=$decoder_sha"
+          cat gate1e-chain-package/SHA256SUMS
+      - name: Upload exact discriminator
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vbe-gate1e-chain-identity-${{ github.sha }}
+          path: gate1e-chain-package/
+          if-no-files-found: error
+
+  independent-verify:
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    env:
+      ARTIFACT_ID: ${{ needs.candidate.outputs.artifact_id }}
+      ARTIFACT_DIGEST: ${{ needs.candidate.outputs.artifact_digest }}
+      EXPECTED_SKPRX: ${{ needs.candidate.outputs.skprx_sha }}
+      EXPECTED_VPK: ${{ needs.candidate.outputs.vpk_sha }}
+      EXPECTED_DECODER: ${{ needs.candidate.outputs.decoder_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Independently download and verify artifact
+        run: |
+          set -euxo pipefail
+          curl -fL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" -o artifact.zip
+          digest="${ARTIFACT_DIGEST#sha256:}"
+          echo "$digest  artifact.zip" | sha256sum -c -
+          unzip -q artifact.zip -d verify
+          test "$(cat verify/WORKFLOW_COMMIT.txt)" = "$GITHUB_SHA"
+          (cd verify && sha256sum -c SHA256SUMS)
+          test "$(sha256sum verify/vbe_gate1e_chain.skprx | awk '{print $1}')" = "$EXPECTED_SKPRX"
+          test "$(sha256sum verify/vbe_gate1e_chain_identity.vpk | awk '{print $1}')" = "$EXPECTED_VPK"
+          test "$(sha256sum verify/gate1e_chain_identity_decode.py | awk '{print $1}')" = "$EXPECTED_DECODER"
+          unzip -p verify/vbe_gate1e_chain_identity.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1ECH0
+          grep -F 'GATE1E_CHAIN_SOURCE_CONTRACT=PASS' verify/evidence/gate1e-chain-source-contract.txt
+          grep -F 'GATE1E_CHAIN_IMPORT_CONTRACT=PASS' verify/evidence/gate1e-chain-import-contract.txt
+          echo 'GATE1E_CHAIN_INDEPENDENT_VERIFY=PASS'
+          echo "ARTIFACT_ID=$ARTIFACT_ID"
+          echo "ARTIFACT_DIGEST=$ARTIFACT_DIGEST"
+          echo "SKPRX_SHA256=$EXPECTED_SKPRX"
+          echo "VPK_SHA256=$EXPECTED_VPK"
+          echo "DECODER_SHA256=$EXPECTED_DECODER"
