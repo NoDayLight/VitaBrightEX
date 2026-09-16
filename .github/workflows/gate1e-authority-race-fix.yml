@@ -1,0 +1,46 @@
+name: Gate-1E one-shot authority race fix
+
+on:
+  push:
+    branches: [research-gate1e-immediate-application]
+    paths: ['.github/workflows/gate1e-authority-race-fix.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: research-gate1e-immediate-application
+          fetch-depth: 0
+      - name: Keep authority collision stale and capability truthful
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('matrix_backend.c')
+          s=p.read_text()
+          old='''    seq = __atomic_load_n(&s->seq, __ATOMIC_RELAXED);\n    if (seq & 1u) ++seq;\n    __atomic_store_n(&s->seq, seq + 1u, __ATOMIC_RELEASE);\n\n    current.valid = __atomic_load_n(&s->valid, __ATOMIC_RELAXED);\n'''
+          new='''    /* A later uncontended natural call may repair a previous stale authority.\n     * Any new collision during THIS write sets the sticky bit again. */\n    __atomic_and_fetch(&g_authority_stale_mask, ~(1u << plane),\n                       __ATOMIC_ACQ_REL);\n    seq = __atomic_load_n(&s->seq, __ATOMIC_RELAXED);\n    if (seq & 1u) ++seq;\n    __atomic_store_n(&s->seq, seq + 1u, __ATOMIC_RELEASE);\n\n    current.valid = __atomic_load_n(&s->valid, __ATOMIC_RELAXED);\n'''
+          assert s.count(old)==1, s.count(old)
+          s=s.replace(old,new)
+          old='''        if (next.stale)\n            __atomic_or_fetch(&g_authority_stale_mask, 1u << plane, __ATOMIC_RELAXED);\n        else\n            __atomic_and_fetch(&g_authority_stale_mask, ~(1u << plane), __ATOMIC_RELAXED);\n    }\n    __atomic_thread_fence(__ATOMIC_RELEASE);\n'''
+          new='''        /* If another natural writer collided while this writer was active,\n         * its source could have been missed. Preserve stale until a later\n         * uncontended natural call refreshes the authority. */\n        if (__atomic_load_n(&g_authority_stale_mask, __ATOMIC_ACQUIRE) &\n            (1u << plane)) {\n            next.stale = 1u;\n            __atomic_store_n(&s->stale, 1u, __ATOMIC_RELAXED);\n        } else if (next.stale) {\n            __atomic_or_fetch(&g_authority_stale_mask, 1u << plane,\n                              __ATOMIC_RELAXED);\n        }\n    }\n    __atomic_thread_fence(__ATOMIC_RELEASE);\n'''
+          assert s.count(old)==1, s.count(old)
+          s=s.replace(old,new)
+          old='''    c.matrix_backend_supported = __atomic_load_n(&g_target_supported, __ATOMIC_ACQUIRE);\n    c.immediate_reapply_supported =\n        __atomic_load_n(&g_immediate_supported, __ATOMIC_ACQUIRE);\n'''
+          new='''    c.matrix_backend_supported =\n        __atomic_load_n(&g_target_supported, __ATOMIC_ACQUIRE) &&\n        __atomic_load_n(&g_hook_owned, __ATOMIC_ACQUIRE);\n    c.immediate_reapply_supported = c.matrix_backend_supported &&\n        __atomic_load_n(&g_immediate_supported, __ATOMIC_ACQUIRE);\n'''
+          assert s.count(old)==1, s.count(old)
+          s=s.replace(old,new)
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- matrix_backend.c
+          git config user.name tempestas
+          git config user.email '62885176+NoDayLight@users.noreply.github.com'
+          git add matrix_backend.c
+          git commit -m 'fix: preserve Gate-1E authority collision state'
+          git push origin HEAD:research-gate1e-immediate-application
