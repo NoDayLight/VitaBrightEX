@@ -4,7 +4,9 @@
 
 #define C2_BUILD_ID "a637f54f"
 #define C1_RAW_SHA "740c6f7a345a9544dc0b9c79b38040baa663e6f8a8dbb27483d304b9901278bd"
-#define C2_LOG_PATH "ux0:data/vbe_gate1f_campaign2.txt"
+#define C2_WORK_LOG_PATH "ux0:data/vbe_gate1f_campaign2.partial.txt"
+#define C2_FINAL_LOG_PATH "ux0:data/vbe_gate1f_campaign2.txt"
+#define C2_BACKUP_LOG_PATH "ux0:data/vbe_gate1f_campaign2.previous.txt"
 #define C2_MIN_TOGGLES 3u
 
 #define C2_CH_NO 1u
@@ -64,6 +66,7 @@ void c2_ui_draw(const char *prompt, const char *value, const char *extra);
 uint32_t c2_wait_button(uint32_t mask);
 
 int c2_log_begin(void);
+int c2_log_finalize(void);
 int c2_log(const char *fmt, ...);
 int c2_log_failed(void);
 int c2_log_status(const char *tag, const char *id, int action_result, const VbeMatrixBackendStatus *s);
