@@ -1,0 +1,120 @@
+name: Gate-1F basis reset static audit
+
+on:
+  push:
+    branches: [research-gate1f-basis-reset]
+    paths:
+      - 'research/gate1f_basis_static_audit.py'
+      - 'tools/gate1f_basis_audit/**'
+      - '.github/workflows/gate1f-basis-static.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PUP_URL: https://web.archive.org/web/20180630222648id_/http://dus01.psp2.update.playstation.net/update/psp2/image/2017_0317/rel_0a0f2a9ae58968ac5d1d2127049c3cba/PSP2UPDAT.PUP
+  PUP_SHA256: 86859b3071681268b6d0beb5ef691da874b6726e85b6f06a1cdf6a0e183e77c6
+  OS0_SHA256: 35480a01ea783df859326d8698831afd3e850717f5b7785ab9964eab23712856
+  SCEUTILS_SHA: 0466d003246ec986ab6189e6719dcb196a40fb02
+  VITA_HEADERS_SHA: 5e1e7d38d766e4c1634a77f6e5249caab8c8f9cb
+  GATE1B_HELPERS_COMMIT: 3849a13bbb3e88e4f9e576b88262bf116df28fad
+  PY2_IMAGE: python@sha256:d8fac68ebdc45b8d66d53f1ed6c1532da81109a8f5532a6ca0c951ed31107d70
+
+jobs:
+  host-static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Exact boundary
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --quiet
+          git diff --cached --quiet
+          test "$(git rev-parse v1.4-gate1e-integration)" = a637f54fec4e66a665874944fbea8af016d55f32
+          test "$(git rev-parse research-gate1f-ctm-semantics)" = 0431146ee2cbf2c7683f64091c74ff252301dae6
+      - name: Host finite model and exact sparse objects
+        run: |
+          set -euxo pipefail
+          python3 tools/gate1f_basis_audit/finite_model.py \
+            --campaign1-frozen research/GATE1F-CAMPAIGN1-FROZEN.json \
+            --json-out finite-model.json > finite-model.txt
+          grep -Fx 'INITIAL_HYPOTHESES=72' finite-model.txt
+          grep -Fx 'SURVIVING_HYPOTHESES=1' finite-model.txt
+          grep -Fx 'SURVIVOR=H00 P_in=[R,G,B] P_out=[R,G,B] orientation=normal' finite-model.txt
+          python3 tools/gate1f_basis_audit/sparse_objects.py > sparse-objects.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('sparse-objects.json'))
+          assert d['canonical_identity']['sha256']=='5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5'
+          assert d['column_knockout']['K0']['sha256']=='07f1ca6e4cbf7252c1c01cb1d9152bbbb0d48acc3b3a7cd076f9266bc542d4fd'
+          assert d['column_knockout']['K2']['sha256']=='4510343d16aa34e9af501b61d01ef80cd30a46f83a8513c9b00d59d830291eb9'
+          assert d['signed_candidates']['I_MINUS_E02']['sha256']=='69357e18aa094b9aa427f75c6912df8f4eec6a58edc4fc6e63a214892adc38bb'
+          for section in ('column_knockout','row_synthesis'):
+            assert all(x['size']==60 and x['safety']['s3_9_representable'] for x in d[section].values())
+            assert all(x['safety']['all_nonnegative_outputs_within_0_1'] is True for x in d[section].values())
+          PY
+      - name: Recover exact retail 3.65 Lowio and Display
+        run: |
+          set -euxo pipefail
+          python3 -m pip install --disable-pip-version-check --user capstone==5.0.3
+          sudo apt-get update
+          sudo apt-get install -y mtools
+          curl -fL --retry 5 --retry-delay 2 "$PUP_URL" -o PSP2UPDAT-365.PUP
+          echo "$PUP_SHA256  PSP2UPDAT-365.PUP" | sha256sum -c -
+          git init -q sceutils-audit
+          git -C sceutils-audit remote add origin https://github.com/RealYoti/sceutils.git
+          git -C sceutils-audit fetch -q --depth 1 origin "$SCEUTILS_SHA"
+          git -C sceutils-audit checkout -q --detach FETCH_HEAD
+          cp sceutils-audit/keys_external.py sceutils-audit/keys.py
+          mkdir -p sceutils-audit/unarzl
+          : > sceutils-audit/unarzl/unarzl
+          cat > extract_fw.py <<'PY'
+          import os,sys
+          sys.path.insert(0,'sceutils-audit')
+          import pup_fiction
+          os.makedirs('fw/PUP');os.makedirs('fw/PUP_dec')
+          pup_fiction.pup_extract_files('PSP2UPDAT-365.PUP','fw/PUP')
+          pup_fiction.pup_decrypt_packages('fw/PUP','fw/PUP_dec')
+          PY
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python extract_fw.py"
+          sudo chown -R "$(id -u):$(id -g)" fw
+          echo "$OS0_SHA256  fw/PUP_dec/os0.bin" | sha256sum -c -
+          mkdir -p fw/raw fw/elf
+          for module in lowio display; do
+            mcopy -n -i fw/PUP_dec/os0.bin "::/kd/${module}.skprx" "fw/raw/${module}.skprx"
+            docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null; python sceutils-audit/self2elf.py -i fw/raw/${module}.skprx -o fw/elf/${module}.elf >/dev/null"
+          done
+          sudo chown -R "$(id -u):$(id -g)" fw/elf
+          echo 'f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744  fw/elf/lowio.elf' | sha256sum -c -
+          echo '83ef39adf741a4bbbc1cec67d00e2594de1d17be0f5ea6cc77c935eae46065e5  fw/elf/display.elf' | sha256sum -c -
+      - name: Recover exact historical static helpers only
+        run: |
+          set -euxo pipefail
+          mkdir -p gate1b_helpers
+          for f in vita_elf_audit.py vita_elf_legacy.py topology_common.py; do
+            git show "$GATE1B_HELPERS_COMMIT:research/$f" > "gate1b_helpers/$f"
+          done
+      - name: Bounded Sony asymmetric CSC audit
+        run: |
+          set -euxo pipefail
+          PYTHONPATH=gate1b_helpers python3 research/gate1f_basis_static_audit.py \
+            --lowio fw/elf/lowio.elf --display fw/elf/display.elf --json sony-csc-basis.json \
+            | tee sony-csc-basis.txt
+      - name: Record exact head
+        run: printf '%s\n' "$GITHUB_SHA" > WORKFLOW_COMMIT.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gate1f-basis-static-${{ github.sha }}
+          path: |
+            WORKFLOW_COMMIT.txt
+            finite-model.json
+            finite-model.txt
+            sparse-objects.json
+            sony-csc-basis.json
+            sony-csc-basis.txt
+          if-no-files-found: error
