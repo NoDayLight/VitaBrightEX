@@ -122,11 +122,11 @@ jobs:
           test -s gate1f-build/vbe_gate1f_ctm_semantics.vpk
           unzip -p gate1f-build/vbe_gate1f_ctm_semantics.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1F001
           nm="$VITASDK/bin/arm-vita-eabi-nm"
-          "$nm" -u gate1f-build/vbe_gate1f_ctm_semantics.velf | tee gate1f-imports.txt
-          grep -F 'vitabrightGetBuildId' gate1f-imports.txt
-          grep -F 'vitabrightMatrixSetRequest' gate1f-imports.txt
-          grep -F 'sceDisplaySetFrameBuf' gate1f-imports.txt
-          ! grep -Ei 'Gxm|vita2d' gate1f-imports.txt
+          "$nm" gate1f-build/vbe_gate1f_ctm_semantics | tee gate1f-symbols.txt
+          grep -F 'vitabrightGetBuildId' gate1f-symbols.txt
+          grep -F 'vitabrightMatrixSetRequest' gate1f-symbols.txt
+          grep -F 'sceDisplaySetFrameBuf' gate1f-symbols.txt
+          ! grep -Ei 'sceGxm|vita2d' gate1f-symbols.txt
           echo GATE1F_USERMODE_HARNESS_BUILD=PASS
 
       - name: Package discriminator only
@@ -137,7 +137,7 @@ jobs:
           mkdir -p gate1f-package/tools gate1f-package/evidence
           cp gate1f-build/vbe_gate1f_ctm_semantics.vpk gate1f-package/
           cp tools/gate1f_ctm_semantics/decode.py tools/gate1f_ctm_semantics/generate_expected.py gate1f-package/tools/
-          cp gate1f_expected.json gate1f-vitasdk-headers.txt gate1f-imports.txt gate1f-package/evidence/
+          cp gate1f_expected.json gate1f-vitasdk-headers.txt gate1f-symbols.txt gate1f-package/evidence/
           printf '%s\n' "$GITHUB_SHA" > gate1f-package/HARNESS_COMMIT.txt
           printf '%s\n' "$GATE1F_BASE" > gate1f-package/BASE_COMMIT.txt
           printf '%s\n' "$GATE1F_RUNTIME_ID" > gate1f-package/REQUIRED_RUNTIME_ID.txt
