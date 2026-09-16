@@ -1,0 +1,224 @@
+name: Gate-1F Campaign 2 temporal witness
+
+on:
+  push:
+    branches: [research-gate1f-campaign2]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+  VDPM_SHA: c83b88a54ec13372515eeb8b3bdca4b10c36d721
+  GATE1F_BASE: a637f54fec4e66a665874944fbea8af016d55f32
+  GATE1F_C1_HEAD: 0431146ee2cbf2c7683f64091c74ff252301dae6
+  GATE1F_RUNTIME_ID: a637f54f
+  GATE1F_BASE_SKPRX_SHA: bed676c98f127dd595d427f48fbb08090940c7b61fb378b745030c91862e643b
+  GATE1F_C1_RAW_SHA: 740c6f7a345a9544dc0b9c79b38040baa663e6f8a8dbb27483d304b9901278bd
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    outputs:
+      vpk_sha: ${{ steps.hashes.outputs.vpk_sha }}
+      decoder_sha: ${{ steps.hashes.outputs.decoder_sha }}
+      expected_sha: ${{ steps.hashes.outputs.expected_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Exact Campaign-2 boundary and no kernel delta
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GATE1F_C1_HEAD" "$GITHUB_SHA"
+          bad="$(git diff --name-only "$GATE1F_C1_HEAD..$GITHUB_SHA" | grep -Ev '^(tools/gate1f_campaign2/|research/GATE1F-CAMPAIGN[12]-.*|\.github/workflows/gate1f-campaign2\.yml$)' || true)"
+          test -z "$bad" || { echo "$bad"; exit 1; }
+          for f in matrix_backend.c matrix_backend_core.c matrix_policy_core.c matrix_authority_core.c matrix_apply_txn_core.c module.yml; do
+            test "$(git rev-parse "$GATE1F_BASE:$f")" = "$(git rev-parse "HEAD:$f")"
+          done
+          test "$(git rev-parse "$GATE1F_C1_HEAD:tools/gate1f_ctm_semantics/decode.py")" = "$(git rev-parse "HEAD:tools/gate1f_ctm_semantics/decode.py")"
+          test "$(git rev-parse "$GATE1F_C1_HEAD:tools/gate1f_ctm_semantics/generate_expected.py")" = "$(git rev-parse "HEAD:tools/gate1f_ctm_semantics/generate_expected.py")"
+          echo GATE1F_CAMPAIGN2_NO_KERNEL_DELTA=PASS
+          echo GATE1F_CAMPAIGN1_DECODER_FROZEN=PASS
+
+      - name: Fetch pinned VitaSDK bootstrap
+        run: |
+          set -euxo pipefail
+          git init -q vdpm
+          git -C vdpm remote add origin https://github.com/vitasdk/vdpm.git
+          git -C vdpm fetch -q --depth 1 origin "$VDPM_SHA"
+          git -C vdpm checkout -q --detach FETCH_HEAD
+          test "$(git -C vdpm rev-parse HEAD)" = "$VDPM_SHA"
+          bash vdpm/bootstrap-vitasdk.sh
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+          "$VITASDK/bin/vdpm" install taihen
+
+      - name: Pin exact display-header evidence
+        run: |
+          set -euxo pipefail
+          display="$(find "$VITASDK" -type f -path '*/include/psp2/display.h' -print -quit)"
+          common="$(find "$VITASDK" -type f -path '*/include/psp2common/display.h' -print -quit)"
+          test -n "$display" -a -n "$common"
+          {
+            echo "vdpm_bootstrap=$VDPM_SHA"
+            echo "display_header=$display"
+            echo "display_header_sha256=$(sha256sum "$display" | awk '{print $1}')"
+            echo "display_common_header=$common"
+            echo "display_common_header_sha256=$(sha256sum "$common" | awk '{print $1}')"
+            grep -F 'SCE_DISPLAY_PIXELFORMAT_A8B8G8R8' "$common"
+          } | tee gate1f-c2-vitasdk-headers.txt
+
+      - name: Build exact Gate-1E base for ABI stub provenance
+        run: |
+          set -euxo pipefail
+          git worktree add --detach /tmp/gate1f-base "$GATE1F_BASE"
+          env -u GITHUB_SHA cmake -S /tmp/gate1f-base -B /tmp/gate1f-base-build \
+            -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+            -DVBE_ENABLE_RESEARCH_FAULT_INJECTION=OFF
+          cmake --build /tmp/gate1f-base-build --parallel
+          test "$(sha256sum /tmp/gate1f-base-build/vitabright.skprx | awk '{print $1}')" = "$GATE1F_BASE_SKPRX_SHA"
+          strings /tmp/gate1f-base-build/vitabright.velf | grep -Fx "$GATE1F_RUNTIME_ID"
+          test -s /tmp/gate1f-base-build/libvitabright_stub.a
+          echo GATE1F_CAMPAIGN2_EXACT_BASE_STUB=PASS
+
+      - name: Exact object and witness-range proof
+        run: |
+          set -euxo pipefail
+          python3 tools/gate1f_campaign2/generate_expected.py > gate1f_campaign2_expected.json
+          python3 -m json.tool gate1f_campaign2_expected.json >/dev/null
+          python3 - <<'PY'
+          import json
+          d=json.load(open('gate1f_campaign2_expected.json'))
+          assert d['campaign1_raw_sha256']=='740c6f7a345a9544dc0b9c79b38040baa663e6f8a8dbb27483d304b9901278bd'
+          want={
+            'D0-C2':('07f1ca6e4cbf7252c1c01cb1d9152bbbb0d48acc3b3a7cd076f9266bc542d4fd','13dc3b671c60d7deb6f0b4074cb425182c1dc2fd9cc53d7611864d03ae857b01'),
+            'B02-C2':('6801def762b29e066a08f596af3e57675f4e5ce3deda7443b1c9b92e25867416','4b4bd8ebd64f236213d2d74cd4b51640e0596ee8889043b8caf9ca7eadceaeec'),
+            'D2-C2':('4510343d16aa34e9af501b61d01ef80cd30a46f83a8513c9b00d59d830291eb9','cdc86055e0a0d3f7bfb4adebf06f5e34dfdc1eb0d7adb57ea3da90890c00c244'),
+            'B01-C2':('3ded9580a3a8421f34a2f201898fedf7f6f99ca01f6c2761f90a75224fcd7fbc','05537604ab8a95ddc0b53616ac8fcea8af13ea955c6ee5d1bd79691aaa354524'),
+            'B20-C2':('c4e4cc668a821ae3c1028cb76a437123fab72e54219ffd7bff9719859fd09425','a1202d272c407f8ecf29978f4186239532c88ae5060f98a14e66aeaa8724885f'),
+            'B21-C2':('8367ff954a894dbb88b2a0549c516f44ad3e67f229cd5c631397b757ba1e081b','164a50ce6d98737beab35bed32fb6e8387327c73d73d2a6571121647fe4ec68d'),
+            'N02-C2':('69357e18aa094b9aa427f75c6912df8f4eec6a58edc4fc6e63a214892adc38bb','12957c7353771c83e71af67400676b98def852df1ad0428c790118a51f8d5f32'),
+          }
+          assert [p['id'] for p in d['probes']]==list(want)
+          for p in d['probes']:
+              assert p['formal_witness_in_range'] is True
+              assert (p['identity_forward_sha256'],p['full_to_limited_forward_sha256'])==want[p['id']]
+              assert len(p['identity_forward_words'])==15 and len(p['full_to_limited_forward_words'])==15
+          print('GATE1F_CAMPAIGN2_EXACT_OBJECTS=PASS')
+          print('GATE1F_CAMPAIGN2_FORMAL_WITNESS_RANGE=PASS')
+          PY
+          python3 -m py_compile tools/gate1f_campaign2/generate_expected.py tools/gate1f_campaign2/decode.py
+          python3 tools/gate1f_campaign2/decode.py --self-test
+
+      - name: Temporal observer source audit
+        run: |
+          set -euxo pipefail
+          src=tools/gate1f_campaign2/main.c
+          grep -F 'SCE_CTRL_SQUARE' "$src"
+          grep -F 'TOGGLE_PROBE' "$src"
+          grep -F 'TOGGLE_NEUTRAL' "$src"
+          grep -F 'C2_MIN_TOGGLES' "$src"
+          grep -F 'C2_MAX_TOGGLES' "$src"
+          grep -F 'vitabrightMatrixSetRequest' tools/gate1f_campaign2/backend.c
+          grep -F 'vitabrightMatrixReset' tools/gate1f_campaign2/backend.c
+          grep -F 'natural_unchanged' tools/gate1f_campaign2/backend.c
+          grep -F 'R50 CHANGED' "$src"
+          grep -F 'MAGENTA50 CHANGED' "$src"
+          ! grep -Ei 'vita2d|sceGxm|texture|\.png|screenshot' tools/gate1f_campaign2/*.c
+          ! grep -Ei 'red should|green should|blue should|expected physical' tools/gate1f_campaign2/*.c
+          echo GATE1F_CAMPAIGN2_TEMPORAL_WITNESS_CONTRACT=PASS
+
+      - name: Build user-mode Campaign-2 harness
+        run: |
+          set -euxo pipefail
+          cmake -S tools/gate1f_campaign2 -B gate1f-c2-build \
+            -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+            -DVBE_PRODUCTION_STUB=/tmp/gate1f-base-build/libvitabright_stub.a
+          cmake --build gate1f-c2-build --parallel
+          test -s gate1f-c2-build/vbe_gate1f_campaign2.vpk
+          unzip -p gate1f-c2-build/vbe_gate1f_campaign2.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1F002
+          nm="$VITASDK/bin/arm-vita-eabi-nm"
+          "$nm" gate1f-c2-build/vbe_gate1f_campaign2 | tee gate1f-c2-symbols.txt
+          grep -F 'vitabrightGetBuildId' gate1f-c2-symbols.txt
+          grep -F 'vitabrightMatrixSetRequest' gate1f-c2-symbols.txt
+          grep -F 'vitabrightMatrixReset' gate1f-c2-symbols.txt
+          grep -F 'sceDisplaySetFrameBuf' gate1f-c2-symbols.txt
+          ! grep -Ei 'sceGxm|vita2d' gate1f-c2-symbols.txt
+          echo GATE1F_CAMPAIGN2_USERMODE_BUILD=PASS
+
+      - name: Package Campaign-2 discriminator only
+        id: hashes
+        run: |
+          set -euxo pipefail
+          rm -rf gate1f-c2-package
+          mkdir -p gate1f-c2-package/tools/campaign1 gate1f-c2-package/evidence
+          cp gate1f-c2-build/vbe_gate1f_campaign2.vpk gate1f-c2-package/
+          cp tools/gate1f_campaign2/decode.py tools/gate1f_campaign2/generate_expected.py gate1f-c2-package/tools/
+          cp tools/gate1f_ctm_semantics/decode.py tools/gate1f_ctm_semantics/generate_expected.py gate1f-c2-package/tools/campaign1/
+          cp research/GATE1F-CAMPAIGN1-FROZEN.json gate1f-c2-package/evidence/
+          cp gate1f_campaign2_expected.json gate1f-c2-vitasdk-headers.txt gate1f-c2-symbols.txt gate1f-c2-package/evidence/
+          printf '%s\n' "$GITHUB_SHA" > gate1f-c2-package/HARNESS_COMMIT.txt
+          printf '%s\n' "$GATE1F_C1_HEAD" > gate1f-c2-package/CAMPAIGN1_HARNESS_COMMIT.txt
+          printf '%s\n' "$GATE1F_C1_RAW_SHA" > gate1f-c2-package/CAMPAIGN1_RAW_SHA256.txt
+          printf '%s\n' "$GATE1F_BASE" > gate1f-c2-package/BASE_COMMIT.txt
+          printf '%s\n' "$GATE1F_RUNTIME_ID" > gate1f-c2-package/REQUIRED_RUNTIME_ID.txt
+          printf '%s\n' "$GATE1F_BASE_SKPRX_SHA" > gate1f-c2-package/REQUIRED_SKPRX_SHA256.txt
+          printf '%s\n' \
+            'kernel_delta=NONE' \
+            'stage_c_adapter=NOT_IMPLEMENTED' \
+            'campaign1=IMMUTABLE_INPUT' \
+            'observer=TEMPORAL_AB' \
+            'cross_stimulus=PLUS_1_0' \
+            'diagonal_stimulus=HARD_ZERO' \
+            'signed_stimulus=MINUS_1_0' \
+            'cct_supported=0' \
+            'saturation_supported=0' \
+            'ctm_transfer_domain=UNKNOWN' > gate1f-c2-package/BOUNDARY.txt
+          test -z "$(find gate1f-c2-package -type f -name '*.skprx' -print -quit)"
+          (cd gate1f-c2-package && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          echo "vpk_sha=$(sha256sum gate1f-c2-package/vbe_gate1f_campaign2.vpk | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "decoder_sha=$(sha256sum gate1f-c2-package/tools/decode.py | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "expected_sha=$(sha256sum gate1f-c2-package/evidence/gate1f_campaign2_expected.json | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Campaign-2 discriminator
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: vbe-gate1f-campaign2-${{ github.sha }}
+          path: gate1f-c2-package/
+          if-no-files-found: error
+          retention-days: 30
+
+  independent-verify:
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: vbe-gate1f-campaign2-${{ github.sha }}
+          path: verified
+      - name: Verify exact Campaign-2 artifact
+        run: |
+          set -euxo pipefail
+          cd verified
+          sha256sum -c SHA256SUMS
+          test "$(cat BASE_COMMIT.txt)" = "a637f54fec4e66a665874944fbea8af016d55f32"
+          test "$(cat CAMPAIGN1_HARNESS_COMMIT.txt)" = "0431146ee2cbf2c7683f64091c74ff252301dae6"
+          test "$(cat CAMPAIGN1_RAW_SHA256.txt)" = "740c6f7a345a9544dc0b9c79b38040baa663e6f8a8dbb27483d304b9901278bd"
+          test "$(cat REQUIRED_RUNTIME_ID.txt)" = "a637f54f"
+          test "$(cat REQUIRED_SKPRX_SHA256.txt)" = "bed676c98f127dd595d427f48fbb08090940c7b61fb378b745030c91862e643b"
+          test "$(sha256sum vbe_gate1f_campaign2.vpk | awk '{print $1}')" = "${{ needs.candidate.outputs.vpk_sha }}"
+          test "$(sha256sum tools/decode.py | awk '{print $1}')" = "${{ needs.candidate.outputs.decoder_sha }}"
+          test "$(sha256sum evidence/gate1f_campaign2_expected.json | awk '{print $1}')" = "${{ needs.candidate.outputs.expected_sha }}"
+          test -z "$(find . -type f -name '*.skprx' -print -quit)"
+          grep -Fx 'kernel_delta=NONE' BOUNDARY.txt
+          grep -Fx 'stage_c_adapter=NOT_IMPLEMENTED' BOUNDARY.txt
+          grep -Fx 'campaign1=IMMUTABLE_INPUT' BOUNDARY.txt
+          python3 tools/decode.py --self-test
+          echo GATE1F_CAMPAIGN2_INDEPENDENT_VERIFY=PASS

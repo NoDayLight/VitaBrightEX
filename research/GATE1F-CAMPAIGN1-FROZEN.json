@@ -1,0 +1,24 @@
+{
+  "backend_integrity": "PASS",
+  "base_commit": "a637f54fec4e66a665874944fbea8af016d55f32",
+  "basis_probes_complete": true,
+  "campaign": 1,
+  "natural_contamination": "NONE",
+  "raw_evidence_sha256": "740c6f7a345a9544dc0b9c79b38040baa663e6f8a8dbb27483d304b9901278bd",
+  "runtime_build": "a637f54f",
+  "semantic_closure": "NOT_ACHIEVED",
+  "semantic_table": {
+    "E00": {"direction": "DECREASE", "input": "R", "isolated": "YES", "output": "R"},
+    "E01": {"direction": "DECREASE", "input": "NONE", "isolated": "AMBIG", "output": "G"},
+    "E02": {"direction": "INCREASE", "input": "B", "isolated": "YES", "output": "R"},
+    "E10": {"direction": "INCREASE", "input": "R", "isolated": "YES", "output": "G"},
+    "E11": {"direction": "DECREASE", "input": "G", "isolated": "YES", "output": "G"},
+    "E12": {"direction": "INCREASE", "input": "B", "isolated": "YES", "output": "G"},
+    "E20": {"direction": "DECREASE", "input": "NONE", "isolated": "AMBIG", "output": "G"},
+    "E21": {"direction": "DECREASE", "input": "NONE", "isolated": "AMBIG", "output": "G"},
+    "E22": {"direction": "DECREASE", "input": "NONE", "isolated": "AMBIG", "output": "B"}
+  },
+  "signed_observation": {"component": "NONE", "direction": "NONE", "id": "N02", "isolated": "AMBIG", "patch": "GRAY50"},
+  "signed_probe": "N02",
+  "stage_c_allowed": false
+}
