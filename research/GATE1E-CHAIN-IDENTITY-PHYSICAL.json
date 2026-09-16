@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "mission": "Gate-1E Immediate Application / Replay Primitive Discovery",
+  "target": "PCH-2000 / FW 3.65",
+  "tested_gate1d_production": "215d92d2b29643f1456592847ae4d13d91dc81a2",
+  "gate1d_physical_closure": "1a04bc5bcec964053c437987525126c9d17c5e02",
+  "gate1e_identity_candidate": "5ef6eae15a595215b3062d525854ab7485b17455",
+  "gate1e_identity_run": 35042096169,
+  "gate1e_identity_artifact": 10426180020,
+  "gate1e_identity_artifact_sha256": "492663b90f6176b3ac83cdb511420ba4b4f03756d4f2ad2fd20a4dc779670722",
+  "physical_capture": {
+    "filename": "vbe_gate1e_chain_identity.bin",
+    "size": 2340,
+    "sha256": "aaf6f7dc1e8356dd9a3e26f262e8340067691905a3ec802e3b38e3e0efbdb099",
+    "authoritative_decoder": "PASS"
+  },
+  "physical_results": {
+    "observer_hooks_owned": "0x3",
+    "observer_fail_mask": "0x0",
+    "control_runs": 1,
+    "concurrent_control_events": 0,
+    "recursion_or_overlap": 0,
+    "event_count": 8,
+    "plane0_raw_return": 0,
+    "plane1_raw_return": 0,
+    "observer_order": "node2 -> node1 -> Sony -> node1 -> node2 on both planes; order itself is non-authoritative",
+    "source_sha256_all_enters": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+    "gate1d_pristine_generation_p0": "1 -> 2",
+    "gate1d_pristine_generation_p1": "1 -> 2",
+    "gate1d_forward_sha256_before_after": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+    "baseline_mismatch_delta": 0,
+    "overflow_delta": 0,
+    "policy_read_fail_delta": 0
+  },
+  "classification": {
+    "TAIHEN_CHAIN_REENTRY_IDENTITY": "PHYSICALLY_VERIFIED",
+    "FULL_INSTALLED_B_HOOK_CHAIN": "PHYSICALLY_VERIFIED",
+    "NO_RECURSION": "PHYSICALLY_VERIFIED",
+    "P0_P1_IMMEDIATE_IDENTITY_REPLAY": "PHYSICALLY_VERIFIED",
+    "NO_SUSPEND_RESUME_REQUIRED_FOR_IDENTITY_REPLAY": "PHYSICALLY_VERIFIED",
+    "IMMEDIATE_MILD_MATRIX": "PENDING",
+    "IMMEDIATE_EXACT_RESET": "PENDING"
+  },
+  "post_test_cleanup": {
+    "gate1e_observer_config_line_removed": true,
+    "removal_readback": "PASS",
+    "full_power_cycle_completed": true,
+    "gate1d_production_remains_installed": true
+  }
+}
