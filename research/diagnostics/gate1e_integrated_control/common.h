@@ -13,6 +13,7 @@ typedef struct {
 } VbeGate1eStatusBundle;
 
 typedef struct {
+    int32_t prepare_reset_result;
     int32_t injection_result;
     int32_t action_result;
     VbeMatrixBackendStatus status;
