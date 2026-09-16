@@ -14,7 +14,6 @@ CANON_SHA = '5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5'
 RGB = {'R','G','B'}
 C2_IDS = ['D0-C2','B02-C2','D2-C2','B01-C2','B20-C2','B21-C2','N02-C2']
 C2_MIN_TOGGLES = 3
-C2_MAX_TOGGLES = 255
 C1_FROZEN = {
     'E00': {'output':'R','input':'R','direction':'DECREASE','isolated':'YES'},
     'E01': {'output':'G','input':'NONE','direction':'DECREASE','isolated':'AMBIG'},
@@ -36,6 +35,7 @@ CROSS_ADDED = {
 SECONDARY = {frozenset(('R','G')):'YELLOW50', frozenset(('R','B')):'MAGENTA50', frozenset(('G','B')):'CYAN50'}
 PRIMARY_APPEARANCE = {'R':'RED','G':'GREEN','B':'BLUE'}
 
+
 def parse_lines(path):
     rows=[]
     for no,line in enumerate(Path(path).read_text().splitlines(),1):
@@ -48,18 +48,22 @@ def parse_lines(path):
         rows.append(row)
     return rows
 
+
 def one(rows,tag,pid=None):
     xs=[r for r in rows if r['_tag']==tag and (pid is None or r.get('id')==pid)]
     if len(xs)!=1: raise ValueError(f'expected one {tag}/{pid}, got {len(xs)}')
     return xs[0]
+
 
 def words(s):
     a=[int(x,16) for x in s.split(',')]
     if len(a)!=15: raise ValueError('expected 15 words')
     return a
 
+
 def obj_sha(w): return hashlib.sha256(struct.pack('<15I',*w)).hexdigest()
 def as_int(r,k): return int(r[k],0)
+
 
 def c1_decoder_path():
     here=Path(__file__).resolve().parent
@@ -68,6 +72,7 @@ def c1_decoder_path():
     sibling=here.parent/'gate1f_ctm_semantics'/'decode.py'
     if sibling.exists(): return sibling
     raise FileNotFoundError('exact Campaign-1 decoder not found')
+
 
 def validate_campaign1(path):
     path=Path(path)
@@ -91,6 +96,7 @@ def validate_campaign1(path):
     if data.get('stage_c_allowed') is not False: raise ValueError('Campaign-1 Stage C disposition changed')
     return data
 
+
 def status_errors(r,nat0,nat1,expected_forward_sha,enabled):
     errs=[]
     expected={
@@ -107,6 +113,7 @@ def status_errors(r,nat0,nat1,expected_forward_sha,enabled):
         errs.append('forward object mismatch')
     return errs
 
+
 def derive_cross(obs):
     if obs.get('confidence')!='CLEAR': return None
     yes=[]
@@ -120,6 +127,7 @@ def derive_cross(obs):
     if not out: return None
     return {'output':out,'input':src,'direction':'INCREASE','isolated':'YES','appearance':appearance}
 
+
 def derive_diagonal(obs):
     if obs.get('confidence')!='CLEAR': return None
     yes=[]
@@ -131,6 +139,7 @@ def derive_diagonal(obs):
     src,appearance=yes[0]
     if appearance not in ('DARK_BLACK','VERY_DARK'): return None
     return {'output':src,'input':src,'direction':'DECREASE','isolated':'YES','appearance':appearance}
+
 
 def factorize(table):
     row_map=[]; col_map=[]; separable=True
@@ -146,6 +155,61 @@ def factorize(table):
     if separable and (set(row_map)!=RGB or set(col_map)!=RGB): separable=False
     return row_map,col_map,separable,(separable and row_map==col_map)
 
+
+def display_app(v):
+    return v.replace('_',' ')
+
+
+def expected_answer_plan(pid,obs):
+    if pid=='N02-C2':
+        plan=[('MAGENTA50_CHANGED',obs['changed'])]
+        if obs['changed']=='YES': plan.append(('MAGENTA50_APPEARANCE',display_app(obs['probe_appearance'])))
+        plan.append(('CONFIDENCE',obs['confidence']))
+        return plan
+    plan=[
+        ('R50_CHANGED',obs['r_changed']),
+        ('G50_CHANGED',obs['g_changed']),
+        ('B50_CHANGED',obs['b_changed']),
+    ]
+    for prefix,changed_key,appearance_key in (
+        ('R50','r_changed','r_appearance'),('G50','g_changed','g_appearance'),('B50','b_changed','b_appearance')):
+        if obs[changed_key]=='YES': plan.append((prefix+'_APPEARANCE',display_app(obs[appearance_key])))
+    plan += [
+        ('YELLOW50_CHANGED',obs['yellow_changed']),
+        ('MAGENTA50_CHANGED',obs['magenta_changed']),
+        ('CYAN50_CHANGED',obs['cyan_changed']),
+        ('GRAY50_CHANGED',obs['gray_changed']),
+        ('CONFIDENCE',obs['confidence']),
+    ]
+    return plan
+
+
+def validate_answers(rows,pid,obs,final_toggle_count,failures):
+    ars=[r for r in rows if r['_tag']=='ANSWER2' and r.get('id')==pid]
+    plan=expected_answer_plan(pid,obs)
+    try:
+        logged_count=int(obs['answer_count'])
+    except (KeyError,ValueError):
+        failures.append(f'{pid}: missing/invalid answer_count')
+        return
+    if logged_count!=len(plan) or len(ars)!=len(plan):
+        failures.append(f'{pid}: answer count mismatch obs={logged_count} rows={len(ars)} expected={len(plan)}')
+        return
+    previous_toggle=-1
+    for i,(row,(field,value)) in enumerate(zip(ars,plan),1):
+        if int(row.get('step','-1'))!=i: failures.append(f'{pid}: ANSWER2 step {row.get("step")} expected {i}')
+        if row.get('field')!=field: failures.append(f'{pid}: ANSWER2 field {row.get("field")} expected {field}')
+        if row.get('value')!=value: failures.append(f'{pid}: {field} value {row.get("value")} expected {value}')
+        if row.get('state')!='PROBE': failures.append(f'{pid}: {field} committed outside PROBE state')
+        try: tc=int(row.get('toggle_count','-1'))
+        except ValueError: tc=-1
+        if tc<C2_MIN_TOGGLES or tc>final_toggle_count: failures.append(f'{pid}: {field} invalid commit toggle_count {tc}')
+        if tc<previous_toggle: failures.append(f'{pid}: answer toggle_count regressed at {field}')
+        previous_toggle=tc
+    if ars and int(ars[-1]['toggle_count'])!=final_toggle_count:
+        failures.append(f'{pid}: final answer toggle_count does not equal OBS2 toggle_count')
+
+
 def self_test():
     d={'r_changed':'YES','g_changed':'NO','b_changed':'NO','r_appearance':'DARK_BLACK','confidence':'CLEAR'}
     assert derive_diagonal(d)['output']=='R'
@@ -156,8 +220,13 @@ def self_test():
         for c,i in enumerate('RGB'): table[r][c]={'output':o,'input':i,'direction':'INCREASE','isolated':'YES'}
     row,col,sep,shared=factorize(table)
     assert row==['R','G','B'] and col==['R','G','B'] and sep and shared
-    assert C2_MIN_TOGGLES == 3 and C2_MAX_TOGGLES == 255
+    obs={'r_changed':'YES','g_changed':'NO','b_changed':'NO','r_appearance':'DARK_BLACK',
+         'g_appearance':'NA','b_appearance':'NA','yellow_changed':'NO','magenta_changed':'NO',
+         'cyan_changed':'NO','gray_changed':'YES','confidence':'CLEAR'}
+    assert expected_answer_plan('D0-C2',obs)[0]==('R50_CHANGED','YES')
+    assert expected_answer_plan('D0-C2',obs)[3]==('R50_APPEARANCE','DARK BLACK')
     print('GATE1F_CAMPAIGN2_DECODER_SELFTEST=PASS')
+
 
 def main():
     ap=argparse.ArgumentParser()
@@ -175,15 +244,24 @@ def main():
     exp=build_expected(); byid={p['id']:p for p in exp['probes']}
     failures=[]
     meta=one(rows,'GATE1F_C2'); stimulus=one(rows,'STIMULUS2'); caps=one(rows,'CAPS2'); src=one(rows,'SOURCE_CONFIRM2')
-    pre=one(rows,'PREFLIGHT2','-'); nb=one(rows,'NATURAL_BASELINE2'); complete=one(rows,'COMPLETE2')
+    startup=one(rows,'STARTUP2','-'); pre=one(rows,'PREFLIGHT2','-'); nb=one(rows,'NATURAL_BASELINE2'); complete=one(rows,'COMPLETE2')
+    if meta.get('format')!='2': failures.append('Campaign-2 evidence format is not 2')
     if meta.get('expected_runtime')!='a637f54f': failures.append('runtime contract is not a637f54f')
     if meta.get('campaign1_sha')!=C1_SHA: failures.append('Campaign-1 prerequisite SHA mismatch in C2 log')
-    if meta.get('observer')!='TEMPORAL_AB': failures.append('observer method is not TEMPORAL_AB')
-    if int(stimulus.get('min_toggles','-1'))!=C2_MIN_TOGGLES or int(stimulus.get('max_toggles','-1'))!=C2_MAX_TOGGLES:
-        failures.append('Campaign-2 toggle-budget contract mismatch')
+    if meta.get('observer')!='TEMPORAL_AB_EXPLICIT_COMMIT': failures.append('observer method is not TEMPORAL_AB_EXPLICIT_COMMIT')
+    if int(stimulus.get('min_toggles','-1'))!=C2_MIN_TOGGLES or stimulus.get('max_toggles')!='UNBOUNDED':
+        failures.append('Campaign-2 toggle contract mismatch')
     for k,want in [('matrix','1'),('immediate','1'),('reapply','3'),('channel_order','0'),('cct','0'),('saturation','0')]:
         if caps.get(k)!=want: failures.append(f'capability {k}={caps.get(k)} expected {want}')
     if src.get('mask')!='7': failures.append('Campaign-2 source confirmation missing')
+    if startup.get('result') is None: failures.append('STARTUP2 status missing result')
+    recovery=[r for r in rows if r['_tag']=='RECOVERY2']
+    if recovery:
+        if len(recovery)!=1 or recovery[0].get('result')!='PASS': failures.append('startup recovery did not complete cleanly')
+        if len([r for r in rows if r['_tag']=='RECOVERY_RESET2'])!=1: failures.append('startup recovery reset status missing/duplicated')
+    if any(r['_tag'] in ('STOP2','CLEANUP2','CLEANUP_RESET2') for r in rows):
+        failures.append('successful Campaign-2 evidence contains stop/cleanup records')
+
     nat0=int(nb['p0']); nat1=int(nb['p1'])
     failures += ['PREFLIGHT2: '+x for x in status_errors(pre,nat0,nat1,CANON_SHA,0)]
     if complete.get('controls')!='PASS' or complete.get('targets')!='4' or complete.get('signed_probe')!='N02-C2':
@@ -199,17 +277,19 @@ def main():
         toggles=[r for r in rows if r.get('id')==pid and r['_tag'] in ('TOGGLE_PROBE','TOGGLE_NEUTRAL')]
         obs=one(rows,'SIGNED_OBS2' if pid=='N02-C2' else 'OBS2',pid)
         count=int(obs['toggle_count'])
-        if count < C2_MIN_TOGGLES or count > C2_MAX_TOGGLES or count != len(toggles): failures.append(f'{pid}: invalid toggle count {count}/{len(toggles)}')
+        if count < C2_MIN_TOGGLES or count != len(toggles): failures.append(f'{pid}: invalid toggle count {count}/{len(toggles)}')
         for i,t in enumerate(toggles):
             want_tag='TOGGLE_PROBE' if i%2==0 else 'TOGGLE_NEUTRAL'
             if t['_tag']!=want_tag: failures.append(f'{pid}: toggle sequence broke at {i}')
             ef=spec['identity_forward_sha256'] if want_tag=='TOGGLE_PROBE' else CANON_SHA
             en=1 if want_tag=='TOGGLE_PROBE' else 0
             failures += [f'{pid} {want_tag}: {x}' for x in status_errors(t,nat0,nat1,ef,en)]
-        if toggles and toggles[-1]['_tag']!='TOGGLE_PROBE': failures.append(f'{pid}: observer did not finish in PROBE state')
+        if not toggles or toggles[-1]['_tag']!='TOGGLE_PROBE': failures.append(f'{pid}: observer did not finish in PROBE state')
+        validate_answers(rows,pid,obs,count,failures)
         post=one(rows,'POSTOBS2',pid); reset=one(rows,'RESET2',pid)
         failures += [f'{pid} POSTOBS2: {x}' for x in status_errors(post,nat0,nat1,spec['identity_forward_sha256'],1)]
         failures += [f'{pid} RESET2: {x}' for x in status_errors(reset,nat0,nat1,CANON_SHA,0)]
+        one(rows,'PROBE_DONE2',pid)
         observations[pid]=obs
 
     for pid in ('D0-C2','B02-C2'):
@@ -273,6 +353,7 @@ def main():
         'campaign1_evidence_sha256':C1_SHA,
         'campaign1_backend_integrity':True,
         'campaign2_evidence_sha256':hashlib.sha256(Path(a.campaign2).read_bytes()).hexdigest(),
+        'campaign2_evidence_format':2,
         'campaign2_natural_generation':[nat0,nat1],
         'campaign2_controls_pass':controls_ok,
         'campaign2_derived':derived,
