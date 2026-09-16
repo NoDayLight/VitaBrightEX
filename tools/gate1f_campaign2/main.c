@@ -136,7 +136,7 @@ static int choose_cross_appearance(C2Session *s,const char *field,const char *pr
     return 0;
 }
 static int choose_diag_appearance(C2Session *s,const char *field,const char *prompt,uint32_t *out) {
-    static const char *const items[]={"BLACK DARK","VERY DARK","ALTERED HUE","OTHER","AMBIG"};
+    static const char *const items[]={"DARK BLACK","VERY DARK","ALTERED HUE","OTHER","AMBIG"};
     static const uint32_t map[]={C2_APP_DARK_BLACK,C2_APP_VERY_DARK,C2_APP_ALTERED_HUE,C2_APP_OTHER,C2_APP_AMBIG};
     int v,r=session_choose(s,field,prompt,items,5,&v);
     if (r<0) return r;
