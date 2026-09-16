@@ -5,6 +5,15 @@ static void copy_object(VbeBStageObject *dst, const VbeBStageObject *src) {
     for (i = 0; i < VBE_B_OBJECT_WORDS; ++i) dst->words[i] = src->words[i];
 }
 
+static void copy_authority(VbeNaturalBSource *dst,
+                           const VbeNaturalBSource *src) {
+    dst->valid = src->valid;
+    dst->stale = src->stale;
+    dst->natural_generation = src->natural_generation;
+    dst->baseline_class = src->baseline_class;
+    copy_object(&dst->source, &src->source);
+}
+
 void vbe_natural_authority_init(VbeNaturalBSource *state) {
     uint32_t i;
     if (!state) return;
@@ -27,22 +36,22 @@ int vbe_natural_authority_after_call(const VbeNaturalBSource *current,
                                      VbeNaturalBSource *next) {
     VbeNaturalBSource tmp;
     if (!current || !source || !next) return VBE_AUTHORITY_INVALID;
-    tmp = *current;
+    copy_authority(&tmp, current);
 
     if (origin == VBE_B_ORIGIN_INTERNAL_REPLAY) {
-        *next = tmp;
+        copy_authority(next, &tmp);
         return VBE_AUTHORITY_NO_CHANGE;
     }
     if (origin != VBE_B_ORIGIN_NATURAL_SONY) return VBE_AUTHORITY_INVALID;
 
     /* A failed Sony setter did not establish new authoritative hardware state. */
     if (sony_return < 0) {
-        *next = tmp;
+        copy_authority(next, &tmp);
         return VBE_AUTHORITY_NO_CHANGE;
     }
     if (tmp.natural_generation >= VBE_NATURAL_GENERATION_MAX) {
         tmp.stale = 1u;
-        *next = tmp;
+        copy_authority(next, &tmp);
         return VBE_AUTHORITY_OVERFLOW;
     }
 
@@ -51,7 +60,7 @@ int vbe_natural_authority_after_call(const VbeNaturalBSource *current,
     tmp.natural_generation += 1u;
     tmp.baseline_class = vbe_b_baseline_classify(source);
     copy_object(&tmp.source, source);
-    *next = tmp;
+    copy_authority(next, &tmp);
     return VBE_AUTHORITY_OK;
 }
 
