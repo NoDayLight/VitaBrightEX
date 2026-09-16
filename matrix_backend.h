@@ -11,23 +11,44 @@
 #define VBE_MATRIX_PLANE_STATUS_SIZE 160u
 #define VBE_MATRIX_BACKEND_STATUS_SIZE 384u
 
-/* Positive values are truthful control/capability results, not SCE errors. */
+/* Positive values are explicit control outcomes, not implicit success. */
 typedef enum {
     VBE_MATRIX_RESULT_APPLIED = 0,
     VBE_MATRIX_RESULT_ACCEPTED_PENDING_REPLAY = 1,
     VBE_MATRIX_RESULT_UNSUPPORTED_TARGET = 2,
+    VBE_MATRIX_RESULT_UNSUPPORTED_BASELINE = 3,
+    VBE_MATRIX_RESULT_STALE_PRISTINE = 4,
+    VBE_MATRIX_RESULT_REPLAY_FAILED = 5,
+    VBE_MATRIX_RESULT_ROLLED_BACK = 6,
+    VBE_MATRIX_RESULT_DEGRADED_PARTIAL_APPLY = 7,
     VBE_MATRIX_RESULT_INVALID_REQUEST = -1,
     VBE_MATRIX_RESULT_BUSY = -2,
     VBE_MATRIX_RESULT_HOOK_INSTALL = -3,
     VBE_MATRIX_RESULT_POLICY = -4,
     VBE_MATRIX_RESULT_REBOOT_OWNED = -5,
+    VBE_MATRIX_RESULT_REPLAY_RESOLVE = -6,
 } VbeMatrixResult;
 
 typedef enum {
     VBE_MATRIX_REAPPLY_NONE = 0,
     VBE_MATRIX_REAPPLY_NATURAL_SONY_REPLAY_ONLY = 1,
     VBE_MATRIX_REAPPLY_BLOCKED_TAIHEN_CHAIN_ORDER = 2,
+    VBE_MATRIX_REAPPLY_TAIHEN_CHAIN_REENTRY = 3,
 } VbeMatrixReapplyMode;
+
+typedef enum {
+    VBE_MATRIX_TXFAULT_NONE = 0,
+    VBE_MATRIX_TXFAULT_HOOK_NOT_SEEN = 1u << 0,
+    VBE_MATRIX_TXFAULT_RECURSION_OR_OVERLAP = 1u << 1,
+    VBE_MATRIX_TXFAULT_PLANE_MISMATCH = 1u << 2,
+    VBE_MATRIX_TXFAULT_SOURCE_MISMATCH = 1u << 3,
+    VBE_MATRIX_TXFAULT_AUTHORITY_CHANGED = 1u << 4,
+    VBE_MATRIX_TXFAULT_ENTRY_RETURN = 1u << 5,
+    VBE_MATRIX_TXFAULT_APPLY_VERIFY = 1u << 6,
+    VBE_MATRIX_TXFAULT_AUTHORITY_STALE = 1u << 7,
+    VBE_MATRIX_TXFAULT_ROLLBACK_FAILED = 1u << 8,
+    VBE_MATRIX_TXFAULT_INJECTED_P1_ABORT = 1u << 9,
+} VbeMatrixTxnFault;
 
 typedef struct {
     uint32_t size;
@@ -56,6 +77,7 @@ typedef struct {
 
 typedef struct {
     uint32_t valid;
+    /* Gate-1E: authoritative NATURAL Sony generation; internal replay never advances it. */
     uint32_t pristine_generation;
     uint32_t baseline_class;
     uint32_t last_forwarded_policy_generation;
@@ -65,7 +87,9 @@ typedef struct {
     uint32_t policy_read_fail_count;
     uint32_t source_fnv1a;
     uint32_t forward_fnv1a;
+    /* Exact latest authoritative natural Sony B object. */
     uint32_t source_words[VBE_B_OBJECT_WORDS];
+    /* Exact latest successfully programmed/forwarded B object. */
     uint32_t forward_words[VBE_B_OBJECT_WORDS];
 } VbeMatrixPlaneStatus;
 
@@ -83,7 +107,10 @@ typedef struct {
     int32_t last_request_result;
     uint32_t request_validation_fail_count;
     uint32_t status_update_drop_count;
-    uint32_t reserved[3];
+    uint32_t transaction_state;
+    uint32_t transaction_fault_flags;
+    /* low 16 bits: authority stale mask; high 16 bits: degraded plane mask */
+    uint32_t authority_degraded_masks;
     VbeMatrixPlaneStatus planes[2];
 } VbeMatrixBackendStatus;
 
@@ -105,3 +132,6 @@ int vitabrightMatrixGetCapabilities(VbeMatrixCapabilities *out);
 int vitabrightMatrixSetRequest(const VbeMatrixRequestV1 *in);
 int vitabrightMatrixReset(void);
 int vitabrightMatrixGetStatus(VbeMatrixBackendStatus *out);
+
+/* Gate-1E research-only deterministic fault injection; inert unless invoked. */
+int vitabrightMatrixTestInjectP1AbortOnce(void);
