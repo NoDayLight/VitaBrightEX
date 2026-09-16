@@ -84,7 +84,7 @@ void c2_ui_set_state(const char *s) {
 void c2_ui_draw(const char *prompt,const char *value,const char *extra) {
     uint32_t bg=c2_pack_rgb(10,10,10), white=c2_pack_rgb(255,255,255);
     fill_rect(0,0,WIDTH,HEIGHT,bg);
-    draw_text(18,12,"GATE 1F CAMPAIGN 2",white,2);
+    draw_text(18,12,"GATE 1F CAMPAIGN 2 R2",white,2);
     draw_text(18,38,g_title,white,2);
     draw_text(650,38,g_state,white,1);
     draw_patch(20,70,280,58,c2_pack_rgb(128,0,0),"R50");
@@ -96,12 +96,12 @@ void c2_ui_draw(const char *prompt,const char *value,const char *extra) {
     draw_patch(180,262,280,58,c2_pack_rgb(128,128,128),"GRAY50");
     draw_patch(500,262,280,58,c2_pack_rgb(0,0,0),"BLACK");
     fill_rect(0,356,WIDTH,188,c2_pack_rgb(20,20,20));
-    if (prompt) draw_text(18,372,prompt,white,1);
-    if (value) draw_text(18,396,value,white,2);
-    if (extra) draw_text(18,426,extra,white,1);
-    draw_text(18,470,"SQUARE TOGGLE  X ANSWER",white,1);
-    draw_text(18,490,"LEFT RIGHT CHANGE  X CONFIRM",white,1);
-    draw_text(18,510,"TRI ABORT",white,1);
+    if (prompt) draw_text(18,368,prompt,white,2);
+    if (value) draw_text(18,400,value,white,2);
+    if (extra) draw_text(18,430,extra,white,1);
+    draw_text(18,474,"SQUARE A B   LEFT RIGHT SELECT",white,1);
+    draw_text(18,494,"X SAVE ANSWER   TRI ABORT",white,1);
+    draw_text(18,514,"NEW QUESTION STARTS UNSELECTED",white,1);
     sceDisplayWaitVblankStart();
 }
 
@@ -121,19 +121,6 @@ uint32_t c2_wait_button(uint32_t mask) {
         current=pad.buttons&mask; pressed=current&~previous; previous=current;
         if (pressed) return pressed;
         sceKernelDelayThread(16000);
-    }
-}
-
-int c2_choose(const char *prompt,const char *const *items,int n) {
-    int i=0;
-    for (;;) {
-        uint32_t b;
-        c2_ui_draw(prompt,items[i],NULL);
-        b=c2_wait_button(SCE_CTRL_LEFT|SCE_CTRL_RIGHT|SCE_CTRL_CROSS|SCE_CTRL_TRIANGLE);
-        if (b & SCE_CTRL_TRIANGLE) return -1;
-        if (b & SCE_CTRL_CROSS) return i;
-        if (b & SCE_CTRL_LEFT) i=(i+n-1)%n;
-        if (b & SCE_CTRL_RIGHT) i=(i+1)%n;
     }
 }
 
