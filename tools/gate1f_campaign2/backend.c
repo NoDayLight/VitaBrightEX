@@ -123,6 +123,9 @@ int c2_preflight_ok(const VbeMatrixBackendStatus *s) {
         words_equal(s->planes[0].forward_words,canonical) &&
         words_equal(s->planes[1].forward_words,canonical);
 }
+int c2_preflight_recoverable_active(const VbeMatrixBackendStatus *s) {
+    return common_fail(s)==0u && s->policy_enabled==1u;
+}
 static int probe_ok(const C2Probe *p,const VbeMatrixBackendStatus *s) {
     uint32_t exp[15]; expected_forward(p,exp);
     return common_fail(s)==0u && natural_unchanged(s) && s->policy_enabled==1u &&
