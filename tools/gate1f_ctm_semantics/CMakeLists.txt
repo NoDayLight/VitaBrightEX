@@ -20,7 +20,7 @@ target_link_libraries(vbe_gate1f_ctm_semantics
   SceCtrl_stub
   SceSysmem_stub
   SceProcessmgr_stub
-  SceThreadmgr_stub
+  SceKernelThreadMgr_stub
   SceIofilemgr_stub
   SceLibKernel_stub)
 set(VITA_ELF_CREATE_FLAGS "")
