@@ -35,8 +35,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           git diff --quiet
           git diff --cached --quiet
-          test "$(git rev-parse v1.4-gate1e-integration)" = a637f54fec4e66a665874944fbea8af016d55f32
-          test "$(git rev-parse research-gate1f-ctm-semantics)" = 0431146ee2cbf2c7683f64091c74ff252301dae6
+          test "$(git rev-parse refs/remotes/origin/v1.4-gate1e-integration)" = a637f54fec4e66a665874944fbea8af016d55f32
+          test "$(git rev-parse refs/remotes/origin/research-gate1f-ctm-semantics)" = 0431146ee2cbf2c7683f64091c74ff252301dae6
       - name: Host finite model and exact sparse objects
         run: |
           set -euxo pipefail
