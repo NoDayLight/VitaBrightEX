@@ -62,6 +62,10 @@ add_executable(vitabright
     matrix_backend_core.h
     matrix_policy_core.c
     matrix_policy_core.h
+    matrix_authority_core.c
+    matrix_authority_core.h
+    matrix_apply_txn_core.c
+    matrix_apply_txn_core.h
     matrix_backend.c
     matrix_backend.h
     taihen_extra.h
