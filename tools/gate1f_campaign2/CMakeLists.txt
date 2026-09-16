@@ -12,7 +12,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror -O2 -std=gnu99")
 if(NOT VBE_PRODUCTION_STUB)
   message(FATAL_ERROR "VBE_PRODUCTION_STUB must point to the exact VitaBrightEX production stub library")
 endif()
-add_executable(vbe_gate1f_campaign2 main.c backend.c ui.c)
+add_executable(vbe_gate1f_campaign2 main.c backend.c ui.c observer_core.c)
 target_include_directories(vbe_gate1f_campaign2 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 target_link_libraries(vbe_gate1f_campaign2
   ${VBE_PRODUCTION_STUB}
@@ -27,4 +27,4 @@ set(VITA_ELF_CREATE_FLAGS "")
 set(VITA_MAKE_FSELF_FLAGS "")
 vita_create_self(vbe_gate1f_campaign2.self vbe_gate1f_campaign2 UNSAFE)
 vita_create_vpk(vbe_gate1f_campaign2.vpk VBEG1F002 vbe_gate1f_campaign2.self
-  VERSION 01.00 NAME "VBE Gate-1F Campaign 2")
+  VERSION 01.01 NAME "VBE Gate-1F Campaign 2 R2")
