@@ -27,10 +27,14 @@ C1_FROZEN = {
 }
 
 PRIMARY_KEYS = [('R','r_changed','r_appearance'),('G','g_changed','g_appearance'),('B','b_changed','b_appearance')]
+# Positive cross-term interpretation is intentionally permutation-neutral.  If
+# the measured output component equals the measured input component, the pure
+# source remains the same hue and simply brightens; this case is necessary to
+# support independent P_out/P_in permutations rather than assuming they match.
 CROSS_ADDED = {
-    ('R','YELLOW'): 'G', ('R','MAGENTA'): 'B',
-    ('G','YELLOW'): 'R', ('G','CYAN'): 'B',
-    ('B','MAGENTA'): 'R', ('B','CYAN'): 'G',
+    ('R','YELLOW'): 'G', ('R','MAGENTA'): 'B', ('R','SAME_HUE_BRIGHTER'): 'R',
+    ('G','YELLOW'): 'R', ('G','CYAN'): 'B', ('G','SAME_HUE_BRIGHTER'): 'G',
+    ('B','MAGENTA'): 'R', ('B','CYAN'): 'G', ('B','SAME_HUE_BRIGHTER'): 'B',
 }
 SECONDARY = {frozenset(('R','G')):'YELLOW50', frozenset(('R','B')):'MAGENTA50', frozenset(('G','B')):'CYAN50'}
 PRIMARY_APPEARANCE = {'R':'RED','G':'GREEN','B':'BLUE'}
@@ -207,6 +211,8 @@ def self_test():
     assert derive_diagonal(d)['output']=='R'
     b={'r_changed':'NO','g_changed':'NO','b_changed':'YES','b_appearance':'MAGENTA','confidence':'CLEAR'}
     assert derive_cross(b)=={'output':'R','input':'B','direction':'INCREASE','isolated':'YES','appearance':'MAGENTA'}
+    same={'r_changed':'NO','g_changed':'YES','b_changed':'NO','g_appearance':'SAME_HUE_BRIGHTER','confidence':'CLEAR'}
+    assert derive_cross(same)=={'output':'G','input':'G','direction':'INCREASE','isolated':'YES','appearance':'SAME_HUE_BRIGHTER'}
     table=[[None]*3 for _ in range(3)]
     for r,o in enumerate('RGB'):
         for c,i in enumerate('RGB'): table[r][c]={'output':o,'input':i,'direction':'INCREASE','isolated':'YES'}
