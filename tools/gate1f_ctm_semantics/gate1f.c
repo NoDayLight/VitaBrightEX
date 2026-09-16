@@ -71,8 +71,18 @@ typedef struct {
 } Observation;
 
 static const uint32_t k_canonical[15] = {
-    0,0,0x3FF,0,0x3FF,0,0x200,0,0,0x200,0,0,0,0x200
+    0,0,0x3FF,0,0x3FF,0,0x200,0,0,0,0x200,0,0,0,0x200
 };
+
+static int canonical_constant_ok(void) {
+    static const uint32_t expected[15] = {
+        0,0,0x3FF,0,0x3FF,0,0x200,0,0,0,0x200,0,0,0,0x200
+    };
+    unsigned i;
+    uint32_t d=0u;
+    for(i=0;i<15;++i) d |= k_canonical[i]^expected[i];
+    return d==0u;
+}
 
 static const Probe k_basis_probes[9] = {
     {"D0",0,0,{256,0,0,0,512,0,0,0,512}},
@@ -477,7 +487,9 @@ int main(void) {
     Probe neg;
 
     sceIoRemove(LOG_PATH);
-    append_log("GATE1F|format=2|base_commit=a637f54fec4e66a665874944fbea8af016d55f32|expected_runtime=%s\n",G1F_BUILD_ID);
+    append_log("GATE1F|format=3|base_commit=a637f54fec4e66a665874944fbea8af016d55f32|expected_runtime=%s\n",G1F_BUILD_ID);
+    if(!canonical_constant_ok()) { append_log("STOP|reason=HARNESS_CANONICAL_SELFTEST\n"); return 30; }
+    append_log("HARNESS_CANONICAL_SELFTEST|pass=1|word9=%08X|word10=%08X|word13=%08X|word14=%08X\n",k_canonical[9],k_canonical[10],k_canonical[13],k_canonical[14]);
     if(vitabrightGetBuildId(build)<0 || memcmp(build,G1F_BUILD_ID,8)!=0) {
         append_log("STOP|reason=BUILD_ID|actual=%s\n",build); return 1;
     }
