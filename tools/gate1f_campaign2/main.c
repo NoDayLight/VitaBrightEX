@@ -405,6 +405,17 @@ int main(void) {
 
     if (c2_log("COMPLETE2|controls=PASS|targets=4|signed_probe=N02-C2|natural_p0=%u|natural_p1=%u\n",pre.planes[0].pristine_generation,pre.planes[1].pristine_generation)<0)
         return fail_probe(-5,NULL);
+    if (c2_log("FINALIZE2|result=COMMIT|target=vbe_gate1f_campaign2.txt\n")<0)
+        return fail_probe(-5,NULL);
+    if (c2_log_finalize()<0) {
+        c2_ui_set_title("EVIDENCE SAVE FAILED");
+        c2_ui_set_state("STATE NEUTRAL");
+        c2_ui_draw("PARTIAL LOG PRESERVED","FTP PARTIAL LOG BEFORE RETRY","X EXIT");
+        do { b=c2_wait_button(SCE_CTRL_CROSS); } while (!(b&SCE_CTRL_CROSS));
+        c2_ui_restore();
+        return 45;
+    }
+
     c2_ui_set_title("CAMPAIGN 2 COMPLETE");
     c2_ui_set_state("STATE NEUTRAL");
     c2_ui_draw("EVIDENCE SAVED","X EXIT",NULL);
