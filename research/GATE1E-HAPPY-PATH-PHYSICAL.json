@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "mission": "Gate-1E Immediate Application / Replay Primitive Discovery",
+  "target": "PCH-2000 / FW 3.65",
+  "tested_production_candidate": "215d92d2b29643f1456592847ae4d13d91dc81a2",
+  "gate1d_physical_closure": "1a04bc5bcec964053c437987525126c9d17c5e02",
+  "selected_attack_surface": "TAIHEN_CHAIN_REENTRY",
+  "identity_discriminator": {
+    "candidate": "5ef6eae15a595215b3062d525854ab7485b17455",
+    "capture_sha256": "aaf6f7dc1e8356dd9a3e26f262e8340067691905a3ec802e3b38e3e0efbdb099",
+    "result": "PASS"
+  },
+  "immediate_candidate": {
+    "candidate": "1ee6fc39813a92e30e118149cd4ed1be018ef10d",
+    "artifact_id": 10430888862,
+    "artifact_sha256": "8770d539b5456a8c03b4504eb057db71c845b298bda50a95da1dd95f90e24a40",
+    "mild_capture_sha256": "758497d8883f04c780daf29e2d08359c8f811e66c6901531bce5c25d0fa1440a",
+    "reset_capture_sha256": "d4971413d49197b1f043402fd5d8187bac906e78d973bfc71f2e1744bb42f542",
+    "mild_visual_transition": "IMMEDIATE_PHYSICALLY_OBSERVED",
+    "reset_visual_transition": "IMMEDIATE_PHYSICALLY_OBSERVED",
+    "mild_decoder": "GATE1E_IMMEDIATE_MILD=PASS",
+    "reset_decoder": "GATE1E_IMMEDIATE_RESET=PASS"
+  },
+  "natural_replay_after_immediate": {
+    "capture_sha256": "1b25895ecb8f13cf9cb0ed5ee0887c9055b688aca1d9ce813ede0898ec01ae4f",
+    "status_size": 448,
+    "policy": {"requested": 4, "active": 4, "enabled": 1, "pending": 0},
+    "plane0": {
+      "pristine_generation": 5,
+      "applied_generation": 4,
+      "raw_return": 0,
+      "mismatch": 0,
+      "overflow": 0,
+      "policy_read_fail": 0,
+      "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+      "forward_sha256": "090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50"
+    },
+    "plane1": {
+      "pristine_generation": 5,
+      "applied_generation": 4,
+      "raw_return": 0,
+      "mismatch": 0,
+      "overflow": 0,
+      "policy_read_fail": 0,
+      "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+      "forward_sha256": "090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50"
+    },
+    "decoder": "GATE1D_MATRIX_STATUS=PASS phase=mild-applied",
+    "result": "PASS"
+  },
+  "physically_verified": [
+    "immediate identity replay without suspend/resume",
+    "full observed Stage-B hook chain participation",
+    "immediate mild matrix application",
+    "immediate exact reset",
+    "p0/p1 synchronized happy-path application",
+    "Sony natural replay after immediate application",
+    "fresh pristine Sony baseline reacquisition after immediate application",
+    "non-compounding recomposition after natural replay"
+  ],
+  "remaining_gate1e_work": [
+    "transactional failure and rollback semantics",
+    "controlled p0-success/p1-failure injection",
+    "private-call failure classification",
+    "policy-change/concurrency failure behavior",
+    "stale pristine generation handling",
+    "promotion into production Set/Reset only after rollback closure"
+  ]
+}
