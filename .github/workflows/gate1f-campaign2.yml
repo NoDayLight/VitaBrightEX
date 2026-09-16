@@ -59,7 +59,7 @@ jobs:
           echo "$VITASDK/bin" >> "$GITHUB_PATH"
           "$VITASDK/bin/vdpm" install taihen
 
-      - name: Pin exact display-header evidence
+      - name: Pin display-header provenance
         run: |
           set -euxo pipefail
           display="$(find "$VITASDK" -type f -path '*/include/psp2/display.h' -print -quit)"
@@ -74,7 +74,7 @@ jobs:
             grep -F 'SCE_DISPLAY_PIXELFORMAT_A8B8G8R8' "$common"
           } | tee gate1f-c2-vitasdk-headers.txt
 
-      - name: Build exact Gate-1E base for ABI stub provenance
+      - name: Build exact Gate-1E base for ABI-stub provenance
         run: |
           set -euxo pipefail
           git worktree add --detach /tmp/gate1f-base "$GATE1F_BASE"
@@ -109,14 +109,15 @@ jobs:
           for p in d['probes']:
               assert p['formal_witness_in_range'] is True
               assert (p['identity_forward_sha256'],p['full_to_limited_forward_sha256'])==want[p['id']]
-              assert len(p['identity_forward_words'])==15 and len(p['full_to_limited_forward_words'])==15
+              assert len(p['identity_forward_words'])==15
+              assert len(p['full_to_limited_forward_words'])==15
           print('GATE1F_CAMPAIGN2_EXACT_OBJECTS=PASS')
           print('GATE1F_CAMPAIGN2_FORMAL_WITNESS_RANGE=PASS')
           PY
           python3 -m py_compile tools/gate1f_campaign2/generate_expected.py tools/gate1f_campaign2/decode.py
           python3 tools/gate1f_campaign2/decode.py --self-test
 
-      - name: Temporal observer source audit
+      - name: Temporal-observer source contract
         run: |
           set -euxo pipefail
           src=tools/gate1f_campaign2/main.c
@@ -125,11 +126,15 @@ jobs:
           grep -F 'TOGGLE_NEUTRAL' "$src"
           grep -F 'C2_MIN_TOGGLES' "$src"
           grep -F 'C2_MAX_TOGGLES' "$src"
+          grep -F 'static const char *const primary[]={"R50","G50","B50"};' "$src"
+          grep -F '"%s CHANGED"' "$src"
+          grep -F 'MAGENTA50 CHANGED' "$src"
           grep -F 'vitabrightMatrixSetRequest' tools/gate1f_campaign2/backend.c
           grep -F 'vitabrightMatrixReset' tools/gate1f_campaign2/backend.c
           grep -F 'natural_unchanged' tools/gate1f_campaign2/backend.c
-          grep -F 'R50 CHANGED' "$src"
-          grep -F 'MAGENTA50 CHANGED' "$src"
+          grep -F 'baseline_mismatch_count' tools/gate1f_campaign2/backend.c
+          grep -F 'overflow_count' tools/gate1f_campaign2/backend.c
+          grep -F 'policy_read_fail_count' tools/gate1f_campaign2/backend.c
           ! grep -Ei 'vita2d|sceGxm|texture|\.png|screenshot' tools/gate1f_campaign2/*.c
           ! grep -Ei 'red should|green should|blue should|expected physical' tools/gate1f_campaign2/*.c
           echo GATE1F_CAMPAIGN2_TEMPORAL_WITNESS_CONTRACT=PASS
