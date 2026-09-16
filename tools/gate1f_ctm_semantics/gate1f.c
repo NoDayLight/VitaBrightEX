@@ -396,7 +396,9 @@ static void restore_framebuffer(void) {
 }
 
 static int is_unambiguous_rgb(const Observation *o) {
-    return o->patch>=OBS_R && o->patch<=OBS_B && o->component>=OBS_R && o->component<=OBS_B && o->isolated==ISO_YES;
+    return o->patch>=OBS_R && o->patch<=OBS_B &&
+           o->component>=OBS_R && o->component<=OBS_B &&
+           o->direction==DIR_INCREASE && o->isolated==ISO_YES;
 }
 
 static Probe negative_from(const Probe *positive) {
