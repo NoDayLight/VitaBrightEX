@@ -1,0 +1,14 @@
+VbeGate1eImmediate:
+  attributes: 0
+  version:
+    major: 1
+    minor: 0
+  main:
+    start: module_start
+    stop: module_stop
+  modules:
+    VbeGate1eImmediate:
+      syscall: true
+      functions:
+        - vbeG1eImmediateReplayCanonical
+        - vbeG1eImmediateGetStatus
