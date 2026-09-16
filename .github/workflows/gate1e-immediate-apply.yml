@@ -1,0 +1,252 @@
+name: Gate-1E immediate Stage-B apply discriminator
+
+on:
+  push:
+    branches: [research-gate1e-immediate-application]
+    paths:
+      - 'research/diagnostics/gate1e_immediate_apply/**'
+      - 'research/gate1e_immediate_apply_decode.py'
+      - 'research/GATE1E-CHAIN-IDENTITY-PHYSICAL.json'
+      - 'research/GATE1E-ATTACK-SURFACE.json'
+      - '.github/workflows/gate1e-immediate-apply.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+  VDPM_SHA: c83b88a54ec13372515eeb8b3bdca4b10c36d721
+  VITA_HEADERS_SHA: 5e1e7d38d766e4c1634a77f6e5249caab8c8f9cb
+  GATE1D_CANDIDATE: 215d92d2b29643f1456592847ae4d13d91dc81a2
+  GATE1D_SKPRX_SHA: 513d3a237933715ccd2e9ff156762c27241dd24ed5ad361e3cb42296ffd2d19d
+  GATE1D_CLOSURE: 1a04bc5bcec964053c437987525126c9d17c5e02
+  GATE1E_IDENTITY_CAPTURE: aaf6f7dc1e8356dd9a3e26f262e8340067691905a3ec802e3b38e3e0efbdb099
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      skprx_sha: ${{ steps.hashes.outputs.skprx_sha }}
+      mild_sha: ${{ steps.hashes.outputs.mild_sha }}
+      reset_sha: ${{ steps.hashes.outputs.reset_sha }}
+      decoder_sha: ${{ steps.hashes.outputs.decoder_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Immutable production boundary and source contract
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GATE1D_CLOSURE" "$GITHUB_SHA"
+          changed="$(git diff --name-only "$GATE1D_CANDIDATE" "$GITHUB_SHA" -- CMakeLists.txt main.c module.yml matrix_backend.c matrix_backend.h matrix_backend_core.c matrix_backend_core.h matrix_policy_core.c matrix_policy_core.h)"
+          test -z "$changed"
+          grep -F '"sha256": "'$GATE1E_IDENTITY_CAPTURE'"' research/GATE1E-CHAIN-IDENTITY-PHYSICAL.json
+          grep -F '"TAIHEN_CHAIN_REENTRY_IDENTITY": "PHYSICALLY_VERIFIED"' research/GATE1E-CHAIN-IDENTITY-PHYSICAL.json
+          python3 - <<'PY' | tee gate1e-immediate-source-contract.txt
+          from pathlib import Path
+          s=Path('research/diagnostics/gate1e_immediate_apply/main.c').read_text()
+          assert s.count('taiHookFunctionExportForKernel(')==1
+          assert s.count('install_observer(')==3
+          assert s.count('TAI_CONTINUE(')==1
+          assert 'module_get_export_func(KERNEL_PID, "SceLowio", TAI_ANY_LIBRARY' in s
+          assert 'StageBEntry)(uintptr_t)g_export_entry' in s
+          assert s.count('fn(0,')==1 and s.count('fn(1,')==1
+          assert 'VBE_G1E_CONTROL_PREPARE' in s and 'VBE_G1E_CONTROL_RECORD' in s
+          assert '__atomic_compare_exchange_n(&g_control_state' in s
+          assert '__atomic_add_fetch(&g_control_runs, 1u' in s
+          assert 'NID_STAGE_B 0xD64F4C6Bu' in s
+          for bad in ('taiHookRelease','taiInject','0x280B2000','0x280B4000','[r3, #0x130]'):
+              assert bad not in s, bad
+          assert 'SCE_KERNEL_STOP_CANCEL' in s
+          mild=Path('research/diagnostics/gate1e_immediate_apply/mild.c').read_text()
+          reset=Path('research/diagnostics/gate1e_immediate_apply/reset.c').read_text()
+          assert 'hardware_component_s3_9[0] = 461' in mild
+          assert 'hardware_component_s3_9[4] = 512' in mild
+          assert 'hardware_component_s3_9[8] = 512' in mild
+          assert 'vitabrightMatrixSetRequest(&r)' in mild
+          assert 'vitabrightMatrixReset()' in reset
+          assert 'vbeG1eImmediateReplayCanonical()' in mild and 'vbeG1eImmediateReplayCanonical()' in reset
+          print('GATE1E_IMMEDIATE_SOURCE_CONTRACT=PASS')
+          print('REPEATABLE_SERIAL_CHAIN_REPLAY=PASS')
+          print('NO_DIRECT_MMIO=PASS')
+          print('NO_RUNTIME_HOOK_RELEASE=PASS')
+          print('GATE1D_PRODUCTION_FILES_UNCHANGED=PASS')
+          PY
+          python3 -m py_compile research/gate1e_immediate_apply_decode.py
+          cat >/tmp/g1eabi.c <<'C'
+          #include "research/diagnostics/gate1e_immediate_apply/gate1e_immediate_protocol.h"
+          int main(void){return !(sizeof(VbeG1eObserverEvent)==92u && sizeof(VbeG1eObserverStatus)==1548u && sizeof(VbeG1eImmediateBundle)==2748u);}
+          C
+          cc -std=c99 -Wall -Wextra -Werror -I. /tmp/g1eabi.c -o /tmp/g1eabi
+          /tmp/g1eabi
+          echo 'GATE1E_IMMEDIATE_PROTOCOL_ABI=PASS' | tee gate1e-immediate-abi.txt
+      - name: Decoder authoritative synthetic mild and reset tests
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          import struct
+          N=2748
+          C=[0,0,1023,0,1023,0,512,0,0,0,512,0,0,0,512]
+          M=[0,0,1023,0,1023,0,461,0,0,0,512,0,0,0,512]
+          def build(action):
+            raw=bytearray(N)
+            def words(off,x): struct.pack_into('<'+'I'*len(x),raw,off,*[(v&0xffffffff) for v in x])
+            words(0,[0x49453156,1,action,0,1,0,0,0,0,0,0,0])
+            def status(off,gen,enabled,pending,pristine,applied,fwd):
+              words(off,[384,1,1,1,0,gen,gen,enabled,pending,2,1,0,0,0,0,0])
+              for plane in range(2):
+                po=off+64+plane*160
+                words(po,[1,pristine,1,applied,0,0,0,0,0,0]);words(po+40,C);words(po+100,fwd)
+            if action==1:
+              status(48,1,0,0,1,1,C);status(432,2,1,3,1,1,C);status(2364,2,1,0,2,2,M);runs=1;epoch=1
+            else:
+              status(48,2,1,0,2,2,M);status(432,3,0,3,2,2,M);status(2364,3,0,0,3,3,C);runs=2;epoch=2
+            oo=816
+            words(oo,[0x45314756,1,7,3,0,0x00c0de25,epoch,123,runs,0,0,8,1,0,0,0,0,0,0])
+            seq=[(2,1,0),(1,1,0),(1,2,0),(2,2,0),(2,1,1),(1,1,1),(1,2,1),(2,2,1)]
+            for i,(node,phase,plane) in enumerate(seq):
+              eo=oo+76+i*92
+              words(eo,[i+1,node,phase,plane,123,epoch,1 if phase==1 else 0,0])
+              if phase==1: words(eo+32,C)
+            return raw
+          open('/tmp/g1e-mild.bin','wb').write(build(1))
+          open('/tmp/g1e-reset.bin','wb').write(build(2))
+          PY
+          python3 research/gate1e_immediate_apply_decode.py --phase mild --authoritative /tmp/g1e-mild.bin | tee gate1e-immediate-mild-selftest.txt
+          python3 research/gate1e_immediate_apply_decode.py --phase reset --authoritative /tmp/g1e-reset.bin | tee gate1e-immediate-reset-selftest.txt
+          grep -F 'GATE1E_IMMEDIATE_MILD=PASS' gate1e-immediate-mild-selftest.txt
+          grep -F 'GATE1E_IMMEDIATE_RESET=PASS' gate1e-immediate-reset-selftest.txt
+          echo 'GATE1E_IMMEDIATE_DECODER_SELFTEST=PASS'
+      - name: Fetch pinned VitaSDK audit inputs
+        run: |
+          set -euxo pipefail
+          git init -q vdpm
+          git -C vdpm remote add origin https://github.com/vitasdk/vdpm.git
+          git -C vdpm fetch -q --depth 1 origin "$VDPM_SHA"
+          git -C vdpm checkout -q --detach FETCH_HEAD
+          git init -q vita-headers-audit
+          git -C vita-headers-audit remote add origin https://github.com/vitasdk/vita-headers.git
+          git -C vita-headers-audit fetch -q --depth 1 origin "$VITA_HEADERS_SHA"
+          git -C vita-headers-audit checkout -q --detach FETCH_HEAD
+      - name: Build Gate-1D ABI stub and Gate-1E immediate candidate
+        run: |
+          set -euxo pipefail
+          bash vdpm/bootstrap-vitasdk.sh
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+          "$VITASDK/bin/vdpm" install taihen
+          cmake -S . -B gate1d-abi-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          cmake --build gate1d-abi-build --parallel
+          stub="$(find gate1d-abi-build -type f -name 'libvitabright_stub.a' -print -quit)"
+          test -n "$stub"
+          cmake -S research/diagnostics/gate1e_immediate_apply -B gate1e-immediate-build \
+            -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+            -DVBE_PRODUCTION_STUB="$GITHUB_WORKSPACE/$stub"
+          cmake --build gate1e-immediate-build --parallel
+          test -s gate1e-immediate-build/vbe_gate1e_immediate.skprx
+          test -s gate1e-immediate-build/vbe_gate1e_immediate_mild.vpk
+          test -s gate1e-immediate-build/vbe_gate1e_immediate_reset.vpk
+          unzip -p gate1e-immediate-build/vbe_gate1e_immediate_mild.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1EMD0
+          unzip -p gate1e-immediate-build/vbe_gate1e_immediate_reset.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1ERS0
+          ! "$VITASDK/bin/arm-vita-eabi-nm" -u gate1e-immediate-build/vbe_gate1e_immediate_kernel | grep -E '(^|[[:space:]])memcpy$'
+          python3 research/gate0_v7_import_manifest.py gate1e-immediate-build/vbe_gate1e_immediate_kernel.velf \
+            --nid-db vita-headers-audit/db/360 --nid-db vita-headers-audit/db/363 \
+            --output gate1e-immediate-imports.txt
+          cat gate1e-immediate-imports.txt
+          grep -F 'library=taihenForKernel' gate1e-immediate-imports.txt
+          grep -F 'library=taihenModuleUtils' gate1e-immediate-imports.txt
+          grep -F 'library=SceSysmemForDriver' gate1e-immediate-imports.txt
+          grep -F 'library=SceThreadmgrForDriver' gate1e-immediate-imports.txt
+          ! grep -F 'library=SceLowio' gate1e-immediate-imports.txt
+          ! grep -F 'SceIftuForDriver' gate1e-immediate-imports.txt
+          echo 'GATE1E_IMMEDIATE_IMPORT_CONTRACT=PASS' | tee gate1e-immediate-import-contract.txt
+      - name: Package immutable immediate candidate
+        id: hashes
+        run: |
+          set -euxo pipefail
+          rm -rf gate1e-immediate-package
+          mkdir -p gate1e-immediate-package/evidence
+          cp gate1e-immediate-build/vbe_gate1e_immediate.skprx gate1e-immediate-package/
+          cp gate1e-immediate-build/vbe_gate1e_immediate_mild.vpk gate1e-immediate-package/
+          cp gate1e-immediate-build/vbe_gate1e_immediate_reset.vpk gate1e-immediate-package/
+          cp research/gate1e_immediate_apply_decode.py gate1e-immediate-package/
+          cp research/diagnostics/gate1e_immediate_apply/gate1e_immediate_protocol.h gate1e-immediate-package/
+          cp research/GATE1E-ATTACK-SURFACE.json research/GATE1E-CHAIN-IDENTITY-PHYSICAL.json gate1e-immediate-package/evidence/
+          cp gate1e-immediate-source-contract.txt gate1e-immediate-abi.txt gate1e-immediate-mild-selftest.txt gate1e-immediate-reset-selftest.txt gate1e-immediate-imports.txt gate1e-immediate-import-contract.txt gate1e-immediate-package/evidence/
+          printf '%s\n' "$GITHUB_SHA" > gate1e-immediate-package/WORKFLOW_COMMIT.txt
+          printf '%s\n' \
+            "workflow=Gate-1E immediate Stage-B apply discriminator" \
+            "commit=$GITHUB_SHA" \
+            "gate1d_candidate=$GATE1D_CANDIDATE" \
+            "gate1d_skprx_sha=$GATE1D_SKPRX_SHA" \
+            "gate1d_closure=$GATE1D_CLOSURE" \
+            "gate1e_identity_capture=$GATE1E_IDENTITY_CAPTURE" \
+            "candidate_layer=TAIHEN_CHAIN_REENTRY" \
+            "physical_actions=MILD_IMMEDIATE,RESET_IMMEDIATE" \
+            > gate1e-immediate-package/BUILD-METADATA.txt
+          (cd gate1e-immediate-package && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          skprx_sha="$(sha256sum gate1e-immediate-package/vbe_gate1e_immediate.skprx | awk '{print $1}')"
+          mild_sha="$(sha256sum gate1e-immediate-package/vbe_gate1e_immediate_mild.vpk | awk '{print $1}')"
+          reset_sha="$(sha256sum gate1e-immediate-package/vbe_gate1e_immediate_reset.vpk | awk '{print $1}')"
+          decoder_sha="$(sha256sum gate1e-immediate-package/gate1e_immediate_apply_decode.py | awk '{print $1}')"
+          echo "skprx_sha=$skprx_sha" >> "$GITHUB_OUTPUT"
+          echo "mild_sha=$mild_sha" >> "$GITHUB_OUTPUT"
+          echo "reset_sha=$reset_sha" >> "$GITHUB_OUTPUT"
+          echo "decoder_sha=$decoder_sha" >> "$GITHUB_OUTPUT"
+          echo "SKPRX_SHA256=$skprx_sha"; echo "MILD_VPK_SHA256=$mild_sha"; echo "RESET_VPK_SHA256=$reset_sha"; echo "DECODER_SHA256=$decoder_sha"
+          cat gate1e-immediate-package/SHA256SUMS
+      - name: Upload exact immediate candidate
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: vbe-gate1e-immediate-${{ github.sha }}
+          path: gate1e-immediate-package/
+          if-no-files-found: error
+
+  independent-verify:
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    env:
+      ARTIFACT_ID: ${{ needs.candidate.outputs.artifact_id }}
+      ARTIFACT_DIGEST: ${{ needs.candidate.outputs.artifact_digest }}
+      EXPECTED_SKPRX: ${{ needs.candidate.outputs.skprx_sha }}
+      EXPECTED_MILD: ${{ needs.candidate.outputs.mild_sha }}
+      EXPECTED_RESET: ${{ needs.candidate.outputs.reset_sha }}
+      EXPECTED_DECODER: ${{ needs.candidate.outputs.decoder_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Independently download and verify artifact
+        run: |
+          set -euxo pipefail
+          curl -fL -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" -o artifact.zip
+          digest="${ARTIFACT_DIGEST#sha256:}"
+          echo "$digest  artifact.zip" | sha256sum -c -
+          unzip -q artifact.zip -d verify
+          test "$(cat verify/WORKFLOW_COMMIT.txt)" = "$GITHUB_SHA"
+          (cd verify && sha256sum -c SHA256SUMS)
+          test "$(sha256sum verify/vbe_gate1e_immediate.skprx | awk '{print $1}')" = "$EXPECTED_SKPRX"
+          test "$(sha256sum verify/vbe_gate1e_immediate_mild.vpk | awk '{print $1}')" = "$EXPECTED_MILD"
+          test "$(sha256sum verify/vbe_gate1e_immediate_reset.vpk | awk '{print $1}')" = "$EXPECTED_RESET"
+          test "$(sha256sum verify/gate1e_immediate_apply_decode.py | awk '{print $1}')" = "$EXPECTED_DECODER"
+          unzip -p verify/vbe_gate1e_immediate_mild.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1EMD0
+          unzip -p verify/vbe_gate1e_immediate_reset.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1ERS0
+          grep -F 'GATE1E_IMMEDIATE_SOURCE_CONTRACT=PASS' verify/evidence/gate1e-immediate-source-contract.txt
+          grep -F 'GATE1E_IMMEDIATE_IMPORT_CONTRACT=PASS' verify/evidence/gate1e-immediate-import-contract.txt
+          echo 'GATE1E_IMMEDIATE_INDEPENDENT_VERIFY=PASS'
+          echo "ARTIFACT_ID=$ARTIFACT_ID"
+          echo "ARTIFACT_DIGEST=$ARTIFACT_DIGEST"
+          echo "SKPRX_SHA256=$EXPECTED_SKPRX"
+          echo "MILD_VPK_SHA256=$EXPECTED_MILD"
+          echo "RESET_VPK_SHA256=$EXPECTED_RESET"
+          echo "DECODER_SHA256=$EXPECTED_DECODER"
