@@ -46,6 +46,19 @@ static void copy_3c(uint32_t dst[VBE_B_OBJECT_WORDS], const SceIftuCscParams *sr
     for (i = 0; i < VBE_B_OBJECT_WORDS; ++i) dst[i] = p[i];
 }
 
+static void copy_event(VbeG1eObserverEvent *dst, const VbeG1eObserverEvent *src) {
+    uint32_t i;
+    dst->sequence = src->sequence;
+    dst->node = src->node;
+    dst->phase = src->phase;
+    dst->plane = src->plane;
+    dst->thread_id = src->thread_id;
+    dst->control_epoch = src->control_epoch;
+    dst->source_valid = src->source_valid;
+    dst->raw_return = src->raw_return;
+    for (i = 0; i < VBE_B_OBJECT_WORDS; ++i) dst->source_words[i] = src->source_words[i];
+}
+
 static void record_event(uint32_t node, uint32_t phase, int plane,
                          const SceIftuCscParams *params, int raw_return) {
     uint32_t slot, tid, epoch;
@@ -167,7 +180,7 @@ int vbeG1eGetStatus(VbeG1eObserverStatus *out) {
     s.replay_return_p0 = __atomic_load_n(&g_ret_p0, __ATOMIC_ACQUIRE);
     s.replay_return_p1 = __atomic_load_n(&g_ret_p1, __ATOMIC_ACQUIRE);
     if (n > VBE_G1E_EVENT_CAPACITY) n = VBE_G1E_EVENT_CAPACITY;
-    for (i = 0; i < n; ++i) s.events[i] = g_events[i];
+    for (i = 0; i < n; ++i) copy_event(&s.events[i], &g_events[i]);
     ENTER_SYSCALL(state);
     ret = ksceKernelMemcpyKernelToUser(out, &s, sizeof(s));
     EXIT_SYSCALL(state);
