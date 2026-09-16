@@ -191,6 +191,10 @@ static int authority_store_commit_natural(uint32_t plane,
         __atomic_or_fetch(&g_authority_stale_mask, 1u << plane, __ATOMIC_RELAXED);
         return VBE_AUTHORITY_STALE;
     }
+    /* A later uncontended natural call may repair a previous stale authority.
+     * Any new collision during THIS write sets the sticky bit again. */
+    __atomic_and_fetch(&g_authority_stale_mask, ~(1u << plane),
+                       __ATOMIC_ACQ_REL);
     seq = __atomic_load_n(&s->seq, __ATOMIC_RELAXED);
     if (seq & 1u) ++seq;
     __atomic_store_n(&s->seq, seq + 1u, __ATOMIC_RELEASE);
@@ -212,10 +216,17 @@ static int authority_store_commit_natural(uint32_t plane,
         __atomic_store_n(&s->baseline_class, (uint32_t)next.baseline_class, __ATOMIC_RELAXED);
         for (i = 0; i < VBE_B_OBJECT_WORDS; ++i)
             __atomic_store_n(&s->source_words[i], next.source.words[i], __ATOMIC_RELAXED);
-        if (next.stale)
-            __atomic_or_fetch(&g_authority_stale_mask, 1u << plane, __ATOMIC_RELAXED);
-        else
-            __atomic_and_fetch(&g_authority_stale_mask, ~(1u << plane), __ATOMIC_RELAXED);
+        /* If another natural writer collided while this writer was active,
+         * its source could have been missed. Preserve stale until a later
+         * uncontended natural call refreshes the authority. */
+        if (__atomic_load_n(&g_authority_stale_mask, __ATOMIC_ACQUIRE) &
+            (1u << plane)) {
+            next.stale = 1u;
+            __atomic_store_n(&s->stale, 1u, __ATOMIC_RELAXED);
+        } else if (next.stale) {
+            __atomic_or_fetch(&g_authority_stale_mask, 1u << plane,
+                              __ATOMIC_RELAXED);
+        }
     }
     __atomic_thread_fence(__ATOMIC_RELEASE);
     __atomic_store_n(&s->seq, seq + 2u, __ATOMIC_RELEASE);
@@ -920,8 +931,10 @@ int vitabrightMatrixGetCapabilities(VbeMatrixCapabilities *out) {
     c.size = sizeof(c);
     c.abi_version = VBE_MATRIX_API_VERSION;
     c.target_pch2000_fw365_verified = 1u;
-    c.matrix_backend_supported = __atomic_load_n(&g_target_supported, __ATOMIC_ACQUIRE);
-    c.immediate_reapply_supported =
+    c.matrix_backend_supported =
+        __atomic_load_n(&g_target_supported, __ATOMIC_ACQUIRE) &&
+        __atomic_load_n(&g_hook_owned, __ATOMIC_ACQUIRE);
+    c.immediate_reapply_supported = c.matrix_backend_supported &&
         __atomic_load_n(&g_immediate_supported, __ATOMIC_ACQUIRE);
     c.reapply_mode = c.immediate_reapply_supported ?
         VBE_MATRIX_REAPPLY_TAIHEN_CHAIN_REENTRY :
