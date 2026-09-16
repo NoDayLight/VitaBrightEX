@@ -1,37 +1,13 @@
-name: Gate-1E one-shot adapter state fix
+name: Gate-1E one-shot adapter state fix (disabled)
 
 on:
-  push:
-    branches: [research-gate1e-immediate-application]
-    paths: ['.github/workflows/gate1e-adapter-state-fix.yml']
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  patch:
+  archived:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: research-gate1e-immediate-application
-          fetch-depth: 0
-      - name: Require explicit rollback state before rollback adapter
-        run: |
-          set -euxo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path('matrix_backend.c')
-          s=p.read_text()
-          old='''    ret = rollback_previous(&txn, &pre.old_policy);\n\nout:\n'''
-          new='''    /* Every rollback enters the pure state machine explicitly. */\n    if (txn.state == VBE_MATRIX_TXN_VERIFY)\n        (void)tx_step(&txn, VBE_MATRIX_TXN_EVENT_VERIFY_FAIL);\n    else if (txn.state == VBE_MATRIX_TXN_REPLAY_P0 ||\n             txn.state == VBE_MATRIX_TXN_REPLAY_P1)\n        (void)tx_step(&txn, VBE_MATRIX_TXN_EVENT_REPLAY_FAIL);\n    if (txn.state != VBE_MATRIX_TXN_ROLLBACK_PUBLISH) {\n        __atomic_or_fetch(&g_transaction_fault_flags,\n                          VBE_MATRIX_TXFAULT_ROLLBACK_FAILED,\n                          __ATOMIC_RELAXED);\n        __atomic_store_n(&g_degraded_plane_mask, VBE_MATRIX_TARGET_PLANE_MASK,\n                         __ATOMIC_RELEASE);\n        ret = VBE_MATRIX_RESULT_DEGRADED_PARTIAL_APPLY;\n        goto out;\n    }\n    ret = rollback_previous(&txn, &pre.old_policy);\n\nout:\n'''
-          assert s.count(old)==1, s.count(old)
-          p.write_text(s.replace(old,new))
-          PY
-          git diff --check
-          git diff -- matrix_backend.c
-          git config user.name tempestas
-          git config user.email '62885176+NoDayLight@users.noreply.github.com'
-          git add matrix_backend.c
-          git commit -m 'fix: make Gate-1E rollback state explicit'
-          git push origin HEAD:research-gate1e-immediate-application
+      - run: echo 'One-shot adapter patch completed at 0c15e8bbfde992da12450f3663128da71033a781.'
