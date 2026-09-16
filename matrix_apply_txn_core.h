@@ -1,0 +1,58 @@
+#pragma once
+#include <stdint.h>
+
+typedef enum {
+    VBE_MATRIX_TXN_IDLE = 0,
+    VBE_MATRIX_TXN_PREFLIGHT,
+    VBE_MATRIX_TXN_PUBLISHED,
+    VBE_MATRIX_TXN_REPLAY_P0,
+    VBE_MATRIX_TXN_REPLAY_P1,
+    VBE_MATRIX_TXN_VERIFY,
+    VBE_MATRIX_TXN_ROLLBACK_PUBLISH,
+    VBE_MATRIX_TXN_ROLLBACK_P0,
+    VBE_MATRIX_TXN_ROLLBACK_P1,
+    VBE_MATRIX_TXN_ROLLBACK_VERIFY,
+    VBE_MATRIX_TXN_COMMITTED,
+    VBE_MATRIX_TXN_PENDING,
+    VBE_MATRIX_TXN_ROLLED_BACK,
+    VBE_MATRIX_TXN_DEGRADED,
+} VbeMatrixTxnState;
+
+typedef enum {
+    VBE_MATRIX_TXN_FINAL_NONE = 0,
+    VBE_MATRIX_TXN_FINAL_APPLIED,
+    VBE_MATRIX_TXN_FINAL_PENDING,
+    VBE_MATRIX_TXN_FINAL_ROLLED_BACK,
+    VBE_MATRIX_TXN_FINAL_DEGRADED,
+} VbeMatrixTxnFinal;
+
+typedef enum {
+    VBE_MATRIX_TXN_EVENT_PREFLIGHT_READY = 1,
+    VBE_MATRIX_TXN_EVENT_PREFLIGHT_DEFER,
+    VBE_MATRIX_TXN_EVENT_PUBLISH_OK,
+    VBE_MATRIX_TXN_EVENT_PUBLISH_FAIL,
+    VBE_MATRIX_TXN_EVENT_REPLAY_OK,
+    VBE_MATRIX_TXN_EVENT_REPLAY_FAIL,
+    VBE_MATRIX_TXN_EVENT_VERIFY_OK,
+    VBE_MATRIX_TXN_EVENT_VERIFY_FAIL,
+    VBE_MATRIX_TXN_EVENT_REBASE_REQUIRED,
+    VBE_MATRIX_TXN_EVENT_ROLLBACK_PUBLISH_OK,
+    VBE_MATRIX_TXN_EVENT_ROLLBACK_PUBLISH_FAIL,
+    VBE_MATRIX_TXN_EVENT_ROLLBACK_REPLAY_OK,
+    VBE_MATRIX_TXN_EVENT_ROLLBACK_REPLAY_FAIL,
+    VBE_MATRIX_TXN_EVENT_ROLLBACK_VERIFY_OK,
+    VBE_MATRIX_TXN_EVENT_ROLLBACK_VERIFY_FAIL,
+} VbeMatrixTxnEvent;
+
+typedef struct {
+    VbeMatrixTxnState state;
+    VbeMatrixTxnFinal final;
+    uint32_t preflight_deferred;
+    uint32_t rebase_count;
+    uint32_t max_rebases;
+} VbeMatrixApplyTxn;
+
+void vbe_matrix_txn_init(VbeMatrixApplyTxn *txn, uint32_t max_rebases);
+int vbe_matrix_txn_begin(VbeMatrixApplyTxn *txn);
+int vbe_matrix_txn_step(VbeMatrixApplyTxn *txn, VbeMatrixTxnEvent event);
+int vbe_matrix_txn_is_terminal(const VbeMatrixApplyTxn *txn);
