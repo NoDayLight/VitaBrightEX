@@ -1,0 +1,55 @@
+name: Gate-1E transactional integration preflight
+
+on:
+  push:
+    branches: [research-gate1e-immediate-application]
+    paths: ['.github/workflows/gate1e-transaction-preflight.yml']
+
+permissions:
+  contents: read
+
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+  VDPM_SHA: c83b88a54ec13372515eeb8b3bdca4b10c36d721
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Host cores
+        run: |
+          set -euxo pipefail
+          cc -std=c99 -Wall -Wextra -Werror -O2 -I. tests/matrix_backend_core_host.c matrix_backend_core.c -o /tmp/matrix-core
+          /tmp/matrix-core
+          cc -std=c99 -Wall -Wextra -Werror -O2 -pthread -I. tests/matrix_policy_host.c matrix_policy_core.c matrix_backend_core.c -o /tmp/matrix-policy
+          /tmp/matrix-policy
+          cc -std=c99 -Wall -Wextra -Werror -O2 -I. tests/matrix_authority_host.c matrix_authority_core.c matrix_backend_core.c -o /tmp/matrix-authority
+          /tmp/matrix-authority
+          cc -std=c99 -Wall -Wextra -Werror -O2 -I. tests/matrix_apply_txn_host.c matrix_apply_txn_core.c -o /tmp/matrix-txn
+          /tmp/matrix-txn
+      - name: Build integrated production and clients
+        run: |
+          set -euxo pipefail
+          git init -q vdpm
+          git -C vdpm remote add origin https://github.com/vitasdk/vdpm.git
+          git -C vdpm fetch -q --depth 1 origin "$VDPM_SHA"
+          git -C vdpm checkout -q --detach FETCH_HEAD
+          bash vdpm/bootstrap-vitasdk.sh
+          "$VITASDK/bin/vdpm" install taihen
+          cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          cmake --build build --parallel
+          test -s build/vitabright.skprx
+          stub="$(find build -type f -name libvitabright_stub.a -print -quit)"
+          test -n "$stub"
+          cmake -S research/diagnostics/gate1e_integrated_control -B clients \
+            -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+            -DVBE_PRODUCTION_STUB="$GITHUB_WORKSPACE/$stub"
+          cmake --build clients --parallel
+          for f in vbe_gate1e_integrated_mild.vpk vbe_gate1e_integrated_reset.vpk vbe_gate1e_integrated_status.vpk vbe_gate1e_integrated_rollback.vpk; do test -s "clients/$f"; done
+          ! arm-vita-eabi-nm -u build/vitabright.velf | grep -E '[[:space:]](memcpy|memset)$'
+          echo GATE1E_TRANSACTION_PREFLIGHT=PASS
