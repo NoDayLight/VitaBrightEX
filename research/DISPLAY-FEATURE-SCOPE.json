@@ -12,9 +12,16 @@
     "current_production_checkpoint": {
       "branch": "v1.4-rearchitecture",
       "commit": "fc8ffbfcfd43a67e17a5c3b67e83a88bfef00b09",
-      "affine_csc_policy": "GATE1D_PRODUCTION_CANDIDATE_PCH2000_FW365",
+      "affine_csc_policy": "GATE1E_TRANSACTIONAL_IMMEDIATE_APPLY_PHYSICALLY_CLOSED_PCH2000_FW365",
       "transfer_policy": "UNSUPPORTED_SAFE_GATE",
-      "meaning": "The Stage-B matrix backend is physically verified as a production candidate only on PCH-2000 / FW 3.65. Product integration and immediate-application mechanism research remain separate gates."
+      "meaning": "The v1.4-rearchitecture base remains fc8ffb...; the integrated Stage-B matrix backend plus transactional immediate application is physically closed on PCH-2000 / FW 3.65 in Gate-1E candidate d2b213427a7d631886815997c81ace2091ae5a49. Channel ordering, additive post-add semantics, and nonlinear transfer work remain separate gates."
+    },
+    "integrated_gate1e_candidate": {
+      "branch": "research-gate1e-immediate-application",
+      "commit": "d2b213427a7d631886815997c81ace2091ae5a49",
+      "skprx_sha256": "010bafa718e9fc7d0d5be3bd3941f6bc6d0229b280cf7daa57e77ce1797f522d",
+      "selected_replay_transport": "TAIHEN_CHAIN_REENTRY",
+      "classification": "PHYSICALLY_VERIFIED_PCH2000_FW365"
     }
   },
   "features": [
@@ -22,7 +29,7 @@
       "feature": "persistent_affine_csc",
       "engine": "AFFINE",
       "scope": "ACTIVE_TARGET",
-      "backend": "BACKEND_PHYSICALLY_VERIFIED_PRODUCT_INTEGRATION_PENDING"
+      "backend": "BACKEND_AND_TRANSACTIONAL_APPLY_PHYSICALLY_VERIFIED_PCH2000_FW365"
     },
     {
       "feature": "cct_white_balance",
@@ -35,7 +42,7 @@
       "feature": "arbitrary_3x3_calibration",
       "engine": "AFFINE",
       "scope": "ACTIVE_TARGET",
-      "backend": "RAW_BACKEND_PHYSICALLY_VERIFIED_PRODUCT_INTEGRATION_PENDING"
+      "backend": "RAW_BACKEND_INTEGRATED_TRANSACTIONAL_APPLY_PHYSICALLY_VERIFIED_TRANSPORT"
     },
     {
       "feature": "luma_aware_saturation",
@@ -91,8 +98,9 @@
     "IFTU_NONLINEAR_BACKEND": "UNDER_RESEARCH",
     "PANEL_CONTROLLER_NONLINEAR_BACKEND": "PENDING_GATE0_RUNTIME_FINGERPRINT",
     "MATRIX_SIDE": "B_STAGE_PHYSICALLY_VERIFIED_PCH2000_FW365",
-    "MATRIX_BACKEND": "PRODUCTION_CANDIDATE_PCH2000_FW365",
-    "IMMEDIATE_REAPPLY": "GATE1E_RESEARCH_IN_PROGRESS",
+    "MATRIX_BACKEND": "TRANSACTIONAL_IMMEDIATE_PRODUCTION_CANDIDATE_PCH2000_FW365",
+    "IMMEDIATE_REAPPLY": "TAIHEN_CHAIN_REENTRY_PHYSICALLY_VERIFIED_PCH2000_FW365",
+    "SOURCE_AUTHORITY": "NATURAL_INTERNAL_SEPARATED_PHYSICALLY_VERIFIED",
     "POST_ADD_SIDE": "ADDITIVE_SEMANTICS_PENDING",
     "CHANNEL_ORDER": "PENDING"
   },
@@ -111,7 +119,26 @@
       "classification": "PHYSICALLY_VERIFIED",
       "evidence_commit": "1a04bc5bcec964053c437987525126c9d17c5e02",
       "tested_production_commit": "215d92d2b29643f1456592847ae4d13d91dc81a2",
-      "limitations": "Immediate application remains a separate Gate-1E research problem; Gate-1D natural replay remains authoritative."
+      "limitations": "Gate-1D natural replay remains authoritative for Sony lifecycle reconstruction; Gate-1E adds synchronous transactional application without replacing that natural replay path."
+    },
+    {
+      "decision": "IMMEDIATE_REAPPLY",
+      "value": "TAIHEN_CHAIN_REENTRY",
+      "classification": "PHYSICALLY_VERIFIED",
+      "target": "PCH-2000 / FW 3.65",
+      "tested_integrated_commit": "d2b213427a7d631886815997c81ace2091ae5a49",
+      "tested_skprx_sha256": "010bafa718e9fc7d0d5be3bd3941f6bc6d0229b280cf7daa57e77ce1797f522d",
+      "evidence_commit": "9186ad2ba00a5bda134aba0126c0eceb63fe1384",
+      "closure_file": "research/GATE1E-TRANSACTIONAL-PHYSICAL-CLOSURE.json",
+      "results": {
+        "normal_set_reset": "APPLIED_SYNCHRONOUSLY",
+        "natural_internal_authority_split": "PHYSICALLY_VERIFIED",
+        "p0_success_p1_abort": "ROLLED_BACK_PHYSICALLY_VERIFIED",
+        "rollback_failure": "HOST_CLASSIFIED_DEGRADED",
+        "range_baseline": "HOST_VERIFIED",
+        "sidecar_required": false
+      },
+      "limitations": "Closure is target-specific. FULL_TO_LIMITED immediate replay was host-verified but not forced physically; channel ordering and additive/nonlinear feature semantics remain separate gates."
     }
   ]
 }
