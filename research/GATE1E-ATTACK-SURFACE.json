@@ -63,12 +63,12 @@
     {
       "level":"L2",
       "name":"patched Stage-B export / taiHEN chain-head reentry",
-      "classification":"PROMISING_RESEARCH_CANDIDATE",
-      "evidence":"Pinned taiHEN patches the original function entry to the chain head; later hooks are linked behind it; TAI_CONTINUE walks successor then saved original. Calling the resolved export from outside hook_b therefore enters the current full chain, whereas calling it from inside hook_b would recurse.",
+      "classification":"PROVEN_SAFE_CANDIDATE",
+      "evidence":"Pinned taiHEN patches the original function entry to the chain head; later hooks are linked behind it; TAI_CONTINUE walks successor then saved original. Physical identity capture aaf6f7dc1e8356dd9a3e26f262e8340067691905a3ec802e3b38e3e0efbdb099 proved two observer nodes, Gate-1D participation, one Sony return per plane, no recursion and no concurrency. Physical mild capture 758497d8883f04c780daf29e2d08359c8f811e66c6901531bce5c25d0fa1440a then proved immediate visible 461/512 application with exact Gate-1D forward object on p0/p1 and no suspend/resume. Physical reset capture d4971413d49197b1f043402fd5d8187bac906e78d973bfc71f2e1744bb42f542 proved immediate exact restoration to canonical Sony B on both planes.",
       "semantic_owner":"TAIHEN_CHAIN_REENTRY",
-      "cache_coherence":"inherits private Sony setter",
-      "third_party_hooks":"preserved by chain-head entry",
-      "physical_test":"required"
+      "cache_coherence":"inherits private Sony setter; physical source/forward/pristine generations remained coherent",
+      "third_party_hooks":"preserved by chain-head entry; two independent observational nodes were physically traversed once per plane",
+      "physical_test":"IDENTITY + MILD + RESET PASS; natural-replay-after-immediate and rollback/failure closure still pending"
     },
     {
       "level":"L3",
@@ -78,7 +78,7 @@
       "semantic_owner":"PRIVATE_LOWIO_SETTER",
       "cache_coherence":"native Sony cache+live",
       "third_party_hooks":"direct original/trampoline call would bypass some or all hooks",
-      "selection_note":"Strong fallback, but dominated by L2 if chain-head physical discriminator passes."
+      "selection_note":"Strong fallback, but currently dominated by physically verified L2 chain-head replay."
     },
     {
       "level":"L4",
@@ -101,7 +101,7 @@
       "evidence":"All 15 B register offsets, widths and write order are reconstructed exactly; the retail setter follows them with dmb sy.",
       "semantic_owner":"DIRECT_IFTU_MMIO",
       "cache_coherence":"MMIO-only would leave Sony B cache stale; production use would require explicit cache synchronization or equivalent",
-      "selection_note":"Authorized fallback but currently dominated by L2/L3 because those preserve Sony cache and synchronization automatically."
+      "selection_note":"Authorized fallback, but dominated by L2 because L2 is already physically immediate, cache coherent and full-chain compatible."
     },
     {
       "level":"L7",
@@ -113,8 +113,8 @@
   ],
   "current_selection": {
     "candidate":"L2 patched Stage-B export / taiHEN chain-head reentry",
-    "classification":"PROMISING_RESEARCH_CANDIDATE",
-    "why":"It combines the synchronized/cache-coherent Sony private setter transaction with full current taiHEN hook-chain participation and requires no guessed ABI or direct MMIO.",
-    "next_gate":"two-node identity-only physical chain discriminator"
+    "classification":"PROVEN_SAFE_CANDIDATE",
+    "why":"It has physically demonstrated immediate identity replay, immediate visible mild matrix application, exact immediate reset, p0/p1 agreement, full observed hook-chain traversal, Sony success returns, and coherent Gate-1D pristine/forward generations without suspend/resume.",
+    "remaining_gate":"natural Sony replay after immediate apply + repeated mild/reset stability + failure/rollback semantics"
   }
 }
