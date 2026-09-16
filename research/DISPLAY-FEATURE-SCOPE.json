@@ -10,11 +10,11 @@
       "UNSUPPORTED_FINAL"
     ],
     "current_production_checkpoint": {
-      "branch": "v1.4-display-pipeline",
+      "branch": "v1.4-rearchitecture",
       "commit": "fc8ffbfcfd43a67e17a5c3b67e83a88bfef00b09",
-      "affine_csc_policy": "GATE1D_PRODUCTION_BACKEND_IN_DEVELOPMENT",
+      "affine_csc_policy": "GATE1D_PRODUCTION_CANDIDATE_PCH2000_FW365",
       "transfer_policy": "UNSUPPORTED_SAFE_GATE",
-      "meaning": "Stage B ownership is physically verified only on PCH-2000 / FW 3.65. Generic production matrix composition is being implemented without broadening that target claim."
+      "meaning": "The Stage-B matrix backend is physically verified as a production candidate only on PCH-2000 / FW 3.65. Product integration and immediate-application mechanism research remain separate gates."
     }
   },
   "features": [
@@ -22,26 +22,26 @@
       "feature": "persistent_affine_csc",
       "engine": "AFFINE",
       "scope": "ACTIVE_TARGET",
-      "backend": "MATRIX_BACKEND_IMPLEMENTATION_PENDING"
+      "backend": "BACKEND_PHYSICALLY_VERIFIED_PRODUCT_INTEGRATION_PENDING"
     },
     {
       "feature": "cct_white_balance",
       "engine": "AFFINE",
       "scope": "ACTIVE_TARGET",
-      "backend": "MATRIX_BACKEND_PENDING",
+      "backend": "MATRIX_BACKEND_AVAILABLE_PRODUCT_INTEGRATION_PENDING",
       "sub_blocker": "CHANNEL_ORDER_PENDING"
     },
     {
       "feature": "arbitrary_3x3_calibration",
       "engine": "AFFINE",
       "scope": "ACTIVE_TARGET",
-      "backend": "MATRIX_BACKEND_IMPLEMENTATION_PENDING"
+      "backend": "RAW_BACKEND_PHYSICALLY_VERIFIED_PRODUCT_INTEGRATION_PENDING"
     },
     {
       "feature": "luma_aware_saturation",
       "engine": "AFFINE",
       "scope": "ACTIVE_TARGET",
-      "backend": "MATRIX_BACKEND_PENDING",
+      "backend": "MATRIX_BACKEND_AVAILABLE_PRODUCT_INTEGRATION_PENDING",
       "sub_blocker": "CHANNEL_ORDER_PENDING"
     },
     {
@@ -91,9 +91,10 @@
     "IFTU_NONLINEAR_BACKEND": "UNDER_RESEARCH",
     "PANEL_CONTROLLER_NONLINEAR_BACKEND": "PENDING_GATE0_RUNTIME_FINGERPRINT",
     "MATRIX_SIDE": "B_STAGE_PHYSICALLY_VERIFIED_PCH2000_FW365",
-    "MATRIX_BACKEND": "IMPLEMENTATION_PENDING",
+    "MATRIX_BACKEND": "PRODUCTION_CANDIDATE_PCH2000_FW365",
+    "IMMEDIATE_REAPPLY": "GATE1E_RESEARCH_IN_PROGRESS",
     "POST_ADD_SIDE": "ADDITIVE_SEMANTICS_PENDING",
-    "CHANNEL_ORDER": "INFERRED_ONLY_PENDING_PROOF"
+    "CHANNEL_ORDER": "PENDING"
   },
   "scope_decisions": [
     {
@@ -103,6 +104,14 @@
       "target": "PCH-2000 / FW 3.65",
       "evidence_commit": "233f723fccfb3194edce9889e668cbe69f643194",
       "limitations": "No claim is made for other firmware, panels, source formats, or unknown Sony B baselines."
+    },
+    {
+      "decision": "MATRIX_BACKEND",
+      "value": "PRODUCTION_CANDIDATE_PCH2000_FW365",
+      "classification": "PHYSICALLY_VERIFIED",
+      "evidence_commit": "1a04bc5bcec964053c437987525126c9d17c5e02",
+      "tested_production_commit": "215d92d2b29643f1456592847ae4d13d91dc81a2",
+      "limitations": "Immediate application remains a separate Gate-1E research problem; Gate-1D natural replay remains authoritative."
     }
   ]
 }
