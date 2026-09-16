@@ -35,6 +35,27 @@
 #define ISO_NO 2u
 #define ISO_AMBIG 3u
 
+/* Common status failure bits. These are deliberately stable in the physical log. */
+#define STFAIL_TARGET            (1u << 0)
+#define STFAIL_HOOK_OWNED        (1u << 1)
+#define STFAIL_HOOK_FAIL         (1u << 2)
+#define STFAIL_PENDING           (1u << 3)
+#define STFAIL_REAPPLY           (1u << 4)
+#define STFAIL_TX_FAULTS         (1u << 5)
+#define STFAIL_AUTH_MASKS        (1u << 6)
+#define STFAIL_P0_VALID          (1u << 7)
+#define STFAIL_P1_VALID          (1u << 8)
+#define STFAIL_P0_CLASS          (1u << 9)
+#define STFAIL_P1_CLASS          (1u << 10)
+#define STFAIL_P0_SONY           (1u << 11)
+#define STFAIL_P1_SONY           (1u << 12)
+#define STFAIL_P0_SOURCE         (1u << 13)
+#define STFAIL_P1_SOURCE         (1u << 14)
+#define STFAIL_POLICY_ENABLED    (1u << 16)
+#define STFAIL_P0_FORWARD        (1u << 17)
+#define STFAIL_P1_FORWARD        (1u << 18)
+#define STFAIL_GET_STATUS        (1u << 31)
+
 typedef struct {
     char id[4];
     uint32_t row;
@@ -237,20 +258,23 @@ static int log_status(const char *tag, const char *id, int action_result,
                       const VbeMatrixBackendStatus *s) {
     char buf[4096];
     int off = snprintf(buf,sizeof(buf),
-        "%s|id=%s|result=%d|requested=%u|active=%u|enabled=%u|pending=%u|reapply=%u|last=%d|tx=%u|faults=%u|masks=%u|p0_nat=%u|p0_class=%u|p0_applied=%u|p0_raw=%d|p0_source=",
-        tag,id,action_result,s->requested_generation,s->active_published_generation,
+        "%s|id=%s|result=%d|target=%u|hook_owned=%u|hook_fail=%u|requested=%u|active=%u|enabled=%u|pending=%u|reapply=%u|last=%d|tx=%u|faults=%u|masks=%u|p0_valid=%u|p0_nat=%u|p0_class=%u|p0_applied=%u|p0_raw=%d|p0_mismatch=%u|p0_overflow=%u|p0_policy_fail=%u|p0_source=",
+        tag,id,action_result,s->target_supported,s->hook_owned,s->hook_fail,
+        s->requested_generation,s->active_published_generation,
         s->policy_enabled,s->pending_plane_mask,s->reapply_mode,s->last_request_result,
         s->transaction_state,s->transaction_fault_flags,s->authority_degraded_masks,
-        s->planes[0].pristine_generation,s->planes[0].baseline_class,
-        s->planes[0].last_forwarded_policy_generation,s->planes[0].last_sony_return);
+        s->planes[0].valid,s->planes[0].pristine_generation,s->planes[0].baseline_class,
+        s->planes[0].last_forwarded_policy_generation,s->planes[0].last_sony_return,
+        s->planes[0].baseline_mismatch_count,s->planes[0].overflow_count,s->planes[0].policy_read_fail_count);
     if (off < 0) return -1;
     off = append_words(buf,sizeof(buf),off,s->planes[0].source_words); if (off < 0) return -1;
     off += snprintf(buf+off,sizeof(buf)-(size_t)off,"|p0_forward=");
     off = append_words(buf,sizeof(buf),off,s->planes[0].forward_words); if (off < 0) return -1;
     off += snprintf(buf+off,sizeof(buf)-(size_t)off,
-        "|p1_nat=%u|p1_class=%u|p1_applied=%u|p1_raw=%d|p1_source=",
-        s->planes[1].pristine_generation,s->planes[1].baseline_class,
-        s->planes[1].last_forwarded_policy_generation,s->planes[1].last_sony_return);
+        "|p1_valid=%u|p1_nat=%u|p1_class=%u|p1_applied=%u|p1_raw=%d|p1_mismatch=%u|p1_overflow=%u|p1_policy_fail=%u|p1_source=",
+        s->planes[1].valid,s->planes[1].pristine_generation,s->planes[1].baseline_class,
+        s->planes[1].last_forwarded_policy_generation,s->planes[1].last_sony_return,
+        s->planes[1].baseline_mismatch_count,s->planes[1].overflow_count,s->planes[1].policy_read_fail_count);
     off = append_words(buf,sizeof(buf),off,s->planes[1].source_words); if (off < 0) return -1;
     off += snprintf(buf+off,sizeof(buf)-(size_t)off,"|p1_forward=");
     off = append_words(buf,sizeof(buf),off,s->planes[1].forward_words); if (off < 0) return -1;
@@ -259,16 +283,36 @@ static int log_status(const char *tag, const char *id, int action_result,
     return append_log("%s",buf);
 }
 
+static uint32_t status_common_fail_mask(const VbeMatrixBackendStatus *s) {
+    uint32_t m=0u;
+    if(s->target_supported != 1u) m |= STFAIL_TARGET;
+    if(s->hook_owned != 1u) m |= STFAIL_HOOK_OWNED;
+    if(s->hook_fail != 0u) m |= STFAIL_HOOK_FAIL;
+    if(s->pending_plane_mask != 0u) m |= STFAIL_PENDING;
+    if(s->reapply_mode != VBE_MATRIX_REAPPLY_TAIHEN_CHAIN_REENTRY) m |= STFAIL_REAPPLY;
+    if(s->transaction_fault_flags != 0u) m |= STFAIL_TX_FAULTS;
+    if(s->authority_degraded_masks != 0u) m |= STFAIL_AUTH_MASKS;
+    if(s->planes[0].valid != 1u) m |= STFAIL_P0_VALID;
+    if(s->planes[1].valid != 1u) m |= STFAIL_P1_VALID;
+    if(s->planes[0].baseline_class != VBE_B_BASELINE_CANONICAL_IDENTITY) m |= STFAIL_P0_CLASS;
+    if(s->planes[1].baseline_class != VBE_B_BASELINE_CANONICAL_IDENTITY) m |= STFAIL_P1_CLASS;
+    if(s->planes[0].last_sony_return != 0) m |= STFAIL_P0_SONY;
+    if(s->planes[1].last_sony_return != 0) m |= STFAIL_P1_SONY;
+    if(!words_equal(s->planes[0].source_words,k_canonical)) m |= STFAIL_P0_SOURCE;
+    if(!words_equal(s->planes[1].source_words,k_canonical)) m |= STFAIL_P1_SOURCE;
+    return m;
+}
+
 static int status_common_ok(const VbeMatrixBackendStatus *s) {
-    return s->target_supported == 1u && s->hook_owned == 1u && s->hook_fail == 0u &&
-           s->pending_plane_mask == 0u && s->reapply_mode == VBE_MATRIX_REAPPLY_TAIHEN_CHAIN_REENTRY &&
-           s->transaction_fault_flags == 0u && s->authority_degraded_masks == 0u &&
-           s->planes[0].valid == 1u && s->planes[1].valid == 1u &&
-           s->planes[0].baseline_class == VBE_B_BASELINE_CANONICAL_IDENTITY &&
-           s->planes[1].baseline_class == VBE_B_BASELINE_CANONICAL_IDENTITY &&
-           s->planes[0].last_sony_return == 0 && s->planes[1].last_sony_return == 0 &&
-           words_equal(s->planes[0].source_words,k_canonical) &&
-           words_equal(s->planes[1].source_words,k_canonical);
+    return status_common_fail_mask(s) == 0u;
+}
+
+static uint32_t neutral_preflight_fail_mask(const VbeMatrixBackendStatus *s) {
+    uint32_t m=status_common_fail_mask(s);
+    if(s->policy_enabled != 0u) m |= STFAIL_POLICY_ENABLED;
+    if(!words_equal(s->planes[0].forward_words,k_canonical)) m |= STFAIL_P0_FORWARD;
+    if(!words_equal(s->planes[1].forward_words,k_canonical)) m |= STFAIL_P1_FORWARD;
+    return m;
 }
 
 static int natural_unchanged(const VbeMatrixBackendStatus *s) {
@@ -349,7 +393,7 @@ static int collect_signed_observation(const Probe *p, Observation *o) {
 static int run_probe(const Probe *p, Observation *o, int signed_probe) {
     VbeMatrixRequestV1 req;
     VbeMatrixBackendStatus s;
-    int ret;
+    int ret, status_ret;
     unsigned i;
     memset(&req,0,sizeof(req));
     req.size=sizeof(req); req.version=VBE_MATRIX_REQUEST_VERSION;
@@ -357,17 +401,20 @@ static int run_probe(const Probe *p, Observation *o, int signed_probe) {
     log_matrix(p);
     ret=vitabrightMatrixSetRequest(&req);
     memset(&s,0,sizeof(s));
-    if(vitabrightMatrixGetStatus(&s)<0 || log_status("APPLY",p->id,ret,&s)<0 || ret!=VBE_MATRIX_RESULT_APPLIED || !applied_ok(p,&s))
+    status_ret=vitabrightMatrixGetStatus(&s);
+    if(log_status("APPLY",p->id,ret,&s)<0 || status_ret<0 || ret!=VBE_MATRIX_RESULT_APPLIED || !applied_ok(p,&s))
         return -2;
     if((signed_probe ? collect_signed_observation(p,o) : collect_observation(p,o))<0) return -3;
     append_log("OBS|id=%s|patch=%s|component=%s|direction=%s|isolated=%s\n",
                p->id,obs_name(o->patch),obs_name(o->component),dir_name(o->direction),iso_name(o->isolated));
     memset(&s,0,sizeof(s));
-    if(vitabrightMatrixGetStatus(&s)<0 || log_status("POSTOBS",p->id,0,&s)<0 || !applied_ok(p,&s))
+    status_ret=vitabrightMatrixGetStatus(&s);
+    if(log_status("POSTOBS",p->id,status_ret,&s)<0 || status_ret<0 || !applied_ok(p,&s))
         return -4;
     ret=vitabrightMatrixReset();
     memset(&s,0,sizeof(s));
-    if(vitabrightMatrixGetStatus(&s)<0 || log_status("RESET",p->id,ret,&s)<0 || ret!=VBE_MATRIX_RESULT_APPLIED || !reset_ok(&s))
+    status_ret=vitabrightMatrixGetStatus(&s);
+    if(log_status("RESET",p->id,ret,&s)<0 || status_ret<0 || ret!=VBE_MATRIX_RESULT_APPLIED || !reset_ok(&s))
         return -5;
     return 0;
 }
@@ -425,12 +472,12 @@ int main(void) {
     char build[VBE_BUILD_ID_SIZE]={0};
     VbeMatrixCapabilities caps;
     VbeMatrixBackendStatus pre;
-    uint32_t b;
-    int i,ret,negative_index=-1;
+    uint32_t b, preflight_fail;
+    int i,ret,negative_index=-1,status_ret;
     Probe neg;
 
     sceIoRemove(LOG_PATH);
-    append_log("GATE1F|format=1|base_commit=a637f54fec4e66a665874944fbea8af016d55f32|expected_runtime=%s\n",G1F_BUILD_ID);
+    append_log("GATE1F|format=2|base_commit=a637f54fec4e66a665874944fbea8af016d55f32|expected_runtime=%s\n",G1F_BUILD_ID);
     if(vitabrightGetBuildId(build)<0 || memcmp(build,G1F_BUILD_ID,8)!=0) {
         append_log("STOP|reason=BUILD_ID|actual=%s\n",build); return 1;
     }
@@ -456,12 +503,16 @@ int main(void) {
     append_log("SOURCE_CONFIRM|mask=7\n");
 
     memset(&pre,0,sizeof(pre));
-    if(vitabrightMatrixGetStatus(&pre)<0 || !status_common_ok(&pre) || pre.policy_enabled!=0u ||
-       !words_equal(pre.planes[0].forward_words,k_canonical) || !words_equal(pre.planes[1].forward_words,k_canonical)) {
-        log_status("PREFLIGHT","-",0,&pre); stop_and_cleanup("PREFLIGHT_STATUS","-"); return 5;
-    }
+    status_ret=vitabrightMatrixGetStatus(&pre);
+    preflight_fail=neutral_preflight_fail_mask(&pre);
+    if(status_ret<0) preflight_fail |= STFAIL_GET_STATUS;
+    log_status("PREFLIGHT","-",status_ret,&pre);
+    append_log("PREFLIGHT_DIAG|status_ret=%d|failmask=0x%08X|target=%u|hook_owned=%u|hook_fail=%u|p0_valid=%u|p1_valid=%u|p0_class=%u|p1_class=%u|p0_raw=%d|p1_raw=%d\n",
+        status_ret,preflight_fail,pre.target_supported,pre.hook_owned,pre.hook_fail,
+        pre.planes[0].valid,pre.planes[1].valid,pre.planes[0].baseline_class,pre.planes[1].baseline_class,
+        pre.planes[0].last_sony_return,pre.planes[1].last_sony_return);
+    if(preflight_fail!=0u) { stop_and_cleanup("PREFLIGHT_STATUS","-"); return 5; }
     g_nat0=pre.planes[0].pristine_generation; g_nat1=pre.planes[1].pristine_generation;
-    log_status("PREFLIGHT","-",0,&pre);
     append_log("NATURAL_BASELINE|p0=%u|p1=%u\n",g_nat0,g_nat1);
     g_campaign_started=1;
 
