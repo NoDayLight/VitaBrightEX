@@ -10,6 +10,10 @@ int main(int argc, char **argv) {
     r.hardware_component_s3_9[0] = 461;
     r.hardware_component_s3_9[4] = 512;
     r.hardware_component_s3_9[8] = 512;
+
+    /* Ensure the transaction under test has a visibly distinct old policy. */
+    b.prepare_reset_result = vitabrightMatrixReset();
+    if (b.prepare_reset_result != VBE_MATRIX_RESULT_APPLIED) return 8;
     b.injection_result = vitabrightMatrixTestInjectP1AbortOnce();
     if (b.injection_result != VBE_MATRIX_RESULT_APPLIED) return 9;
     b.action_result = vitabrightMatrixSetRequest(&r);
