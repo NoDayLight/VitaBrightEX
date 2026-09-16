@@ -28,16 +28,42 @@ static const uint32_t canonical[15] = {
     0,0,0x3FF,0,0x3FF,0,0x200,0,0,0,0x200,0,0,0,0x200
 };
 static uint32_t natural0, natural1;
+static int log_fault;
+
+int c2_log_begin(void) {
+    int fd;
+    log_fault = 0;
+    fd=sceIoOpen(C2_LOG_PATH,SCE_O_WRONLY|SCE_O_CREAT|SCE_O_TRUNC,0666);
+    if (fd<0) {
+        log_fault=1;
+        return fd;
+    }
+    sceIoClose(fd);
+    return 0;
+}
 
 int c2_log(const char *fmt,...) {
     char buf[4096]; va_list ap; int n,fd,wr;
+    if (log_fault) return -1;
     va_start(ap,fmt); n=vsnprintf(buf,sizeof(buf),fmt,ap); va_end(ap);
-    if (n<0 || n>=(int)sizeof(buf)) return -1;
+    if (n<0 || n>=(int)sizeof(buf)) {
+        log_fault=1;
+        return -1;
+    }
     fd=sceIoOpen(C2_LOG_PATH,SCE_O_WRONLY|SCE_O_CREAT|SCE_O_APPEND,0666);
-    if (fd<0) return fd;
+    if (fd<0) {
+        log_fault=1;
+        return fd;
+    }
     wr=sceIoWrite(fd,buf,(SceSize)n); sceIoClose(fd);
-    return wr==n ? 0 : -1;
+    if (wr!=n) {
+        log_fault=1;
+        return -1;
+    }
+    return 0;
 }
+
+int c2_log_failed(void) { return log_fault; }
 
 static int words_equal(const uint32_t *a,const uint32_t *b) {
     unsigned i; uint32_t d=0;
@@ -123,8 +149,14 @@ int c2_preflight_ok(const VbeMatrixBackendStatus *s) {
         words_equal(s->planes[0].forward_words,canonical) &&
         words_equal(s->planes[1].forward_words,canonical);
 }
-int c2_preflight_recoverable_active(const VbeMatrixBackendStatus *s) {
+int c2_active_policy_base_ok(const VbeMatrixBackendStatus *s) {
     return common_fail(s)==0u && s->policy_enabled==1u;
+}
+int c2_status_matches_probe(const VbeMatrixBackendStatus *s,const C2Probe *p) {
+    uint32_t exp[15];
+    if (!s || !p || !c2_active_policy_base_ok(s)) return 0;
+    expected_forward(p,exp);
+    return words_equal(s->planes[0].forward_words,exp) && words_equal(s->planes[1].forward_words,exp);
 }
 static int probe_ok(const C2Probe *p,const VbeMatrixBackendStatus *s) {
     uint32_t exp[15]; expected_forward(p,exp);
@@ -147,7 +179,7 @@ int c2_transition_probe(const C2Probe *p,const char *tag) {
     memset(&req,0,sizeof(req)); req.size=sizeof(req); req.version=VBE_MATRIX_REQUEST_VERSION;
     for (i=0;i<9;++i) req.hardware_component_s3_9[i]=p->matrix[i];
     ret=vitabrightMatrixSetRequest(&req); memset(&s,0,sizeof(s)); sr=vitabrightMatrixGetStatus(&s);
-    c2_log_status(tag,p->id,ret,&s);
+    if (c2_log_status(tag,p->id,ret,&s)<0) return -5;
     if (sr<0) return -1;
     if (!natural_unchanged(&s)) return -100;
     if (ret!=VBE_MATRIX_RESULT_APPLIED || !probe_ok(p,&s)) return -2;
@@ -156,7 +188,7 @@ int c2_transition_probe(const C2Probe *p,const char *tag) {
 int c2_transition_neutral(const C2Probe *p,const char *tag) {
     VbeMatrixBackendStatus s; int ret,sr;
     ret=vitabrightMatrixReset(); memset(&s,0,sizeof(s)); sr=vitabrightMatrixGetStatus(&s);
-    c2_log_status(tag,p->id,ret,&s);
+    if (c2_log_status(tag,p ? p->id : "-",ret,&s)<0) return -5;
     if (sr<0) return -1;
     if (!natural_unchanged(&s)) return -100;
     if (ret!=VBE_MATRIX_RESULT_APPLIED || !neutral_ok(&s)) return -2;
@@ -164,7 +196,8 @@ int c2_transition_neutral(const C2Probe *p,const char *tag) {
 }
 int c2_verify_probe(const C2Probe *p,const char *tag) {
     VbeMatrixBackendStatus s; int sr;
-    memset(&s,0,sizeof(s)); sr=vitabrightMatrixGetStatus(&s); c2_log_status(tag,p->id,sr,&s);
+    memset(&s,0,sizeof(s)); sr=vitabrightMatrixGetStatus(&s);
+    if (c2_log_status(tag,p->id,sr,&s)<0) return -5;
     if (sr<0) return -1;
     if (!natural_unchanged(&s)) return -100;
     return probe_ok(p,&s) ? 0 : -2;
