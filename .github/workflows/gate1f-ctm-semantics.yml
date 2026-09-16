@@ -1,0 +1,189 @@
+name: Gate-1F CTM semantic discriminator
+
+on:
+  push:
+    branches: [research-gate1f-ctm-semantics]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+  VDPM_SHA: c83b88a54ec13372515eeb8b3bdca4b10c36d721
+  GATE1F_BASE: a637f54fec4e66a665874944fbea8af016d55f32
+  GATE1F_RUNTIME_ID: a637f54f
+  GATE1F_BASE_SKPRX_SHA: bed676c98f127dd595d427f48fbb08090940c7b61fb378b745030c91862e643b
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    outputs:
+      vpk_sha: ${{ steps.hashes.outputs.vpk_sha }}
+      decoder_sha: ${{ steps.hashes.outputs.decoder_sha }}
+      expected_sha: ${{ steps.hashes.outputs.expected_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Exact research boundary and no kernel delta
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GATE1F_BASE" "$GITHUB_SHA"
+          bad="$(git diff --name-only "$GATE1F_BASE..$GITHUB_SHA" | grep -Ev '^(tools/gate1f_ctm_semantics/|research/GATE1F-|\.github/workflows/gate1f-ctm-semantics\.yml$)' || true)"
+          test -z "$bad" || { echo "$bad"; exit 1; }
+          test "$(git rev-parse "$GATE1F_BASE:matrix_backend.c")" = "$(git rev-parse HEAD:matrix_backend.c)"
+          test "$(git rev-parse "$GATE1F_BASE:matrix_backend_core.c")" = "$(git rev-parse HEAD:matrix_backend_core.c)"
+          test "$(git rev-parse "$GATE1F_BASE:matrix_policy_core.c")" = "$(git rev-parse HEAD:matrix_policy_core.c)"
+          test "$(git rev-parse "$GATE1F_BASE:matrix_authority_core.c")" = "$(git rev-parse HEAD:matrix_authority_core.c)"
+          test "$(git rev-parse "$GATE1F_BASE:matrix_apply_txn_core.c")" = "$(git rev-parse HEAD:matrix_apply_txn_core.c)"
+          test "$(git rev-parse "$GATE1F_BASE:module.yml")" = "$(git rev-parse HEAD:module.yml)"
+          echo GATE1F_NO_KERNEL_DELTA=PASS
+
+      - name: Fetch pinned VitaSDK bootstrap
+        run: |
+          set -euxo pipefail
+          git init -q vdpm
+          git -C vdpm remote add origin https://github.com/vitasdk/vdpm.git
+          git -C vdpm fetch -q --depth 1 origin "$VDPM_SHA"
+          git -C vdpm checkout -q --detach FETCH_HEAD
+          test "$(git -C vdpm rev-parse HEAD)" = "$VDPM_SHA"
+          bash vdpm/bootstrap-vitasdk.sh
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+          "$VITASDK/bin/vdpm" install taihen
+
+      - name: Pin exact display-header evidence
+        run: |
+          set -euxo pipefail
+          display="$(find "$VITASDK" -type f -path '*/include/psp2/display.h' -print -quit)"
+          common="$(find "$VITASDK" -type f -path '*/include/psp2common/display.h' -print -quit)"
+          test -n "$display" -a -n "$common"
+          {
+            echo "vdpm_bootstrap=$VDPM_SHA"
+            echo "display_header=$display"
+            echo "display_header_sha256=$(sha256sum "$display" | awk '{print $1}')"
+            echo "display_common_header=$common"
+            echo "display_common_header_sha256=$(sha256sum "$common" | awk '{print $1}')"
+            grep -F 'SCE_DISPLAY_PIXELFORMAT_A8B8G8R8' "$common"
+            grep -F 'typedef struct SceDisplayFrameBuf' "$common"
+          } | tee gate1f-vitasdk-headers.txt
+
+      - name: Build exact Gate-1E base only for ABI stub provenance
+        run: |
+          set -euxo pipefail
+          git worktree add --detach /tmp/gate1f-base "$GATE1F_BASE"
+          cmake -S /tmp/gate1f-base -B /tmp/gate1f-base-build \
+            -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+            -DVBE_ENABLE_RESEARCH_FAULT_INJECTION=OFF
+          cmake --build /tmp/gate1f-base-build --parallel
+          test "$(sha256sum /tmp/gate1f-base-build/vitabright.skprx | awk '{print $1}')" = "$GATE1F_BASE_SKPRX_SHA"
+          strings /tmp/gate1f-base-build/vitabright.velf | grep -Fx "$GATE1F_RUNTIME_ID"
+          test -s /tmp/gate1f-base-build/libvitabright_stub.a
+          echo GATE1F_EXACT_BASE_STUB=PASS
+
+      - name: Exact probe-object manifest
+        run: |
+          set -euxo pipefail
+          python3 tools/gate1f_ctm_semantics/generate_expected.py > gate1f_expected.json
+          python3 -m json.tool gate1f_expected.json >/dev/null
+          grep -F '61f4aae357db9e2a513942f1f58a0de03cc490621e6ca9c557baea70c0bc6c17' gate1f_expected.json
+          grep -F '73f9eb1f82c1a82534a9a07d5f83680ea8a8fd490807f1d4b8549949d5233219' gate1f_expected.json
+          grep -F '181a592466ef1adb17a7a3c530973ee4e475be9765c278218376cbfdf4857848' gate1f_expected.json
+          grep -F '42546ef3006c254739995234f1ff09646a5dac655a08b7e6492824b31e529d2f' gate1f_expected.json
+          python3 -m py_compile tools/gate1f_ctm_semantics/generate_expected.py tools/gate1f_ctm_semantics/decode.py
+          echo GATE1F_EXPECTED_OBJECTS=PASS
+
+      - name: Source-path semantic isolation audit
+        run: |
+          set -euxo pipefail
+          src=tools/gate1f_ctm_semantics/gate1f.c
+          grep -F 'SCE_DISPLAY_PIXELFORMAT_A8B8G8R8' "$src"
+          grep -F 'sceDisplaySetFrameBuf' "$src"
+          grep -F 'vitabrightMatrixSetRequest' "$src"
+          grep -F 'vitabrightMatrixReset' "$src"
+          grep -F 'vitabrightMatrixGetStatus' "$src"
+          grep -F 'sceKernelPowerTick' "$src"
+          ! grep -Ei 'vita2d|sceGxm|texture|\.png|screenshot' "$src"
+          ! grep -Ei 'red should|green should|blue should|expected physical' "$src"
+          echo GATE1F_DIRECT_FRAMEBUFFER_SOURCE_CONTRACT=PASS
+
+      - name: Build single user-mode Gate-1F harness
+        run: |
+          set -euxo pipefail
+          cmake -S tools/gate1f_ctm_semantics -B gate1f-build \
+            -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+            -DVBE_PRODUCTION_STUB=/tmp/gate1f-base-build/libvitabright_stub.a
+          cmake --build gate1f-build --parallel
+          test -s gate1f-build/vbe_gate1f_ctm_semantics.vpk
+          unzip -p gate1f-build/vbe_gate1f_ctm_semantics.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1F001
+          nm="$VITASDK/bin/arm-vita-eabi-nm"
+          "$nm" -u gate1f-build/vbe_gate1f_ctm_semantics.velf | tee gate1f-imports.txt
+          grep -F 'vitabrightGetBuildId' gate1f-imports.txt
+          grep -F 'vitabrightMatrixSetRequest' gate1f-imports.txt
+          grep -F 'sceDisplaySetFrameBuf' gate1f-imports.txt
+          ! grep -Ei 'Gxm|vita2d' gate1f-imports.txt
+          echo GATE1F_USERMODE_HARNESS_BUILD=PASS
+
+      - name: Package discriminator only
+        id: hashes
+        run: |
+          set -euxo pipefail
+          rm -rf gate1f-package
+          mkdir -p gate1f-package/tools gate1f-package/evidence
+          cp gate1f-build/vbe_gate1f_ctm_semantics.vpk gate1f-package/
+          cp tools/gate1f_ctm_semantics/decode.py tools/gate1f_ctm_semantics/generate_expected.py gate1f-package/tools/
+          cp gate1f_expected.json gate1f-vitasdk-headers.txt gate1f-imports.txt gate1f-package/evidence/
+          printf '%s\n' "$GITHUB_SHA" > gate1f-package/HARNESS_COMMIT.txt
+          printf '%s\n' "$GATE1F_BASE" > gate1f-package/BASE_COMMIT.txt
+          printf '%s\n' "$GATE1F_RUNTIME_ID" > gate1f-package/REQUIRED_RUNTIME_ID.txt
+          printf '%s\n' "$GATE1F_BASE_SKPRX_SHA" > gate1f-package/REQUIRED_SKPRX_SHA256.txt
+          printf '%s\n' \
+            'kernel_delta=NONE' \
+            'physical_campaign=3_DIAGONAL_6_POSITIVE_OFFDIAGONAL_1_OBSERVER_SELECTED_NEGATIVE' \
+            'stage_c_adapter=NOT_IMPLEMENTED_UNTIL_PHYSICAL_FACTORISATION' \
+            'cct_supported=0' \
+            'saturation_supported=0' \
+            'ctm_transfer_domain=UNKNOWN' > gate1f-package/BOUNDARY.txt
+          test -z "$(find gate1f-package -type f -name '*.skprx' -print -quit)"
+          (cd gate1f-package && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          echo "vpk_sha=$(sha256sum gate1f-package/vbe_gate1f_ctm_semantics.vpk | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "decoder_sha=$(sha256sum gate1f-package/tools/decode.py | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "expected_sha=$(sha256sum gate1f-package/evidence/gate1f_expected.json | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Gate-1F discriminator
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: vbe-gate1f-ctm-semantics-${{ github.sha }}
+          path: gate1f-package/
+          if-no-files-found: error
+          retention-days: 30
+
+  independent-verify:
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: vbe-gate1f-ctm-semantics-${{ github.sha }}
+          path: verified
+      - name: Verify exact discriminator artifact
+        run: |
+          set -euxo pipefail
+          cd verified
+          sha256sum -c SHA256SUMS
+          test "$(cat BASE_COMMIT.txt)" = "a637f54fec4e66a665874944fbea8af016d55f32"
+          test "$(cat REQUIRED_RUNTIME_ID.txt)" = "a637f54f"
+          test "$(cat REQUIRED_SKPRX_SHA256.txt)" = "bed676c98f127dd595d427f48fbb08090940c7b61fb378b745030c91862e643b"
+          test "$(sha256sum vbe_gate1f_ctm_semantics.vpk | awk '{print $1}')" = "${{ needs.candidate.outputs.vpk_sha }}"
+          test "$(sha256sum tools/decode.py | awk '{print $1}')" = "${{ needs.candidate.outputs.decoder_sha }}"
+          test "$(sha256sum evidence/gate1f_expected.json | awk '{print $1}')" = "${{ needs.candidate.outputs.expected_sha }}"
+          test -z "$(find . -type f -name '*.skprx' -print -quit)"
+          grep -Fx 'kernel_delta=NONE' BOUNDARY.txt
+          grep -Fx 'stage_c_adapter=NOT_IMPLEMENTED_UNTIL_PHYSICAL_FACTORISATION' BOUNDARY.txt
+          echo GATE1F_DISCRIMINATOR_INDEPENDENT_VERIFY=PASS
