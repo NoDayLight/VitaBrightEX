@@ -13,6 +13,8 @@ C1_SHA = '740c6f7a345a9544dc0b9c79b38040baa663e6f8a8dbb27483d304b9901278bd'
 CANON_SHA = '5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5'
 RGB = {'R','G','B'}
 C2_IDS = ['D0-C2','B02-C2','D2-C2','B01-C2','B20-C2','B21-C2','N02-C2']
+C2_MIN_TOGGLES = 3
+C2_MAX_TOGGLES = 255
 C1_FROZEN = {
     'E00': {'output':'R','input':'R','direction':'DECREASE','isolated':'YES'},
     'E01': {'output':'G','input':'NONE','direction':'DECREASE','isolated':'AMBIG'},
@@ -154,6 +156,7 @@ def self_test():
         for c,i in enumerate('RGB'): table[r][c]={'output':o,'input':i,'direction':'INCREASE','isolated':'YES'}
     row,col,sep,shared=factorize(table)
     assert row==['R','G','B'] and col==['R','G','B'] and sep and shared
+    assert C2_MIN_TOGGLES == 3 and C2_MAX_TOGGLES == 255
     print('GATE1F_CAMPAIGN2_DECODER_SELFTEST=PASS')
 
 def main():
@@ -171,11 +174,13 @@ def main():
     rows=parse_lines(a.campaign2)
     exp=build_expected(); byid={p['id']:p for p in exp['probes']}
     failures=[]
-    meta=one(rows,'GATE1F_C2'); caps=one(rows,'CAPS2'); src=one(rows,'SOURCE_CONFIRM2')
+    meta=one(rows,'GATE1F_C2'); stimulus=one(rows,'STIMULUS2'); caps=one(rows,'CAPS2'); src=one(rows,'SOURCE_CONFIRM2')
     pre=one(rows,'PREFLIGHT2','-'); nb=one(rows,'NATURAL_BASELINE2'); complete=one(rows,'COMPLETE2')
     if meta.get('expected_runtime')!='a637f54f': failures.append('runtime contract is not a637f54f')
     if meta.get('campaign1_sha')!=C1_SHA: failures.append('Campaign-1 prerequisite SHA mismatch in C2 log')
     if meta.get('observer')!='TEMPORAL_AB': failures.append('observer method is not TEMPORAL_AB')
+    if int(stimulus.get('min_toggles','-1'))!=C2_MIN_TOGGLES or int(stimulus.get('max_toggles','-1'))!=C2_MAX_TOGGLES:
+        failures.append('Campaign-2 toggle-budget contract mismatch')
     for k,want in [('matrix','1'),('immediate','1'),('reapply','3'),('channel_order','0'),('cct','0'),('saturation','0')]:
         if caps.get(k)!=want: failures.append(f'capability {k}={caps.get(k)} expected {want}')
     if src.get('mask')!='7': failures.append('Campaign-2 source confirmation missing')
@@ -194,7 +199,7 @@ def main():
         toggles=[r for r in rows if r.get('id')==pid and r['_tag'] in ('TOGGLE_PROBE','TOGGLE_NEUTRAL')]
         obs=one(rows,'SIGNED_OBS2' if pid=='N02-C2' else 'OBS2',pid)
         count=int(obs['toggle_count'])
-        if count < 3 or count > 25 or count != len(toggles): failures.append(f'{pid}: invalid toggle count {count}/{len(toggles)}')
+        if count < C2_MIN_TOGGLES or count > C2_MAX_TOGGLES or count != len(toggles): failures.append(f'{pid}: invalid toggle count {count}/{len(toggles)}')
         for i,t in enumerate(toggles):
             want_tag='TOGGLE_PROBE' if i%2==0 else 'TOGGLE_NEUTRAL'
             if t['_tag']!=want_tag: failures.append(f'{pid}: toggle sequence broke at {i}')
