@@ -197,6 +197,38 @@ static int fail_probe(int r,const char *id) {
     stop_and_cleanup("CAMPAIGN2_INVARIANT",id); return 42;
 }
 
+static int recover_startup_policy(void) {
+    VbeMatrixBackendStatus s;
+    uint32_t b;
+    int sr,rr;
+    memset(&s,0,sizeof(s));
+    sr=vitabrightMatrixGetStatus(&s);
+    c2_log_status("STARTUP2","-",sr,&s);
+    if (sr<0) return -1;
+    if (c2_preflight_ok(&s)) return 0;
+    if (!c2_preflight_recoverable_active(&s)) return -2;
+
+    c2_ui_set_title("RECOVERY");
+    c2_ui_set_state("STATE ACTIVE MATRIX");
+    c2_ui_draw("ACTIVE MATRIX DETECTED","X RESET TO NEUTRAL","TRI ABORT");
+    b=c2_wait_button(SCE_CTRL_CROSS|SCE_CTRL_TRIANGLE);
+    if (b&SCE_CTRL_TRIANGLE) {
+        c2_log("RECOVERY2|result=ABORT\n");
+        return -3;
+    }
+
+    rr=vitabrightMatrixReset();
+    memset(&s,0,sizeof(s));
+    sr=vitabrightMatrixGetStatus(&s);
+    c2_log_status("RECOVERY_RESET2","-",rr,&s);
+    if (sr<0 || rr!=VBE_MATRIX_RESULT_APPLIED || !c2_preflight_ok(&s)) {
+        c2_log("RECOVERY2|result=FAIL\n");
+        return -4;
+    }
+    c2_log("RECOVERY2|result=PASS\n");
+    return 1;
+}
+
 int main(void) {
     char build[VBE_BUILD_ID_SIZE]={0};
     VbeMatrixCapabilities caps;
@@ -228,6 +260,14 @@ int main(void) {
     }
     c2_log("FRAMEBUFFER2|format=SCE_DISPLAY_PIXELFORMAT_A8B8G8R8|format_value=%u|width=960|height=544|pitch=1024|BLACK=%08X|GRAY50=%08X|R50=%08X|G50=%08X|B50=%08X|YELLOW50=%08X|MAGENTA50=%08X|CYAN50=%08X\n",
         SCE_DISPLAY_PIXELFORMAT_A8B8G8R8,c2_pack_rgb(0,0,0),c2_pack_rgb(128,128,128),c2_pack_rgb(128,0,0),c2_pack_rgb(0,128,0),c2_pack_rgb(0,0,128),c2_pack_rgb(128,128,0),c2_pack_rgb(128,0,128),c2_pack_rgb(0,128,128));
+
+    r=recover_startup_policy();
+    if (r<0) {
+        c2_log("STOP2|reason=STARTUP_RECOVERY|code=%d\n",r);
+        c2_ui_restore();
+        return 4;
+    }
+
     c2_ui_set_title("SOURCE CHECK");
     c2_ui_set_state("STATE NEUTRAL");
     c2_ui_draw("CONFIRM R50 G50 B50 LABELS","X YES  TRI ABORT",NULL);
@@ -235,15 +275,16 @@ int main(void) {
     if (b&SCE_CTRL_TRIANGLE) {
         c2_log("SOURCE_CONFIRM2|mask=0\n");
         c2_ui_restore();
-        return 4;
+        return 5;
     }
     c2_log("SOURCE_CONFIRM2|mask=7\n");
     memset(&pre,0,sizeof(pre));
     sr=vitabrightMatrixGetStatus(&pre);
     c2_log_status("PREFLIGHT2","-",sr,&pre);
     if (sr<0 || !c2_preflight_ok(&pre)) {
-        stop_and_cleanup("PREFLIGHT_STATUS","-");
-        return 5;
+        c2_log("STOP2|reason=PREFLIGHT_STATUS|id=-\n");
+        c2_ui_restore();
+        return 6;
     }
     c2_set_natural(pre.planes[0].pristine_generation,pre.planes[1].pristine_generation);
     campaign_started=1;
@@ -255,7 +296,7 @@ int main(void) {
     c2_log("CONTROL2|id=B02-C2|result=%s\n",b02_control_ok(&b02)?"PASS":"FAIL");
     if (!d0_control_ok(&d0) || !b02_control_ok(&b02)) {
         stop_and_cleanup("CAMPAIGN2_OBSERVER_VALIDATION","-");
-        return 6;
+        return 7;
     }
 
     r=run_probe(&probe_d2,&d2); if (r<0) return fail_probe(r,probe_d2.id);
