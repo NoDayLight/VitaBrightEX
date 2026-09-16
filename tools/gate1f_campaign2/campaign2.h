@@ -5,7 +5,7 @@
 #define C2_BUILD_ID "a637f54f"
 #define C1_RAW_SHA "740c6f7a345a9544dc0b9c79b38040baa663e6f8a8dbb27483d304b9901278bd"
 #define C2_LOG_PATH "ux0:data/vbe_gate1f_campaign2.txt"
-#define C2_MAX_TOGGLES 25u
+#define C2_MAX_TOGGLES 255u
 #define C2_MIN_TOGGLES 3u
 
 #define C2_CH_NO 1u
@@ -66,6 +66,7 @@ int c2_choose(const char *prompt, const char *const *items, int n);
 int c2_log(const char *fmt, ...);
 int c2_log_status(const char *tag, const char *id, int action_result, const VbeMatrixBackendStatus *s);
 int c2_preflight_ok(const VbeMatrixBackendStatus *s);
+int c2_preflight_recoverable_active(const VbeMatrixBackendStatus *s);
 void c2_set_natural(uint32_t p0, uint32_t p1);
 int c2_transition_probe(const C2Probe *p, const char *tag);
 int c2_transition_neutral(const C2Probe *p, const char *tag);
