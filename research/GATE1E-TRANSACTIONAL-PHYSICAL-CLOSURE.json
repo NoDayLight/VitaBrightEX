@@ -1,0 +1,167 @@
+{
+  "schema": 1,
+  "mission": "VitaBrightEX pseudo-v1.4 Gate-1E Transactional Source-Authoritative Immediate Apply Closure",
+  "target": "PCH-2000 / FW 3.65",
+  "selected_replay_transport": "TAIHEN_CHAIN_REENTRY",
+  "gate1d_physical_closure": "1a04bc5bcec964053c437987525126c9d17c5e02",
+  "gate1d_tested_production": "215d92d2b29643f1456592847ae4d13d91dc81a2",
+  "gate1e_happy_path_boundary": "e839f2ee0b70abbe8e00f6e43e1b5c8c4bd7b084",
+  "integrated_tested_candidate": "d2b213427a7d631886815997c81ace2091ae5a49",
+  "integrated_skprx_sha256": "010bafa718e9fc7d0d5be3bd3941f6bc6d0229b280cf7daa57e77ce1797f522d",
+  "ci": {
+    "workflow_run": 35085122105,
+    "artifact_id": 10442315179,
+    "artifact_name": "vbe-gate1e-transaction-d2b213427a7d631886815997c81ace2091ae5a49",
+    "artifact_sha256": "0453afa82f6ee6b6c2f83c57902f54ed01964f5fce7f63e58cd9f768615f58c8",
+    "independent_verify": "PASS",
+    "host_authority": {
+      "internal_100_no_natural_advance": "PASS",
+      "one_natural_call_advances_generation": "PASS",
+      "range_seed_composition": "PASS",
+      "unknown_baseline_not_replayed": "PASS"
+    },
+    "host_transaction": {
+      "happy_path": "PASS",
+      "pending_path": "PASS",
+      "p0_p1_failure_rollback": "PASS",
+      "bounded_rebase": "PASS",
+      "rollback_failure_degraded": "PASS"
+    },
+    "range_baseline": {
+      "source_sha256": "fff18ae2defe21c92e9a4e1e4795c85bfe6ba7f5548a1b90a2e1b46c707ee07e",
+      "mild_forward_sha256": "8abe961127d94bcdd9e259cf65ae95e379ef13e67bc58c3afbeafe6c2e8f3eed",
+      "classification": "HOST_VERIFIED"
+    }
+  },
+  "physical_sequence": {
+    "00_neutral_cold_boot": {
+      "capture_sha256": "addc07de7fe314080e08308fa76f97092fbe507e4bb4ac5fb42ee5b688ae2019",
+      "decoder": "GATE1E_TRANSACTION_NEUTRAL=PASS",
+      "capabilities": {"matrix":1,"immediate_reapply_supported":1,"reapply_mode":3},
+      "policy": {"requested":1,"active":1,"enabled":0,"pending":0,"last_result":0},
+      "transaction": {"state":0,"faults":0,"authority_stale_mask":0,"degraded_plane_mask":0},
+      "plane0": {"natural_generation":1,"baseline_class":1,"applied_generation":1,"sony_return":0},
+      "plane1": {"natural_generation":1,"baseline_class":1,"applied_generation":1,"sony_return":0},
+      "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+      "forward_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5"
+    },
+    "01_immediate_mild": {
+      "capture_sha256": "ee90f0ea88636d325624fb48447c1d355c3893bf96da1dd3468ed2d0d3b44745",
+      "decoder": "GATE1E_TRANSACTION_MILD=PASS",
+      "action_result": 0,
+      "policy": {"requested":2,"active":2,"enabled":1,"pending":0,"last_result":0},
+      "transaction_state": 10,
+      "faults": 0,
+      "plane0": {"natural_generation":1,"applied_generation":2,"sony_return":0},
+      "plane1": {"natural_generation":1,"applied_generation":2,"sony_return":0},
+      "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+      "forward_sha256": "090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50",
+      "internal_replay_advanced_natural_generation": false
+    },
+    "02_immediate_reset": {
+      "capture_sha256": "ef5f4a0a440417725f08ba980fe06332a016871d07d805a14ca451a69dad5584",
+      "decoder": "GATE1E_TRANSACTION_RESET=PASS",
+      "action_result": 0,
+      "policy": {"requested":3,"active":3,"enabled":0,"pending":0,"last_result":0},
+      "transaction_state": 10,
+      "faults": 0,
+      "plane0": {"natural_generation":1,"applied_generation":3,"sony_return":0},
+      "plane1": {"natural_generation":1,"applied_generation":3,"sony_return":0},
+      "forward_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+      "internal_replay_advanced_natural_generation": false
+    },
+    "03_mild_before_natural_replay": {
+      "capture_sha256": "1b10a4d0eca1ca7a7cdbfc9280dea48277ded77f0010f908f82da73b665104ff",
+      "decoder": "GATE1E_TRANSACTION_MILD=PASS",
+      "action_result": 0,
+      "policy": {"requested":4,"active":4,"enabled":1,"pending":0},
+      "plane0": {"natural_generation":1,"applied_generation":4},
+      "plane1": {"natural_generation":1,"applied_generation":4},
+      "forward_sha256": "090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50"
+    },
+    "04_natural_replay_after_immediate": {
+      "capture_sha256": "15bf1ec1cc7d7dd424f69780bc1e1a0f3b76550484b3170cb40e11935bcab60c",
+      "decoder": "GATE1E_TRANSACTION_NATURAL_AFTER_MILD=PASS",
+      "capabilities": {"immediate_reapply_supported":1,"reapply_mode":3},
+      "policy": {"requested":4,"active":4,"enabled":1,"pending":0,"last_result":0},
+      "plane0": {"natural_generation":2,"applied_generation":4,"sony_return":0},
+      "plane1": {"natural_generation":2,"applied_generation":4,"sony_return":0},
+      "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+      "forward_sha256": "090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50",
+      "natural_replay_advanced_authority": true,
+      "non_compounding": true
+    },
+    "05_injected_p0_success_p1_abort_rollback": {
+      "capture_sha256": "75c75b05c55bd27daafabf638b7ed381f521451dc8734eb00cf76836b4b53744",
+      "decoder": "GATE1E_TRANSACTION_ROLLBACK=PASS",
+      "prepare_reset_result": 0,
+      "inject_result": 0,
+      "action_result": 6,
+      "action_classification": "ROLLED_BACK",
+      "policy": {"requested":7,"active":7,"enabled":0,"pending":0,"last_result":6},
+      "transaction": {"state":12,"faults":"0x200","authority_stale_mask":0,"degraded_plane_mask":0},
+      "plane0": {"natural_generation":2,"applied_generation":7,"sony_return":0},
+      "plane1": {"natural_generation":2,"applied_generation":7,"sony_return":0},
+      "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+      "forward_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+      "persistent_partial_apply": false,
+      "rollback_physically_verified": true
+    },
+    "06_post_rollback_mild": {
+      "capture_sha256": "8205518cae8cbb976f7ce3ca40e9cc44766c0401f21c6e650f445124a393a140",
+      "decoder": "GATE1E_TRANSACTION_POST_ROLLBACK_MILD=PASS",
+      "action_result": 0,
+      "policy": {"requested":8,"active":8,"enabled":1,"pending":0,"last_result":0},
+      "transaction_state": 10,
+      "faults": 0,
+      "plane0": {"natural_generation":2,"applied_generation":8,"sony_return":0},
+      "plane1": {"natural_generation":2,"applied_generation":8,"sony_return":0},
+      "forward_sha256": "090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50",
+      "system_operational_after_rollback": true
+    },
+    "07_final_reset": {
+      "capture_sha256": "3616cf157b37663c48ad51eef600bfb8babf5e28ab4b276c8e2a98ea33b7ecd4",
+      "decoder": "GATE1E_TRANSACTION_FINAL_RESET=PASS",
+      "action_result": 0,
+      "policy": {"requested":9,"active":9,"enabled":0,"pending":0,"last_result":0},
+      "transaction_state": 10,
+      "faults": 0,
+      "plane0": {"natural_generation":2,"applied_generation":9,"sony_return":0},
+      "plane1": {"natural_generation":2,"applied_generation":9,"sony_return":0},
+      "source_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5",
+      "forward_sha256": "5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5"
+    }
+  },
+  "discarded_pre_cold_boot_capture": {
+    "capture_sha256": "ac1b0078876e72b72bbc4514e1c197fc5fd06c53aa53bcba588f4e3b71db053d",
+    "classification": "NOT_A_GATE1E_CANDIDATE_RUNTIME_CAPTURE",
+    "reason": "The newly deployed SKPRX was present on disk but the previous reboot-owned Gate-1D module instance remained resident. A true power-off/power-on loaded the integrated candidate and produced the authoritative neutral capture addc07de...2019."
+  },
+  "closure_criteria": {
+    "selected_replay_transport": "TAIHEN_CHAIN_REENTRY",
+    "source_authority_natural_internal_separated": "PHYSICALLY_VERIFIED",
+    "internal_replay_advances_natural_generation": "NO_PHYSICALLY_VERIFIED_AND_HOST_STRESS_VERIFIED",
+    "identity_immediate_apply": "PHYSICALLY_VERIFIED_BY_FROZEN_GATE1E_HAPPY_PATH",
+    "range_immediate_composition": "HOST_VERIFIED",
+    "immediate_mild": "PHYSICALLY_VERIFIED",
+    "immediate_reset": "PHYSICALLY_VERIFIED",
+    "natural_sony_replay_after_immediate": "PHYSICALLY_VERIFIED",
+    "non_compounding": "PHYSICALLY_VERIFIED",
+    "p0_p1_transaction": "PHYSICALLY_VERIFIED",
+    "p0_success_p1_abort_rollback": "PHYSICALLY_VERIFIED",
+    "rollback_failure": "HOST_CLASSIFIED_AS_DEGRADED",
+    "stale_authority": "BOUNDED_SAFE_HOST_VERIFIED",
+    "immediate_reapply_supported": 1,
+    "normal_set_reset_return_applied_on_synchronous_success": "PHYSICALLY_VERIFIED",
+    "sidecar_research_plugin_required": false,
+    "direct_lowio_or_mmio_required": false
+  },
+  "classification": "GATE1E_CLOSED_PCH2000_FW365",
+  "limitations": [
+    "Physical closure is limited to PCH-2000 / FW 3.65.",
+    "The FULL_TO_LIMITED baseline immediate path is host-verified but was not manufactured physically because no natural range baseline was observed during this closure.",
+    "CHANNEL_ORDER remains pending; Gate-1E does not promote CCT or saturation semantics.",
+    "POST_ADD_SIDE / additive affine semantics remain pending.",
+    "Nonlinear gamma/tone/panel work remains a separate research track."
+  ]
+}
