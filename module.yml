@@ -34,3 +34,4 @@ vitabright:
         - vitabrightMatrixSetRequest
         - vitabrightMatrixReset
         - vitabrightMatrixGetStatus
+        - vitabrightMatrixTestInjectP1AbortOnce
