@@ -8,7 +8,10 @@ if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
 endif()
 project(vbe_gate1f_campaign2 C)
 include("${VITASDK}/share/vita.cmake" REQUIRED)
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror -O2 -std=gnu99")
+# The observer harness is user-mode research tooling, not a throughput-sensitive
+# production path.  Prefer size optimization so vita-elf-create has ample room
+# for SCE metadata even as explicit audit/logging checks are added.
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Werror -Os -std=gnu99")
 if(NOT VBE_PRODUCTION_STUB)
   message(FATAL_ERROR "VBE_PRODUCTION_STUB must point to the exact VitaBrightEX production stub library")
 endif()
@@ -27,4 +30,4 @@ set(VITA_ELF_CREATE_FLAGS "")
 set(VITA_MAKE_FSELF_FLAGS "")
 vita_create_self(vbe_gate1f_campaign2.self vbe_gate1f_campaign2 UNSAFE)
 vita_create_vpk(vbe_gate1f_campaign2.vpk VBEG1F002 vbe_gate1f_campaign2.self
-  VERSION 01.01 NAME "VBE Gate-1F Campaign 2 R2")
+  VERSION 01.02 NAME "VBE Gate-1F Campaign 2 R3")
