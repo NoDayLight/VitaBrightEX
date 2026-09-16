@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "canonical_base": "fc8ffbfcfd43a67e17a5c3b67e83a88bfef00b09",
+  "source_candidate": "d2b213427a7d631886815997c81ace2091ae5a49",
+  "selected_transport": "TAIHEN_CHAIN_REENTRY",
+  "transaction_semantics": "UNCHANGED_FROM_D2B213_EXCEPT_RESEARCH_ABORT_COMPILE_GATE",
+  "files": {
+    "main.c": {"classification": "BYTE_EQUIVALENT_TO_D2B213", "sha256": "3e98765954972caecc4851cc93273b001728e2a5398fc479d739d49d0d3d8284"},
+    "matrix_backend_core.c": {"classification": "BYTE_EQUIVALENT_TO_D2B213", "sha256": "41d63b583b5a3f7e42c10513b454bf84e63502286ce705f8049b136e84a908e1"},
+    "matrix_backend_core.h": {"classification": "BYTE_EQUIVALENT_TO_D2B213", "sha256": "25e54e2324ad732f6c180f8387957110d07e4b86ec5dca938e9e90bd0e7291a7"},
+    "matrix_policy_core.c": {"classification": "BYTE_EQUIVALENT_TO_D2B213", "sha256": "bf1c5ac41a8ab705e61cb965f34acef31ef968b7e86caa779ea3e23a1c6ccd35"},
+    "matrix_policy_core.h": {"classification": "BYTE_EQUIVALENT_TO_D2B213", "sha256": "b090d421a4d2e9da4d61d24e0f9483d18ddb4a4c32d670ccc9e4d944dc536040"},
+    "matrix_authority_core.c": {"classification": "BYTE_EQUIVALENT_TO_D2B213", "sha256": "3139ff30a8c3fb4e260339f74525fafa3b03bd0dfd466508e556d207cdbe4346"},
+    "matrix_authority_core.h": {"classification": "BYTE_EQUIVALENT_TO_D2B213", "sha256": "81d870fc5a881448b034d974e3b0194a38ccff8def6e4ee946ee319dce80640d"},
+    "matrix_apply_txn_core.c": {"classification": "BYTE_EQUIVALENT_TO_D2B213", "sha256": "15a4001fe7b52c07321e20b236274b28225de0bb0faf732e2f13f9f485d70cd4"},
+    "matrix_apply_txn_core.h": {"classification": "BYTE_EQUIVALENT_TO_D2B213", "sha256": "12cc6c1adb0ef0476df6bcfc482c6a13a7bc81f9f3ff959833b82e346123e1e5"},
+    "matrix_backend.c": {
+      "classification": "RELEASE_DELTA_ONLY",
+      "diff": "integration/diffs/matrix_backend.c.diff",
+      "reason": "Only the deterministic p1-abort test state, branch, initialization and syscall are enclosed in VBE_ENABLE_RESEARCH_FAULT_INJECTION. Normal transaction/replay/rollback logic is otherwise source-identical to d2b213."
+    },
+    "matrix_backend.h": {
+      "classification": "RELEASE_DELTA_ONLY",
+      "diff": "integration/diffs/matrix_backend.h.diff",
+      "reason": "Only the research fault-injection syscall declaration is compile-time gated."
+    },
+    "module.yml": {
+      "classification": "RELEASE_DELTA_ONLY",
+      "diff": "integration/diffs/module.yml.diff",
+      "reason": "The normal production export table removes vitabrightMatrixTestInjectP1AbortOnce."
+    },
+    "CMakeLists.txt": {
+      "classification": "RELEASE_DELTA_ONLY",
+      "diff": "integration/diffs/CMakeLists.txt.diff",
+      "reason": "Adds an OFF-by-default research fault-injection build option and selects module.research.yml only when explicitly enabled."
+    },
+    "module.research.yml": {
+      "classification": "BYTE_EQUIVALENT_TO_D2B213_MODULE_YML",
+      "sha256": "6c4cc4f7ef307e9b518c4c1c3b7c6964d021b54ff3a6e142c3df0e3474fef6d7"
+    }
+  }
+}

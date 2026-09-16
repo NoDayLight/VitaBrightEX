@@ -1,0 +1,11 @@
+--- /tmp/source-matrix_backend.h	2026-09-16 12:21:23.099801233 +0000
++++ matrix_backend.h	2026-09-16 12:21:23.085947360 +0000
+@@ -133,5 +133,7 @@
+ int vitabrightMatrixReset(void);
+ int vitabrightMatrixGetStatus(VbeMatrixBackendStatus *out);
+ 
+-/* Gate-1E research-only deterministic fault injection; inert unless invoked. */
++#ifdef VBE_ENABLE_RESEARCH_FAULT_INJECTION
++/* Research-build-only deterministic fault injection. */
+ int vitabrightMatrixTestInjectP1AbortOnce(void);
++#endif

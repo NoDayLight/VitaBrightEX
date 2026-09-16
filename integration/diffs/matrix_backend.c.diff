@@ -1,0 +1,60 @@
+--- /tmp/source-matrix_backend.c	2026-09-16 12:21:23.096801256 +0000
++++ matrix_backend.c	2026-09-16 12:21:23.086258939 +0000
+@@ -83,7 +83,9 @@
+ static volatile uint32_t g_transaction_fault_flags;
+ static volatile uint32_t g_transaction_owner;
+ static volatile uint32_t g_replay_epoch;
++#ifdef VBE_ENABLE_RESEARCH_FAULT_INJECTION
+ static volatile uint32_t g_test_abort_before_p1_once;
++#endif
+ static uintptr_t g_replay_entry;
+ static tai_hook_ref_t g_b_ref;
+ 
+@@ -564,6 +566,9 @@
+     VbeNaturalBSource seed_auth[2], now[2];
+     uint32_t plane;
+     int rr, check;
++#ifndef VBE_ENABLE_RESEARCH_FAULT_INJECTION
++    (void)allow_test_abort;
++#endif
+ 
+     for (plane = 0u; plane < 2u; ++plane)
+         copy_authority(&seed_auth[plane], &initial_auth[plane]);
+@@ -616,6 +621,7 @@
+         }
+         (void)tx_step(txn, VBE_MATRIX_TXN_EVENT_REPLAY_OK);
+ 
++#ifdef VBE_ENABLE_RESEARCH_FAULT_INJECTION
+         if (allow_test_abort &&
+             __atomic_exchange_n(&g_test_abort_before_p1_once, 0u, __ATOMIC_ACQ_REL)) {
+             __atomic_or_fetch(&g_transaction_fault_flags,
+@@ -624,6 +630,7 @@
+             (void)tx_step(txn, VBE_MATRIX_TXN_EVENT_REPLAY_FAIL);
+             return VBE_MATRIX_RESULT_REPLAY_FAILED;
+         }
++#endif
+ 
+         if (authority_preflight(now) != VBE_MATRIX_RESULT_APPLIED ||
+             authority_pair_changed(seed_auth, now)) {
+@@ -892,7 +899,9 @@
+     g_transaction_fault_flags = 0u;
+     g_transaction_owner = 0u;
+     g_replay_epoch = 0u;
++#ifdef VBE_ENABLE_RESEARCH_FAULT_INJECTION
+     g_test_abort_before_p1_once = 0u;
++#endif
+     g_replay_entry = 0u;
+     g_b_ref = 0;
+ 
+@@ -1023,9 +1032,11 @@
+     return ret;
+ }
+ 
++#ifdef VBE_ENABLE_RESEARCH_FAULT_INJECTION
+ int vitabrightMatrixTestInjectP1AbortOnce(void) {
+     if (__atomic_load_n(&g_transaction_owner, __ATOMIC_ACQUIRE))
+         return VBE_MATRIX_RESULT_BUSY;
+     __atomic_store_n(&g_test_abort_before_p1_once, 1u, __ATOMIC_RELEASE);
+     return VBE_MATRIX_RESULT_APPLIED;
+ }
++#endif

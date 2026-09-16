@@ -1,0 +1,7 @@
+--- /tmp/source-module.yml	2026-09-16 12:21:23.102801210 +0000
++++ module.yml	2026-09-16 12:21:23.085795358 +0000
+@@ -34,4 +34,3 @@
+         - vitabrightMatrixSetRequest
+         - vitabrightMatrixReset
+         - vitabrightMatrixGetStatus
+-        - vitabrightMatrixTestInjectP1AbortOnce

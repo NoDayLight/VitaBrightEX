@@ -1,0 +1,40 @@
+--- /tmp/source-CMakeLists.txt	2026-09-16 12:21:23.092801286 +0000
++++ CMakeLists.txt	2026-09-16 12:21:23.086423174 +0000
+@@ -20,6 +20,13 @@
+     add_definitions(-DENABLE_LOGGING=1)
+ endif()
+ 
++option(VBE_ENABLE_RESEARCH_FAULT_INJECTION "Build the research-only Gate-1E p1-abort trigger" OFF)
++if(VBE_ENABLE_RESEARCH_FAULT_INJECTION)
++    set(VBE_MODULE_CONFIG module.research.yml)
++else()
++    set(VBE_MODULE_CONFIG module.yml)
++endif()
++
+ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -Wall -Wextra -Werror -O3 -fno-pic -fno-PIC -std=gnu99")
+ 
+ add_executable(vitabright
+@@ -83,6 +90,9 @@
+ )
+ 
+ target_compile_definitions(vitabright PRIVATE VBE_BUILD_ID="${VBE_BUILD_ID}")
++if(VBE_ENABLE_RESEARCH_FAULT_INJECTION)
++    target_compile_definitions(vitabright PRIVATE VBE_ENABLE_RESEARCH_FAULT_INJECTION=1)
++endif()
+ 
+ target_link_libraries(vitabright
+     SceDisplayForDriver_stub
+@@ -103,11 +113,11 @@
+ )
+ 
+ vita_create_self(vitabright.skprx vitabright
+-    CONFIG ${CMAKE_SOURCE_DIR}/module.yml
++    CONFIG ${CMAKE_SOURCE_DIR}/${VBE_MODULE_CONFIG}
+     UNSAFE
+ )
+ 
+-vita_create_stubs(vitabright-stubs vitabright module.yml KERNEL)
++vita_create_stubs(vitabright-stubs vitabright ${VBE_MODULE_CONFIG} KERNEL)
+ 
+ install(DIRECTORY ${CMAKE_BINARY_DIR}/vitabright-stubs/
+     DESTINATION lib

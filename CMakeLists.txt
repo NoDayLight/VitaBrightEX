@@ -20,6 +20,13 @@ if(ENABLE_LOGGING)
     add_definitions(-DENABLE_LOGGING=1)
 endif()
 
+option(VBE_ENABLE_RESEARCH_FAULT_INJECTION "Build the research-only Gate-1E p1-abort trigger" OFF)
+if(VBE_ENABLE_RESEARCH_FAULT_INJECTION)
+    set(VBE_MODULE_CONFIG module.research.yml)
+else()
+    set(VBE_MODULE_CONFIG module.yml)
+endif()
+
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-q -Wall -Wextra -Werror -O3 -fno-pic -fno-PIC -std=gnu99")
 
 add_executable(vitabright
@@ -58,6 +65,16 @@ add_executable(vitabright
     filter_policy.h
     screen_filter.c
     screen_filter.h
+    matrix_backend_core.c
+    matrix_backend_core.h
+    matrix_policy_core.c
+    matrix_policy_core.h
+    matrix_authority_core.c
+    matrix_authority_core.h
+    matrix_apply_txn_core.c
+    matrix_apply_txn_core.h
+    matrix_backend.c
+    matrix_backend.h
     taihen_extra.h
     lut_parser_core.h
     oled/lut_parser.c
@@ -73,6 +90,9 @@ add_executable(vitabright
 )
 
 target_compile_definitions(vitabright PRIVATE VBE_BUILD_ID="${VBE_BUILD_ID}")
+if(VBE_ENABLE_RESEARCH_FAULT_INJECTION)
+    target_compile_definitions(vitabright PRIVATE VBE_ENABLE_RESEARCH_FAULT_INJECTION=1)
+endif()
 
 target_link_libraries(vitabright
     SceDisplayForDriver_stub
@@ -93,11 +113,11 @@ set_target_properties(vitabright PROPERTIES
 )
 
 vita_create_self(vitabright.skprx vitabright
-    CONFIG ${CMAKE_SOURCE_DIR}/module.yml
+    CONFIG ${CMAKE_SOURCE_DIR}/${VBE_MODULE_CONFIG}
     UNSAFE
 )
 
-vita_create_stubs(vitabright-stubs vitabright module.yml KERNEL)
+vita_create_stubs(vitabright-stubs vitabright ${VBE_MODULE_CONFIG} KERNEL)
 
 install(DIRECTORY ${CMAKE_BINARY_DIR}/vitabright-stubs/
     DESTINATION lib
