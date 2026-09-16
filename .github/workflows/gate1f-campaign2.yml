@@ -126,8 +126,8 @@ jobs:
           grep -F 'TOGGLE_NEUTRAL' "$src"
           grep -F 'C2_MIN_TOGGLES' "$src"
           grep -F 'C2_MAX_TOGGLES' "$src"
-          grep -F 'static const char *const primary[]={"R50","G50","B50"};' "$src"
-          grep -F '"%s CHANGED"' "$src"
+          grep -F 'primary_question[]={"R50 CHANGED","G50 CHANGED","B50 CHANGED"}' "$src"
+          grep -F 'SCE_CTRL_LEFT|SCE_CTRL_RIGHT|SCE_CTRL_CROSS|SCE_CTRL_TRIANGLE|SCE_CTRL_SQUARE' "$src"
           grep -F 'MAGENTA50 CHANGED' "$src"
           grep -F 'vitabrightMatrixSetRequest' tools/gate1f_campaign2/backend.c
           grep -F 'vitabrightMatrixReset' tools/gate1f_campaign2/backend.c
