@@ -128,7 +128,7 @@ def main():
         if observations[pid]['direction']!='INCREASE': direction_ok=False
     positive_id='B'+signed_id[1:]
     po=observations[positive_id]; no=observations[signed_id]
-    signed_ok=(po['patch']==no['patch'] and po['component']==no['component'] and
+    signed_ok=(no['patch']=='GRAY50' and po['component']==no['component'] and
                po['isolated']=='YES' and no['isolated']=='YES' and
                po['direction']=='INCREASE' and no['direction']=='DECREASE')
 

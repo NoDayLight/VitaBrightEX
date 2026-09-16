@@ -26,6 +26,7 @@
 #define OBS_B 3u
 #define OBS_MIXED 4u
 #define OBS_NONE 5u
+#define OBS_GRAY50 6u
 #define DIR_INCREASE 1u
 #define DIR_DECREASE 2u
 #define DIR_OTHER 3u
@@ -307,7 +308,7 @@ static void log_matrix(const Probe *p) {
 }
 
 static const char *obs_name(uint32_t v) {
-    static const char *const n[] = {"INVALID","R","G","B","MIXED","NONE"};
+    static const char *const n[] = {"INVALID","R","G","B","MIXED","NONE","GRAY50"};
     return v < ARRAY_COUNT(n) ? n[v] : "INVALID";
 }
 static const char *dir_name(uint32_t v) {
@@ -332,7 +333,20 @@ static int collect_observation(const Probe *p, Observation *o) {
     return 0;
 }
 
-static int run_probe(const Probe *p, Observation *o) {
+static int collect_signed_observation(const Probe *p, Observation *o) {
+    static const char *const rgb[] = {"R","G","B","MIXED","NONE"};
+    static const char *const dir[] = {"INCREASE","DECREASE","OTHER","NONE"};
+    static const char *const iso[] = {"YES","NO","AMBIG"};
+    int v;
+    snprintf(g_probe_title,sizeof(g_probe_title),"SIGNED %s",p->id);
+    o->patch=OBS_GRAY50;
+    v=choose("GRAY50 COMPONENT CHANGED",rgb,5); if(v<0)return -1; o->component=(uint32_t)v+1u;
+    v=choose("DIRECTION OF COMPONENT",dir,4); if(v<0)return -1; o->direction=(uint32_t)v+1u;
+    v=choose("IS RESPONSE ISOLATED",iso,3); if(v<0)return -1; o->isolated=(uint32_t)v+1u;
+    return 0;
+}
+
+static int run_probe(const Probe *p, Observation *o, int signed_probe) {
     VbeMatrixRequestV1 req;
     VbeMatrixBackendStatus s;
     int ret;
@@ -345,7 +359,7 @@ static int run_probe(const Probe *p, Observation *o) {
     memset(&s,0,sizeof(s));
     if(vitabrightMatrixGetStatus(&s)<0 || log_status("APPLY",p->id,ret,&s)<0 || ret!=VBE_MATRIX_RESULT_APPLIED || !applied_ok(p,&s))
         return -2;
-    if(collect_observation(p,o)<0) return -3;
+    if((signed_probe ? collect_signed_observation(p,o) : collect_observation(p,o))<0) return -3;
     append_log("OBS|id=%s|patch=%s|component=%s|direction=%s|isolated=%s\n",
                p->id,obs_name(o->patch),obs_name(o->component),dir_name(o->direction),iso_name(o->isolated));
     memset(&s,0,sizeof(s));
@@ -450,13 +464,13 @@ int main(void) {
     g_campaign_started=1;
 
     for(i=0;i<9;++i){
-        ret=run_probe(&k_basis_probes[i],&g_obs[i]);
+        ret=run_probe(&k_basis_probes[i],&g_obs[i],0);
         if(ret<0){ stop_and_cleanup(ret==-3?"OBSERVER_ABORT":"PROBE_INVARIANT",k_basis_probes[i].id); return 10-i; }
     }
     for(i=3;i<9;++i) if(is_unambiguous_rgb(&g_obs[i])){ negative_index=i; break; }
     if(negative_index<0){ stop_and_cleanup("NO_UNAMBIGUOUS_SIGN_PAIR","-"); return 20; }
     neg=negative_from(&k_basis_probes[negative_index]);
-    ret=run_probe(&neg,&g_obs[9]);
+    ret=run_probe(&neg,&g_obs[9],1);
     if(ret<0){ stop_and_cleanup(ret==-3?"OBSERVER_ABORT":"SIGNED_PROBE_INVARIANT",neg.id); return 21; }
 
     append_log("COMPLETE|basis_probes=9|signed_probe=%s|natural_p0=%u|natural_p1=%u\n",neg.id,g_nat0,g_nat1);
