@@ -799,6 +799,21 @@ static int run_transaction(const VbeMatrixS39 *matrix, uint32_t enabled) {
         goto out;
     }
 
+    /* Every rollback enters the pure state machine explicitly. */
+    if (txn.state == VBE_MATRIX_TXN_VERIFY)
+        (void)tx_step(&txn, VBE_MATRIX_TXN_EVENT_VERIFY_FAIL);
+    else if (txn.state == VBE_MATRIX_TXN_REPLAY_P0 ||
+             txn.state == VBE_MATRIX_TXN_REPLAY_P1)
+        (void)tx_step(&txn, VBE_MATRIX_TXN_EVENT_REPLAY_FAIL);
+    if (txn.state != VBE_MATRIX_TXN_ROLLBACK_PUBLISH) {
+        __atomic_or_fetch(&g_transaction_fault_flags,
+                          VBE_MATRIX_TXFAULT_ROLLBACK_FAILED,
+                          __ATOMIC_RELAXED);
+        __atomic_store_n(&g_degraded_plane_mask, VBE_MATRIX_TARGET_PLANE_MASK,
+                         __ATOMIC_RELEASE);
+        ret = VBE_MATRIX_RESULT_DEGRADED_PARTIAL_APPLY;
+        goto out;
+    }
     ret = rollback_previous(&txn, &pre.old_policy);
 
 out:
