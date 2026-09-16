@@ -1,0 +1,110 @@
+name: Gate-1E immediate-application static research
+
+on:
+  push:
+    branches: [research-gate1e-immediate-application]
+    paths:
+      - 'research/gate1e_*'
+      - 'research/DISPLAY-FEATURE-SCOPE.json'
+      - '.github/workflows/gate1e-static.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PUP_URL: https://web.archive.org/web/20180630222648id_/http://dus01.psp2.update.playstation.net/update/psp2/image/2017_0317/rel_0a0f2a9ae58968ac5d1d2127049c3cba/PSP2UPDAT.PUP
+  PUP_SHA256: 86859b3071681268b6d0beb5ef691da874b6726e85b6f06a1cdf6a0e183e77c6
+  OS0_SHA256: 35480a01ea783df859326d8698831afd3e850717f5b7785ab9964eab23712856
+  SCEUTILS_SHA: 0466d003246ec986ab6189e6719dcb196a40fb02
+  VITA_HEADERS_SHA: 5e1e7d38d766e4c1634a77f6e5249caab8c8f9cb
+  TAIHEN_SHA: 309b3800bcb8ebbd5e4f5e5e920af3da3590b829
+  PY2_IMAGE: python@sha256:d8fac68ebdc45b8d66d53f1ed6c1532da81109a8f5532a6ca0c951ed31107d70
+  GATE1D_CLOSURE: 1a04bc5bcec964053c437987525126c9d17c5e02
+  GATE1D_CANDIDATE: 215d92d2b29643f1456592847ae4d13d91dc81a2
+
+jobs:
+  static-research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Exact branch/evidence boundary
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GATE1D_CLOSURE" "$GITHUB_SHA"
+          test "$(git show "$GATE1D_CLOSURE:research/GATE1D-PHYSICAL-CLOSURE.json" | sha256sum | awk '{print $1}')" = "$(git show "$GATE1D_CLOSURE:research/GATE1D-PHYSICAL-CLOSURE.json" | sha256sum | awk '{print $1}')"
+          python3 - <<'PY'
+          import json
+          s=json.load(open('research/DISPLAY-FEATURE-SCOPE.json'))
+          assert s['scope_policy']['current_production_checkpoint']['branch']=='v1.4-rearchitecture'
+          assert s['backend_state']['MATRIX_BACKEND']=='PRODUCTION_CANDIDATE_PCH2000_FW365'
+          assert s['backend_state']['CHANNEL_ORDER']=='PENDING'
+          assert s['backend_state']['POST_ADD_SIDE']=='ADDITIVE_SEMANTICS_PENDING'
+          print('GATE1E_LEDGER_BASELINE=PASS')
+          PY
+      - name: Recover exact retail 3.65 Lowio and Display
+        run: |
+          set -euxo pipefail
+          python3 -m pip install --disable-pip-version-check --user capstone==5.0.3
+          sudo apt-get update
+          sudo apt-get install -y mtools
+          curl -fL --retry 5 --retry-delay 2 "$PUP_URL" -o PSP2UPDAT-365.PUP
+          echo "$PUP_SHA256  PSP2UPDAT-365.PUP" | sha256sum -c -
+          git init -q sceutils-audit
+          git -C sceutils-audit remote add origin https://github.com/RealYoti/sceutils.git
+          git -C sceutils-audit fetch -q --depth 1 origin "$SCEUTILS_SHA"
+          git -C sceutils-audit checkout -q --detach FETCH_HEAD
+          cp sceutils-audit/keys_external.py sceutils-audit/keys.py
+          mkdir -p sceutils-audit/unarzl
+          : > sceutils-audit/unarzl/unarzl
+          cat > extract_fw.py <<'PY'
+          import os,sys
+          sys.path.insert(0,'sceutils-audit')
+          import pup_fiction
+          os.makedirs('fw/PUP');os.makedirs('fw/PUP_dec')
+          pup_fiction.pup_extract_files('PSP2UPDAT-365.PUP','fw/PUP')
+          pup_fiction.pup_decrypt_packages('fw/PUP','fw/PUP_dec')
+          PY
+          docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null && python extract_fw.py"
+          sudo chown -R "$(id -u):$(id -g)" fw
+          echo "$OS0_SHA256  fw/PUP_dec/os0.bin" | sha256sum -c -
+          mkdir -p fw/raw fw/elf
+          for module in lowio display; do
+            mcopy -n -i fw/PUP_dec/os0.bin "::/kd/${module}.skprx" "fw/raw/${module}.skprx"
+            docker run --rm -v "$PWD:/work" -w /work "$PY2_IMAGE" bash -lc "pip install --disable-pip-version-check pycryptodome==3.9.9 enum34==1.1.10 >/dev/null; python sceutils-audit/self2elf.py -i fw/raw/${module}.skprx -o fw/elf/${module}.elf >/dev/null"
+          done
+          sudo chown -R "$(id -u):$(id -g)" fw/elf
+          echo 'f791cfe2c6db955deb9446c57bb72ce1870bde2c6c485cac363e343d5128f744  fw/elf/lowio.elf' | sha256sum -c -
+          echo '83ef39adf741a4bbbc1cec67d00e2594de1d17be0f5ea6cc77c935eae46065e5  fw/elf/display.elf' | sha256sum -c -
+          git init -q vita-headers
+          git -C vita-headers remote add origin https://github.com/vitasdk/vita-headers.git
+          git -C vita-headers fetch -q --depth 1 origin "$VITA_HEADERS_SHA"
+          git -C vita-headers checkout -q --detach FETCH_HEAD
+      - name: Audit pinned taiHEN chain-head semantics
+        run: |
+          set -euxo pipefail
+          git init -q taihen-audit
+          git -C taihen-audit remote add origin https://github.com/yifanlu/taiHEN.git
+          git -C taihen-audit fetch -q --depth 1 origin "$TAIHEN_SHA"
+          git -C taihen-audit checkout -q --detach FETCH_HEAD
+          python3 research/gate1e_taihen_chain_audit.py --taihen taihen-audit --json gate1e-taihen-chain.json | tee gate1e-taihen-chain.txt
+      - name: Retail replay/application attack surface
+        run: |
+          set -euxo pipefail
+          python3 research/gate1e_static_attack_surface_audit.py --lowio fw/elf/lowio.elf --display fw/elf/display.elf --nid-db-root vita-headers/db --json gate1e-static.json | tee gate1e-static.txt
+          python3 research/iftu_mmio_audit.py --lowio fw/elf/lowio.elf --nid-db-root vita-headers/db --json gate1e-mmio.json | tee gate1e-mmio.txt
+          python3 research/gate1b_stage_semantics_audit.py --lowio fw/elf/lowio.elf --display fw/elf/display.elf --json gate1e-stage-semantics.json | tee gate1e-stage-semantics.txt
+      - name: Freeze exact head
+        run: printf '%s\n' "$GITHUB_SHA" > WORKFLOW_COMMIT.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gate1e-static-${{ github.sha }}
+          path: |
+            WORKFLOW_COMMIT.txt
+            gate1e-*.json
+            gate1e-*.txt
+          if-no-files-found: error
