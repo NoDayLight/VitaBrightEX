@@ -1,0 +1,271 @@
+name: Gate-1E transactional integrated production candidate
+
+on:
+  push:
+    branches: [research-gate1e-immediate-application]
+    paths:
+      - 'matrix_backend.c'
+      - 'matrix_backend.h'
+      - 'matrix_backend_core.*'
+      - 'matrix_policy_core.*'
+      - 'matrix_authority_core.*'
+      - 'matrix_apply_txn_core.*'
+      - 'CMakeLists.txt'
+      - 'module.yml'
+      - 'taihen_extra.h'
+      - 'tests/matrix_*'
+      - 'research/gate1e_transaction_*'
+      - 'research/diagnostics/gate1e_integrated_control/**'
+      - '.github/workflows/gate1e-transaction-candidate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  VITASDK: /usr/local/vitasdk
+  VDPM_NONINTERACTIVE: 1
+  VDPM_SHA: c83b88a54ec13372515eeb8b3bdca4b10c36d721
+  VITA_HEADERS_SHA: 5e1e7d38d766e4c1634a77f6e5249caab8c8f9cb
+  GATE1D_CLOSURE: 1a04bc5bcec964053c437987525126c9d17c5e02
+  GATE1D_PHYSICAL_BINARY_COMMIT: 215d92d2b29643f1456592847ae4d13d91dc81a2
+  GATE1E_HAPPY_HEAD: e839f2ee0b70abbe8e00f6e43e1b5c8c4bd7b084
+  IDENTITY_B_SHA: 5dc12dfcae42a648dc093db831b661cc3068f2d70f199b03fb582ce301b188b5
+  RANGE_B_SHA: fff18ae2defe21c92e9a4e1e4795c85bfe6ba7f5548a1b90a2e1b46c707ee07e
+  MILD_IDENTITY_SHA: 090035115d31436fa114dfd54781c8184e17ade1e61326a90eac38b8a61faf50
+  MILD_RANGE_SHA: 8abe961127d94bcdd9e259cf65ae95e379ef13e67bc58c3afbeafe6c2e8f3eed
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      skprx_sha: ${{ steps.hashes.outputs.skprx_sha }}
+      mild_vpk_sha: ${{ steps.hashes.outputs.mild_vpk_sha }}
+      reset_vpk_sha: ${{ steps.hashes.outputs.reset_vpk_sha }}
+      status_vpk_sha: ${{ steps.hashes.outputs.status_vpk_sha }}
+      rollback_vpk_sha: ${{ steps.hashes.outputs.rollback_vpk_sha }}
+      decoder_sha: ${{ steps.hashes.outputs.decoder_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - name: Exact head and frozen evidence boundary
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1 --untracked-files=no)"
+          git cat-file -e "$GATE1D_CLOSURE^{commit}"
+          git cat-file -e "$GATE1D_PHYSICAL_BINARY_COMMIT^{commit}"
+          git cat-file -e "$GATE1E_HAPPY_HEAD^{commit}"
+          git merge-base --is-ancestor "$GATE1E_HAPPY_HEAD" "$GITHUB_SHA"
+          python3 - <<'PY' | tee gate1e-evidence-boundary.txt
+          import json
+          from pathlib import Path
+          happy=json.loads(Path('research/GATE1E-HAPPY-PATH-PHYSICAL.json').read_text())
+          text=Path('research/GATE1E-ATTACK-SURFACE.json').read_text()
+          assert 'TAIHEN_CHAIN_REENTRY' in text
+          assert 'PROVEN_SAFE_CANDIDATE' in text
+          flat=json.dumps(happy)
+          for sha in (
+            '758497d8883f04c780daf29e2d08359c8f811e66c6901531bce5c25d0fa1440a',
+            'd4971413d49197b1f043402fd5d8187bac906e78d973bfc71f2e1744bb42f542',
+          ):
+            assert sha in flat, sha
+          print('GATE1E_HAPPY_PATH_EVIDENCE_FROZEN=PASS')
+          print('SELECTED_TRANSPORT=TAIHEN_CHAIN_REENTRY')
+          PY
+
+      - name: Host matrix, authority, publication and transaction cores
+        run: |
+          set -euxo pipefail
+          cc -std=c99 -Wall -Wextra -Werror -O2 -I. tests/matrix_backend_core_host.c matrix_backend_core.c -o /tmp/matrix-core
+          /tmp/matrix-core | tee gate1e-matrix-core.txt
+          cc -std=c99 -Wall -Wextra -Werror -O2 -pthread -I. tests/matrix_policy_host.c matrix_policy_core.c matrix_backend_core.c -o /tmp/matrix-policy
+          /tmp/matrix-policy | tee gate1e-matrix-policy.txt
+          cc -std=c99 -Wall -Wextra -Werror -O2 -I. tests/matrix_authority_host.c matrix_authority_core.c matrix_backend_core.c -o /tmp/matrix-authority
+          /tmp/matrix-authority | tee gate1e-authority.txt
+          cc -std=c99 -Wall -Wextra -Werror -O2 -I. tests/matrix_apply_txn_host.c matrix_apply_txn_core.c -o /tmp/matrix-txn
+          /tmp/matrix-txn | tee gate1e-txn.txt
+          grep -Fx 'GATE1E_AUTHORITY_INTERNAL_100_NO_ADVANCE=PASS' gate1e-authority.txt
+          grep -Fx 'GATE1E_RANGE_SEED_COMPOSITION=PASS' gate1e-authority.txt
+          grep -Fx 'GATE1E_TXN_P0_P1_FAILURE_ROLLBACK=PASS' gate1e-txn.txt
+          grep -Fx 'GATE1E_TXN_REBASE_BOUNDED=PASS' gate1e-txn.txt
+          grep -Fx 'GATE1E_TXN_ROLLBACK_FAILURE_DEGRADED=PASS' gate1e-txn.txt
+
+      - name: Source authority and integration contracts
+        run: |
+          set -euxo pipefail
+          python3 research/gate1e_transaction_source_contract.py | tee gate1e-source-contract.txt
+          python3 -m py_compile research/gate1e_transaction_decode.py
+          grep -F 'VBE_MATRIX_REAPPLY_TAIHEN_CHAIN_REENTRY' matrix_backend.c
+          grep -F 'origin == VBE_B_ORIGIN_NATURAL_SONY' matrix_backend.c
+          grep -F 'publish_policy(&old_policy->matrix, old_policy->enabled' matrix_backend.c
+          ! grep -F 'g_identity_b' matrix_backend.c
+          ! grep -F '0x280B2000' matrix_backend.c
+          ! grep -F '0x280B4000' matrix_backend.c
+          ! grep -F 'taiHookRelease' matrix_backend.c
+          echo 'GATE1E_PRODUCTION_SOURCE_SAFETY=PASS' | tee gate1e-source-safety.txt
+
+      - name: Exact known object hashes
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY' | tee gate1e-object-hashes.txt
+          import hashlib,struct,os
+          identity=[0,0,1023,0,1023,0,512,0,0,0,512,0,0,0,512]
+          limited=[64,64,940,64,940,64,439,0,0,0,439,0,0,0,439]
+          mild=identity.copy(); mild[6]=461
+          limited_mild=limited.copy(); limited_mild[6]=395
+          def h(v): return hashlib.sha256(struct.pack('<15I',*v)).hexdigest()
+          assert h(identity)==os.environ['IDENTITY_B_SHA']
+          assert h(limited)==os.environ['RANGE_B_SHA']
+          assert h(mild)==os.environ['MILD_IDENTITY_SHA']
+          assert h(limited_mild)==os.environ['MILD_RANGE_SHA']
+          assert limited_mild[:6] == limited[:6]
+          print('IDENTITY='+h(identity))
+          print('RANGE='+h(limited))
+          print('MILD_IDENTITY='+h(mild))
+          print('MILD_RANGE='+h(limited_mild))
+          print('GATE1E_RANGE_IMMEDIATE_COMPOSITION=HOST_VERIFIED')
+          PY
+
+      - name: Fetch pinned SDK sources
+        run: |
+          set -euxo pipefail
+          git init -q vdpm
+          git -C vdpm remote add origin https://github.com/vitasdk/vdpm.git
+          git -C vdpm fetch -q --depth 1 origin "$VDPM_SHA"
+          git -C vdpm checkout -q --detach FETCH_HEAD
+          git init -q vita-headers-audit
+          git -C vita-headers-audit remote add origin https://github.com/vitasdk/vita-headers.git
+          git -C vita-headers-audit fetch -q --depth 1 origin "$VITA_HEADERS_SHA"
+          git -C vita-headers-audit checkout -q --detach FETCH_HEAD
+          test "$(git -C vdpm rev-parse HEAD)" = "$VDPM_SHA"
+          test "$(git -C vita-headers-audit rev-parse HEAD)" = "$VITA_HEADERS_SHA"
+
+      - name: Build exact integrated SKPRX and physical clients
+        run: |
+          set -euxo pipefail
+          bash vdpm/bootstrap-vitasdk.sh
+          echo "$VITASDK/bin" >> "$GITHUB_PATH"
+          "$VITASDK/bin/vdpm" install taihen
+          cmake -S . -B gate1e-build -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake"
+          cmake --build gate1e-build --parallel
+          test -s gate1e-build/vitabright.skprx
+          stub="$(find gate1e-build -type f -name libvitabright_stub.a -print -quit)"
+          test -n "$stub"
+          cmake -S research/diagnostics/gate1e_integrated_control -B gate1e-clients \
+            -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
+            -DVBE_PRODUCTION_STUB="$GITHUB_WORKSPACE/$stub"
+          cmake --build gate1e-clients --parallel
+          for f in vbe_gate1e_integrated_mild.vpk vbe_gate1e_integrated_reset.vpk vbe_gate1e_integrated_status.vpk vbe_gate1e_integrated_rollback.vpk; do test -s "gate1e-clients/$f"; done
+          unzip -p gate1e-clients/vbe_gate1e_integrated_mild.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1EIM1
+          unzip -p gate1e-clients/vbe_gate1e_integrated_reset.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1EIR1
+          unzip -p gate1e-clients/vbe_gate1e_integrated_status.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1EIS1
+          unzip -p gate1e-clients/vbe_gate1e_integrated_rollback.vpk sce_sys/param.sfo | strings | grep -Fx VBEG1ERB1
+          ! arm-vita-eabi-nm -u gate1e-build/vitabright.velf | grep -E '[[:space:]](memcpy|memset)$'
+          echo 'GATE1E_INTEGRATED_BUILD=PASS' | tee gate1e-build.txt
+
+      - name: Production import and hot-path audit
+        run: |
+          set -euxo pipefail
+          python3 research/gate0_v7_import_manifest.py gate1e-build/vitabright.velf \
+            --nid-db vita-headers-audit/db/360 --nid-db vita-headers-audit/db/363 \
+            --output gate1e-imports.txt
+          cat gate1e-imports.txt
+          ! grep -F 'library=SceLowio' gate1e-imports.txt
+          ! grep -F 'SceIftuForDriver' gate1e-imports.txt
+          grep -F 'taihenModuleUtils' gate1e-imports.txt
+          ! grep -E 'ksceIo(Open|Write|Read|Close)' gate1e-imports.txt
+          echo 'GATE1E_NO_DIRECT_LOWIO_MMIO_OR_RUNTIME_IO=PASS' | tee gate1e-import-contract.txt
+
+      - name: Package exact integrated candidate
+        id: hashes
+        run: |
+          set -euxo pipefail
+          rm -rf gate1e-package
+          mkdir -p gate1e-package/evidence gate1e-package/include
+          cp gate1e-build/vitabright.skprx gate1e-package/
+          cp gate1e-clients/vbe_gate1e_integrated_mild.vpk gate1e-package/
+          cp gate1e-clients/vbe_gate1e_integrated_reset.vpk gate1e-package/
+          cp gate1e-clients/vbe_gate1e_integrated_status.vpk gate1e-package/
+          cp gate1e-clients/vbe_gate1e_integrated_rollback.vpk gate1e-package/
+          cp research/gate1e_transaction_decode.py gate1e-package/
+          cp research/gate1e_transaction_deploy_mac.sh gate1e-package/
+          cp matrix_backend.h matrix_backend_core.h matrix_policy_core.h matrix_authority_core.h matrix_apply_txn_core.h gate1e-package/include/
+          cp research/GATE1E-HAPPY-PATH-PHYSICAL.json research/GATE1E-ATTACK-SURFACE.json gate1e-package/evidence/
+          cp gate1e-evidence-boundary.txt gate1e-matrix-core.txt gate1e-matrix-policy.txt gate1e-authority.txt gate1e-txn.txt gate1e-source-contract.txt gate1e-source-safety.txt gate1e-object-hashes.txt gate1e-build.txt gate1e-imports.txt gate1e-import-contract.txt gate1e-package/evidence/
+          printf '%s\n' "$GITHUB_SHA" > gate1e-package/WORKFLOW_COMMIT.txt
+          printf '%s\n' \
+            "workflow=Gate-1E transactional integrated production candidate" \
+            "commit=$GITHUB_SHA" \
+            "target=PCH-2000/FW3.65" \
+            "selected_replay_transport=TAIHEN_CHAIN_REENTRY" \
+            "natural_internal_source_authority=SEPARATED" \
+            "max_rebases=1" \
+            "rollback=PREVIOUS_POLICY_NEW_MONOTONIC_GENERATION" \
+            "fault_injection=RESEARCH_ONLY_P0_SUCCESS_ABORT_BEFORE_P1" \
+            "sidecar_required=NO" \
+            "identity_sha=$IDENTITY_B_SHA" \
+            "range_sha=$RANGE_B_SHA" \
+            "mild_identity_sha=$MILD_IDENTITY_SHA" \
+            "mild_range_sha=$MILD_RANGE_SHA" > gate1e-package/BUILD-METADATA.txt
+          (cd gate1e-package && find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          skprx_sha="$(sha256sum gate1e-package/vitabright.skprx | awk '{print $1}')"
+          mild_vpk_sha="$(sha256sum gate1e-package/vbe_gate1e_integrated_mild.vpk | awk '{print $1}')"
+          reset_vpk_sha="$(sha256sum gate1e-package/vbe_gate1e_integrated_reset.vpk | awk '{print $1}')"
+          status_vpk_sha="$(sha256sum gate1e-package/vbe_gate1e_integrated_status.vpk | awk '{print $1}')"
+          rollback_vpk_sha="$(sha256sum gate1e-package/vbe_gate1e_integrated_rollback.vpk | awk '{print $1}')"
+          decoder_sha="$(sha256sum gate1e-package/gate1e_transaction_decode.py | awk '{print $1}')"
+          echo "skprx_sha=$skprx_sha" >> "$GITHUB_OUTPUT"
+          echo "mild_vpk_sha=$mild_vpk_sha" >> "$GITHUB_OUTPUT"
+          echo "reset_vpk_sha=$reset_vpk_sha" >> "$GITHUB_OUTPUT"
+          echo "status_vpk_sha=$status_vpk_sha" >> "$GITHUB_OUTPUT"
+          echo "rollback_vpk_sha=$rollback_vpk_sha" >> "$GITHUB_OUTPUT"
+          echo "decoder_sha=$decoder_sha" >> "$GITHUB_OUTPUT"
+          echo "SKPRX_SHA256=$skprx_sha"
+          echo "MILD_VPK_SHA256=$mild_vpk_sha"
+          echo "RESET_VPK_SHA256=$reset_vpk_sha"
+          echo "STATUS_VPK_SHA256=$status_vpk_sha"
+          echo "ROLLBACK_VPK_SHA256=$rollback_vpk_sha"
+          echo "DECODER_SHA256=$decoder_sha"
+
+      - name: Upload exact Gate-1E candidate
+        id: upload
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: vbe-gate1e-transaction-${{ github.sha }}
+          path: gate1e-package/
+          if-no-files-found: error
+          retention-days: 30
+
+  independent-verify:
+    needs: candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download exact candidate artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: vbe-gate1e-transaction-${{ github.sha }}
+          path: verified
+      - name: Verify artifact bytes independently
+        run: |
+          set -euxo pipefail
+          cd verified
+          sha256sum -c SHA256SUMS
+          test "$(cat WORKFLOW_COMMIT.txt)" = "$GITHUB_SHA"
+          test "$(sha256sum vitabright.skprx | awk '{print $1}')" = "${{ needs.candidate.outputs.skprx_sha }}"
+          test "$(sha256sum vbe_gate1e_integrated_mild.vpk | awk '{print $1}')" = "${{ needs.candidate.outputs.mild_vpk_sha }}"
+          test "$(sha256sum vbe_gate1e_integrated_reset.vpk | awk '{print $1}')" = "${{ needs.candidate.outputs.reset_vpk_sha }}"
+          test "$(sha256sum vbe_gate1e_integrated_status.vpk | awk '{print $1}')" = "${{ needs.candidate.outputs.status_vpk_sha }}"
+          test "$(sha256sum vbe_gate1e_integrated_rollback.vpk | awk '{print $1}')" = "${{ needs.candidate.outputs.rollback_vpk_sha }}"
+          test "$(sha256sum gate1e_transaction_decode.py | awk '{print $1}')" = "${{ needs.candidate.outputs.decoder_sha }}"
+          grep -Fx 'selected_replay_transport=TAIHEN_CHAIN_REENTRY' BUILD-METADATA.txt
+          grep -Fx 'natural_internal_source_authority=SEPARATED' BUILD-METADATA.txt
+          grep -Fx 'sidecar_required=NO' BUILD-METADATA.txt
+          echo 'GATE1E_TRANSACTION_INDEPENDENT_VERIFY=PASS'
