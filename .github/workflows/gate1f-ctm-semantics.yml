@@ -77,7 +77,7 @@ jobs:
         run: |
           set -euxo pipefail
           git worktree add --detach /tmp/gate1f-base "$GATE1F_BASE"
-          cmake -S /tmp/gate1f-base -B /tmp/gate1f-base-build \
+          env -u GITHUB_SHA cmake -S /tmp/gate1f-base -B /tmp/gate1f-base-build \
             -DCMAKE_TOOLCHAIN_FILE="$VITASDK/share/vita.toolchain.cmake" \
             -DVBE_ENABLE_RESEARCH_FAULT_INJECTION=OFF
           cmake --build /tmp/gate1f-base-build --parallel
