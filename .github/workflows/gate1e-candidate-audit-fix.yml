@@ -1,0 +1,46 @@
+name: Gate-1E one-shot final audit correction
+
+on:
+  push:
+    branches: [research-gate1e-immediate-application]
+    paths: ['.github/workflows/gate1e-candidate-audit-fix.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: research-gate1e-immediate-application
+          fetch-depth: 0
+      - name: Correct exact-head audit assertions
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('.github/workflows/gate1e-transaction-candidate.yml')
+          s=p.read_text()
+          old="""          ! arm-vita-eabi-nm -u gate1e-build/vitabright.velf | grep -E '[[:space:]](memcpy|memset)$'\n          echo 'GATE1E_INTEGRATED_BUILD=PASS' | tee gate1e-build.txt\n"""
+          new="""          test -x \"$VITASDK/bin/arm-vita-eabi-nm\"\n          ! \"$VITASDK/bin/arm-vita-eabi-nm\" -u gate1e-build/vitabright.velf | grep -E '[[:space:]](memcpy|memset)$'\n          echo 'GATE1E_NO_UNRESOLVED_HOST_LIBC=PASS' | tee gate1e-link-audit.txt\n          echo 'GATE1E_INTEGRATED_BUILD=PASS' | tee gate1e-build.txt\n"""
+          assert s.count(old)==1, s.count(old)
+          s=s.replace(old,new)
+          old="""          grep -F 'taihenModuleUtils' gate1e-imports.txt\n          ! grep -E 'ksceIo(Open|Write|Read|Close)' gate1e-imports.txt\n          echo 'GATE1E_NO_DIRECT_LOWIO_MMIO_OR_RUNTIME_IO=PASS' | tee gate1e-import-contract.txt\n"""
+          new="""          grep -F 'taihenModuleUtils' gate1e-imports.txt\n          ! grep -F 'ksceIo' matrix_backend.c\n          ! grep -F 'SceIofilemgr' matrix_backend.c\n          echo 'GATE1E_NO_DIRECT_LOWIO_OR_MATRIX_HOT_PATH_IO=PASS' | tee gate1e-import-contract.txt\n"""
+          assert s.count(old)==1, s.count(old)
+          s=s.replace(old,new)
+          old="""          cp gate1e-evidence-boundary.txt gate1e-matrix-core.txt gate1e-matrix-policy.txt gate1e-authority.txt gate1e-txn.txt gate1e-source-contract.txt gate1e-source-safety.txt gate1e-object-hashes.txt gate1e-build.txt gate1e-imports.txt gate1e-import-contract.txt gate1e-package/evidence/\n"""
+          new="""          cp gate1e-evidence-boundary.txt gate1e-matrix-core.txt gate1e-matrix-policy.txt gate1e-authority.txt gate1e-txn.txt gate1e-source-contract.txt gate1e-source-safety.txt gate1e-object-hashes.txt gate1e-build.txt gate1e-link-audit.txt gate1e-imports.txt gate1e-import-contract.txt gate1e-package/evidence/\n"""
+          assert s.count(old)==1, s.count(old)
+          s=s.replace(old,new)
+          p.write_text(s)
+          PY
+          git diff --check
+          git diff -- .github/workflows/gate1e-transaction-candidate.yml
+          git config user.name tempestas
+          git config user.email '62885176+NoDayLight@users.noreply.github.com'
+          git add .github/workflows/gate1e-transaction-candidate.yml
+          git commit -m 'ci: make Gate-1E final audits authoritative'
+          git push origin HEAD:research-gate1e-immediate-application
